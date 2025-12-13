@@ -456,11 +456,76 @@ void ReloadableHiscores::reloadTexture(bool resetScroll) {
 		// And we'll update it below after calculations.
 	}
 
-	// If no table, clear textures and bail
+	// If no table, show a friendly message instead of drawing nothing.
 	if (!highScoreTable_ || highScoreTable_->tables.empty()) {
 		if (headerTexture_) { SDL_DestroyTexture(headerTexture_); headerTexture_ = nullptr; }
 		if (tableRowsTexture_) { SDL_DestroyTexture(tableRowsTexture_); tableRowsTexture_ = nullptr; }
-		cacheValid_ = false; // No valid table data to cache
+		tableRowsTextureHeight_ = 0;
+
+		SDL_Renderer* renderer = SDL::getRenderer(baseViewInfo.Monitor);
+		FontManager* font = baseViewInfo.font ? baseViewInfo.font : fontInst_;
+
+		if (renderer && font && font->getMaxHeight() > 0) {
+			float effectiveViewWidth = baseViewInfo.MaxWidth;
+			if (baseViewInfo.Width > 0 && baseViewInfo.Width < baseViewInfo.MaxWidth)
+				effectiveViewWidth = baseViewInfo.Width;
+
+			float effectiveViewHeight = baseViewInfo.Height;
+			if (effectiveViewHeight <= 0.0f) effectiveViewHeight = 1.0f;
+
+			// Split into two lines so it stays readable at typical layout widths.
+			const std::string line1 = "LOCAL SCORES NOT AVAILABLE";
+			const std::string line2 = "OR NOT YET SUPPORTED";
+			const std::vector<std::string> lines = { line1, line2 };
+
+			const float scale = baseViewInfo.FontSize / static_cast<float>(font->getMaxHeight());
+			const float drawableHeight = font->getMaxAscent() * scale;
+			const float rowPadding = std::max(1.0f, baseRowPadding_ * drawableHeight);
+
+			const size_t gapCount = (lines.size() > 0) ? (lines.size() - 1) : 0;
+			const float totalTextHeight = drawableHeight * static_cast<float>(lines.size()) +
+				rowPadding * static_cast<float>(gapCount);
+			float y = (effectiveViewHeight - totalTextHeight) / 2.0f;
+			if (y < 0.0f) y = 0.0f;
+
+			// Mipmapping setup
+			const float targetPixelHeight = scale * font->getMaxHeight();
+			const FontManager::MipLevel* mip = font->getMipLevelForSize(static_cast<int>(targetPixelHeight));
+			SDL_Texture* fillTex = mip ? mip->fillTexture : nullptr;
+			SDL_Texture* outlineTex = mip ? mip->outlineTexture : nullptr;
+			const float mipRelativeScale = (mip && mip->height > 0) ? (targetPixelHeight / mip->height) : 1.0f;
+
+			// Make the message texture span the component area so we can center vertically.
+			headerTextureHeight_ = static_cast<int>(std::ceil(effectiveViewHeight));
+			cachedTotalTableWidth_ = effectiveViewWidth;
+			headerTexture_ = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET,
+				static_cast<int>(std::ceil(effectiveViewWidth)), headerTextureHeight_);
+			if (headerTexture_) {
+				SDL_SetTextureBlendMode(headerTexture_, SDL_BLENDMODE_BLEND);
+				SDL_Texture* oldTarget = SDL_GetRenderTarget(renderer);
+				SDL_SetRenderTarget(renderer, headerTexture_);
+				SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
+				SDL_RenderClear(renderer);
+
+				if (mip && fillTex) {
+					for (const auto& s : lines) {
+						const float w = measureTextWidthExact(font, s, scale);
+						float x = (effectiveViewWidth - w) / 2.0f;
+						if (x < 0.0f) x = 0.0f;
+						renderTextOutlined(renderer, font, mip, fillTex, outlineTex, s, x, y, scale, mipRelativeScale);
+						y += drawableHeight + rowPadding;
+					}
+				}
+
+				SDL_SetRenderTarget(renderer, oldTarget);
+			}
+
+			cacheValid_ = (headerTexture_ != nullptr);
+		}
+		else {
+			cacheValid_ = false;
+		}
+
 		needsRedraw_ = true;
 		return;
 	}
@@ -521,9 +586,17 @@ void ReloadableHiscores::reloadTexture(bool resetScroll) {
 void ReloadableHiscores::draw() {
 	Component::draw();
 
-	if (!(highScoreTable_ && !highScoreTable_->tables.empty()) || baseViewInfo.Alpha <= 0.0f)
+	if (baseViewInfo.Alpha <= 0.0f)
 		return;
-	if (!headerTexture_ || !tableRowsTexture_) return;
+
+	const bool hasTable = (highScoreTable_ && !highScoreTable_->tables.empty());
+	if (hasTable) {
+		if (!headerTexture_ || !tableRowsTexture_) return;
+	}
+	else {
+		// No table for this game: we may still have a message texture to draw.
+		if (!headerTexture_) return;
+	}
 
 	SDL_Renderer* renderer = SDL::getRenderer(baseViewInfo.Monitor);
 	if (!renderer) return;
@@ -569,7 +642,8 @@ void ReloadableHiscores::draw() {
 	float rowsAreaHeight = compositeHeight - headerTextureHeight_;
 	float scrollY = currentPosition_;
 
-	if (tableRowsTextureHeight_ <= rowsAreaHeight) {
+	if (tableRowsTexture_ && tableRowsTextureHeight_ > 0 && rowsAreaHeight > 0.0f) {
+		if (tableRowsTextureHeight_ <= rowsAreaHeight) {
 		// NON-SCROLLING
 		SDL_Rect srcRows = { 0, 0, static_cast<int>(cachedTotalTableWidth_), tableRowsTextureHeight_ };
 		SDL_FRect destRows = { xOrigin, yOrigin + headerTextureHeight_, cachedTotalTableWidth_, static_cast<float>(tableRowsTextureHeight_) };
@@ -595,7 +669,7 @@ void ReloadableHiscores::draw() {
 				SDL_RenderCopyF(renderer, tableRowsTexture_, &srcRows, &destRows);
 			}
 		}
-	}
+	}	}
 
 #ifndef NDEBUG
 	SDL_SetRenderDrawColor(renderer, 0, 255, 0, 255); // Green, opaque
