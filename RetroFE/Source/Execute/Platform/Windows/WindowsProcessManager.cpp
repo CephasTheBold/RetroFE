@@ -20,17 +20,19 @@
 
 #include <fstream>
 #include <filesystem>
-#include <Psapi.h> // For GetModuleFileNameExA
-#include <Tlhelp32.h> // For CreateToolhelp32Snapshot
+#include <vector>
+#include <chrono>
+#include <cstdlib>   // getenv
+#include <Psapi.h>   // GetModuleFileNameExA
+#include <Tlhelp32.h>
 #include <SDL2/SDL_syswm.h>
-#include "../../../SDL.h" // For SDL::getActiveWindow
 
+#include "../../../SDL.h"                 // SDL::getWindow
 #include "../../../Utility/Log.h"
-#include "../../../Utility/Utils.h" // For Utils::toLower
-#include "../../../Database/Configuration.h" // For Configuration::absolutePath
+#include "../../../Utility/Utils.h"       // Utils::toLower
+#include "../../../Database/Configuration.h"
 
 namespace {
-    // Utility to get the base name of an executable from a full path
     std::string getExeNameFromPath(const std::string& path) {
         auto pos = path.find_last_of("/\\");
         if (pos != std::string::npos) {
@@ -38,44 +40,20 @@ namespace {
         }
         return path;
     }
-    
+
     static bool isMameExeName(const std::string& exeName) {
         std::string n = Utils::toLower(exeName);
         return (n.rfind("mame", 0) == 0); // starts with "mame"
     }
 }
 
-WindowsProcessManager::WindowsProcessManager() {
-    LOG_INFO("ProcessManager", "WindowsProcessManager created.");
-
-    // Get and store RetroFE's main window handle for focus checks.
-    SDL_SysWMinfo winfo; // Renamed to avoid shadowing version macro
-    SDL_VERSION(&winfo.version);
-
-    // --- THIS IS THE CORRECTED AND ROBUST CHECK ---
-    SDL_Window* mainWindow = SDL::getWindow(0);
-    if (mainWindow != nullptr && SDL_GetWindowWMInfo(mainWindow, &winfo) == SDL_TRUE) {
-        // This code is only executed if SDL is loaded, the window exists,
-        // and the WM info was successfully retrieved.
-        hRetroFEWindow_ = winfo.info.win.window;
-    }
-    else {
-        // This code is now correctly executed if SDL is unloaded OR
-        // if the WM info call fails for any other reason.
-        hRetroFEWindow_ = nullptr;
-    }
-}
-
-WindowsProcessManager::~WindowsProcessManager() {
-    cleanupHandles();
-}
-
-// Collect all top - level windows that belong to a PID
-static void collectWindowsForPid(DWORD pid, std::vector<HWND>&out) {
+// Collect all top-level windows that belong to a PID
+static void collectWindowsForPid(DWORD pid, std::vector<HWND>& out) {
     struct Ctx { DWORD pid; std::vector<HWND>* out; };
     auto thunk = [](HWND hwnd, LPARAM lParam) -> BOOL {
         auto* ctx = reinterpret_cast<Ctx*>(lParam);
-        DWORD winPid = 0; GetWindowThreadProcessId(hwnd, &winPid);
+        DWORD winPid = 0;
+        GetWindowThreadProcessId(hwnd, &winPid);
         if (winPid == ctx->pid && IsWindow(hwnd) && IsWindowVisible(hwnd)) {
             ctx->out->push_back(hwnd);
         }
@@ -85,16 +63,38 @@ static void collectWindowsForPid(DWORD pid, std::vector<HWND>&out) {
     EnumWindows(thunk, reinterpret_cast<LPARAM>(&ctx));
 }
 
-// Politely ask each window to close (never blocks indefinitely)
+// Politely ask each window to close (fast/non-blocking first; small bounded fallback)
 static void sendCloseToWindows(const std::vector<HWND>& windows) {
     for (HWND h : windows) {
-        // Try the standard close command first
-        SendMessageTimeout(h, WM_SYSCOMMAND, SC_CLOSE, 0,
-            SMTO_ABORTIFHUNG | SMTO_NORMAL, 2000, nullptr);
-        // Follow with WM_CLOSE in case SC_CLOSE is ignored
+        // Fast path: async requests (doesn't burn your grace budget)
+        PostMessage(h, WM_SYSCOMMAND, SC_CLOSE, 0);
+        PostMessage(h, WM_CLOSE, 0, 0);
+
+        // Small bounded fallback (optional but helps stubborn windows)
         SendMessageTimeout(h, WM_CLOSE, 0, 0,
-            SMTO_ABORTIFHUNG | SMTO_NORMAL, 2000, nullptr);
+            SMTO_ABORTIFHUNG | SMTO_NORMAL, 250, nullptr);
     }
+}
+
+static bool waitForHandleExitBounded(HANDLE h, DWORD waitMsTotal) {
+    if (!h) return false;
+
+    const DWORD slice = 100;
+    DWORD waited = 0;
+
+    while (waited < waitMsTotal) {
+        if (WaitForSingleObject(h, 0) == WAIT_OBJECT_0) {
+            return true;
+        }
+
+        MsgWaitForMultipleObjects(0, nullptr, FALSE, slice, QS_ALLINPUT);
+        MSG msg;
+        while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
+            DispatchMessage(&msg);
+        }
+        waited += slice;
+    }
+    return false;
 }
 
 // Best-effort, bounded wait for a single PID to exit
@@ -104,17 +104,22 @@ static bool waitForPidExitBounded(DWORD pid, DWORD waitMsTotal) {
 
     const DWORD slice = 100;
     DWORD waited = 0;
+
     while (waited < waitMsTotal) {
         if (WaitForSingleObject(h, 0) == WAIT_OBJECT_0) {
             CloseHandle(h);
             return true;
         }
-        // keep UI responsive (matches your main wait loop style)
+
+        // keep UI responsive
         MsgWaitForMultipleObjects(0, nullptr, FALSE, slice, QS_ALLINPUT);
         MSG msg;
-        while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) DispatchMessage(&msg);
+        while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
+            DispatchMessage(&msg);
+        }
         waited += slice;
     }
+
     CloseHandle(h);
     return false;
 }
@@ -124,23 +129,35 @@ bool WindowsProcessManager::requestGracefulShutdownForPid(DWORD pid, DWORD waitM
     std::vector<HWND> hwnds;
     collectWindowsForPid(pid, hwnds);
     if (!hwnds.empty()) {
-        LOG_INFO("ProcessManager", "Sending close to " + std::to_string(hwnds.size()) + " window(s) for PID " + std::to_string(pid));
+        LOG_INFO("ProcessManager", "Sending close to " + std::to_string(hwnds.size()) +
+            " window(s) for PID " + std::to_string(pid));
         sendCloseToWindows(hwnds);
         return waitForPidExitBounded(pid, waitMsTotal);
     }
-    // No windows — nothing to ask nicely here.
+
+    // No windows — can't send WM_CLOSE; treat as not gracefully closable here.
     return false;
 }
 
-// Graceful ask for all processes in our Job
+// Graceful ask for all processes in our Job.
+// IMPORTANT: success condition is now: "primary PID exited within the budget"
+// rather than "every job member exited".
 bool WindowsProcessManager::requestGracefulShutdownForJob(DWORD waitMsTotal) {
     if (!hJob_) return false;
 
-    // Query the list size
+    // --- Query required buffer size for the process ID list ---
     JOBOBJECT_BASIC_PROCESS_ID_LIST header{ 0 };
     DWORD bytes = 0;
-    (void)QueryInformationJobObject(hJob_, JobObjectBasicProcessIdList, &header, sizeof(header), &bytes);
-    if (bytes == 0) return false;
+    (void)QueryInformationJobObject(
+        hJob_,
+        JobObjectBasicProcessIdList,
+        &header,
+        sizeof(header),
+        &bytes);
+
+    if (bytes == 0) {
+        return false;
+    }
 
     std::vector<BYTE> buf(bytes);
     auto* list = reinterpret_cast<JOBOBJECT_BASIC_PROCESS_ID_LIST*>(buf.data());
@@ -148,44 +165,80 @@ bool WindowsProcessManager::requestGracefulShutdownForJob(DWORD waitMsTotal) {
         return false;
     }
 
-    // Ask all job members to close
+    LOG_INFO("ProcessManager",
+        "Job members: " + std::to_string(list->NumberOfProcessIdsInList) +
+        " (primary=" + std::to_string(processId_) + ")");
+
+    // --- Ask all job members (that have windows) to close ---
     for (ULONG i = 0; i < list->NumberOfProcessIdsInList; ++i) {
         DWORD pid = static_cast<DWORD>(list->ProcessIdList[i]);
+
         std::vector<HWND> hwnds;
         collectWindowsForPid(pid, hwnds);
+
         if (!hwnds.empty()) {
-            LOG_INFO("ProcessManager", "Requesting close for job member PID " + std::to_string(pid));
+            LOG_INFO("ProcessManager",
+                "Requesting close for job member PID " + std::to_string(pid) +
+                " (" + std::to_string(hwnds.size()) + " window(s))");
             sendCloseToWindows(hwnds);
         }
-    }
-
-    // Bounded wait: succeed if all exited before timeout
-    const DWORD slice = 100;
-    DWORD waited = 0;
-    std::vector<HANDLE> handles;
-    handles.reserve(list->NumberOfProcessIdsInList);
-    for (ULONG i = 0; i < list->NumberOfProcessIdsInList; ++i) {
-        HANDLE h = OpenProcess(SYNCHRONIZE, FALSE, static_cast<DWORD>(list->ProcessIdList[i]));
-        if (h) handles.push_back(h);
-    }
-
-    while (waited < waitMsTotal) {
-        bool allExited = true;
-        for (HANDLE h : handles) {
-            if (WaitForSingleObject(h, 0) != WAIT_OBJECT_0) { allExited = false; break; }
+        else {
+            LOG_DEBUG("ProcessManager",
+                "Job member PID " + std::to_string(pid) + " has no visible top-level windows; skipping WM_CLOSE.");
         }
-        if (allExited) {
-            for (HANDLE h : handles) CloseHandle(h);
-            return true;
-        }
-        MsgWaitForMultipleObjects(0, nullptr, FALSE, slice, QS_ALLINPUT);
-        MSG msg;
-        while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) DispatchMessage(&msg);
-        waited += slice;
     }
 
-    for (HANDLE h : handles) CloseHandle(h);
-    return false;
+    // --- Success condition: primary process exits within the budget ---
+    if (processId_ == 0) {
+        LOG_WARNING("ProcessManager", "requestGracefulShutdownForJob: primary PID is 0; cannot wait.");
+        return false;
+    }
+
+    // Prefer waiting on our owned process handle (more reliable than OpenProcess-by-PID).
+    if (hProcess_) {
+        const DWORD slice = 100;
+        DWORD waited = 0;
+
+        while (waited < waitMsTotal) {
+            if (WaitForSingleObject(hProcess_, 0) == WAIT_OBJECT_0) {
+                return true;
+            }
+
+            // Keep UI responsive and consistent with the rest of your wait loops.
+            MsgWaitForMultipleObjects(0, nullptr, FALSE, slice, QS_ALLINPUT);
+            MSG msg;
+            while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
+                DispatchMessage(&msg);
+            }
+
+            waited += slice;
+        }
+
+        return false;
+    }
+
+    // Fallback: if for some reason we don't have hProcess_, do PID-based wait.
+    return waitForPidExitBounded(processId_, waitMsTotal);
+}
+
+
+WindowsProcessManager::WindowsProcessManager() {
+    LOG_INFO("ProcessManager", "WindowsProcessManager created.");
+
+    SDL_SysWMinfo winfo;
+    SDL_VERSION(&winfo.version);
+
+    SDL_Window* mainWindow = SDL::getWindow(0);
+    if (mainWindow != nullptr && SDL_GetWindowWMInfo(mainWindow, &winfo) == SDL_TRUE) {
+        hRetroFEWindow_ = winfo.info.win.window;
+    }
+    else {
+        hRetroFEWindow_ = nullptr;
+    }
+}
+
+WindowsProcessManager::~WindowsProcessManager() {
+    cleanupHandles();
 }
 
 void WindowsProcessManager::cleanupHandles() {
@@ -203,8 +256,6 @@ void WindowsProcessManager::cleanupHandles() {
     workingDirectory_.clear();
 }
 
-// --- Public Interface Implementation ---
-
 bool WindowsProcessManager::simpleLaunch(const std::string& executable,
     const std::string& args,
     const std::string& currentDirectory) {
@@ -218,10 +269,9 @@ bool WindowsProcessManager::simpleLaunch(const std::string& executable,
     PROCESS_INFORMATION pi{};
     si.cb = sizeof(si);
     si.dwFlags = STARTF_USESHOWWINDOW;
-    si.wShowWindow = SW_HIDE; // hide if anything is created
+    si.wShowWindow = SW_HIDE;
 
     if (isBatch) {
-        // Use COMSPEC /C "bat args" — completely windowless
         char* comspec = std::getenv("COMSPEC");
         std::string shell = comspec ? comspec : "C:\\Windows\\System32\\cmd.exe";
         commandLine = "\"" + shell + "\" /C \"\"" + executable + "\"";
@@ -255,18 +305,13 @@ bool WindowsProcessManager::simpleLaunch(const std::string& executable,
 }
 
 bool WindowsProcessManager::launch(const std::string& executable, const std::string& args, const std::string& currentDirectory) {
-    // Ensure we start fresh
     cleanupHandles();
 
-    // The user's provided path should already be absolute, but this is a good safety check.
     std::filesystem::path exePath(executable);
-    if (!exePath.is_absolute()) {
-        exePath = std::filesystem::absolute(exePath);
-    }
+    if (!exePath.is_absolute()) exePath = std::filesystem::absolute(exePath);
+
     std::filesystem::path currDir(currentDirectory);
-    if (!currDir.is_absolute()) {
-        currDir = std::filesystem::absolute(currDir);
-    }
+    if (!currDir.is_absolute()) currDir = std::filesystem::absolute(currDir);
 
     std::string exePathStr = exePath.string();
     std::string currDirStr = currDir.string();
@@ -274,12 +319,10 @@ bool WindowsProcessManager::launch(const std::string& executable, const std::str
     workingDirectory_ = currDirStr;
 
     LOG_INFO("ProcessManager", "Attempting to launch: " + exePathStr);
-    if (!args.empty()) {
-        LOG_INFO("ProcessManager", "           Arguments: " + args);
-    }
+    if (!args.empty()) LOG_INFO("ProcessManager", "           Arguments: " + args);
     LOG_INFO("ProcessManager", "     Working directory: " + currDirStr);
 
-    // --- Create and configure the Job Object for potential use ---
+    // Create/config job
     hJob_ = CreateJobObject(NULL, NULL);
     if (hJob_ == NULL) {
         LOG_ERROR("ProcessManager", "Failed to create Job Object. Error: " + std::to_string(GetLastError()));
@@ -292,7 +335,6 @@ bool WindowsProcessManager::launch(const std::string& executable, const std::str
         }
     }
 
-    // --- Determine Launch Type and Execute ---
     std::string extension = Utils::toLower(exePath.extension().string());
     bool isExe = (extension == ".exe");
     bool isBat = (extension == ".bat" || extension == ".cmd");
@@ -310,16 +352,15 @@ bool WindowsProcessManager::launch(const std::string& executable, const std::str
             commandLine = "\"" + exePathStr + "\"";
             if (!args.empty()) commandLine += " " + args;
         }
-        else { // .bat/.cmd -> run via COMSPEC
+        else {
             const char* comspec = std::getenv("COMSPEC");
             std::string shell = comspec ? comspec : "C:\\Windows\\System32\\cmd.exe";
-            // cmd /C "<bat>" [args]  (double-quote dance keeps spaces safe)
             commandLine = "\"" + shell + "\" /C \"\"" + exePathStr + "\"";
             if (!args.empty()) commandLine += " " + args;
             commandLine += "\"";
         }
 
-        DWORD flags = CREATE_NO_WINDOW; // keep pre-hook windowless
+        DWORD flags = CREATE_NO_WINDOW;
         if (CreateProcessA(nullptr, &commandLine[0], nullptr, nullptr,
             TRUE, flags, nullptr, currDirStr.c_str(),
             &startupInfo, &processInfo))
@@ -344,7 +385,7 @@ bool WindowsProcessManager::launch(const std::string& executable, const std::str
             return false;
         }
     }
-    else { // Use ShellExecute for other file types
+    else {
         SHELLEXECUTEINFOA shExInfo = { 0 };
         shExInfo.cbSize = sizeof(SHELLEXECUTEINFOA);
         shExInfo.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NO_CONSOLE;
@@ -359,6 +400,7 @@ bool WindowsProcessManager::launch(const std::string& executable, const std::str
             if (shExInfo.hProcess) {
                 hProcess_ = shExInfo.hProcess;
                 processId_ = GetProcessId(hProcess_);
+
                 if (hJob_ != NULL && AssignProcessToJobObject(hJob_, hProcess_)) {
                     jobAssigned_ = true;
                     LOG_INFO("ProcessManager", "Process (from ShellExecuteEx) assigned to Job Object.");
@@ -368,12 +410,12 @@ bool WindowsProcessManager::launch(const std::string& executable, const std::str
                 }
             }
             else {
-                // This is the expected outcome for complex launches like Steam.
                 LOG_INFO("ProcessManager", "ShellExecute did not return a process handle. Detection will occur in the wait phase.");
             }
         }
         else {
-            LOG_ERROR("ProcessManager", "ShellExecuteEx failed for: " + exePathStr + " with error: " + std::to_string(GetLastError()));
+            LOG_ERROR("ProcessManager", "ShellExecuteEx failed for: " + exePathStr +
+                " with error: " + std::to_string(GetLastError()));
             return false;
         }
     }
@@ -382,7 +424,7 @@ bool WindowsProcessManager::launch(const std::string& executable, const std::str
 }
 
 WaitResult WindowsProcessManager::wait(double timeoutSeconds, const std::function<bool()>& userInputCheck, const FrameTickCallback& onFrameTick) {
-    bool isDetecting = !isRunning(); // Start in detection phase if we don't have a handle.
+    bool isDetecting = !isRunning();
     if (isDetecting) {
         LOG_INFO("ProcessManager", "Entering detection phase (UI will remain active)...");
     }
@@ -391,25 +433,16 @@ WaitResult WindowsProcessManager::wait(double timeoutSeconds, const std::functio
     }
 
     auto monitoringStartTime = std::chrono::steady_clock::now();
-    auto lastDetectionTime = monitoringStartTime; // Timer for throttling detection checks.
-    HWND lastLoggedHwnd = nullptr; // For anti-spam in detection logging.
+    auto lastDetectionTime = monitoringStartTime;
+    HWND lastLoggedHwnd = nullptr;
 
-    // This is the main loop for both detection and monitoring.
     while (true) {
-        // --- ALWAYS RENDER AND CHECK INPUT ---
-        // This runs at the full frequency of the loop (~33ms, or 30fps).
-        if (onFrameTick) {
-            onFrameTick();
-        }
-        if (userInputCheck && userInputCheck()) {
-            return WaitResult::UserInput;
-        }
+        if (onFrameTick) onFrameTick();
+        if (userInputCheck && userInputCheck()) return WaitResult::UserInput;
 
-        // --- PHASE 1: DETECTION LOGIC ---
         if (isDetecting) {
             auto now = std::chrono::steady_clock::now();
 
-            // Throttle the expensive checks to run every ~250ms.
             if (std::chrono::duration_cast<std::chrono::milliseconds>(now - lastDetectionTime).count() > 250) {
                 const int focusGracePeriodSec = 5;
                 auto elapsedGrace = std::chrono::duration_cast<std::chrono::seconds>(now - monitoringStartTime).count();
@@ -417,14 +450,13 @@ WaitResult WindowsProcessManager::wait(double timeoutSeconds, const std::functio
 
                 if (elapsedGrace > focusGracePeriodSec && foregroundHwnd == hRetroFEWindow_) {
                     LOG_WARNING("ProcessManager", "Focus returned to RetroFE after grace period; assuming launch failed.");
-                    return WaitResult::Error; // Detection failed.
+                    return WaitResult::Error;
                 }
 
                 if (foregroundHwnd) {
                     DWORD pid;
                     GetWindowThreadProcessId(foregroundHwnd, &pid);
 
-                    // Apply all filters before the final fullscreen check
                     if (pid != GetCurrentProcessId() && IsWindowVisible(foregroundHwnd)) {
                         if (isSteamHelperWindow(foregroundHwnd)) {
                             if (foregroundHwnd != lastLoggedHwnd) {
@@ -433,15 +465,15 @@ WaitResult WindowsProcessManager::wait(double timeoutSeconds, const std::functio
                             }
                         }
                         else {
-                            // This window is a candidate. Check if it's fullscreen.
                             if (isWindowFullscreen(foregroundHwnd)) {
                                 HANDLE hProc = OpenProcess(SYNCHRONIZE | PROCESS_TERMINATE | PROCESS_QUERY_INFORMATION, FALSE, pid);
                                 if (hProc) {
-                                    // SUCCESS! We found the handle.
                                     char windowTitle[256] = { 0 };
                                     GetWindowTextA(foregroundHwnd, windowTitle, sizeof(windowTitle));
                                     std::string exeName = getExeNameFromHwnd(foregroundHwnd);
-                                    LOG_INFO("ProcessManager", "Detection successful. Found fullscreen game process (PID: " + std::to_string(pid) + ", Title: \"" + std::string(windowTitle) + "\", EXE: " + exeName + ").");
+
+                                    LOG_INFO("ProcessManager", "Detection successful. Found fullscreen game process (PID: " +
+                                        std::to_string(pid) + ", Title: \"" + std::string(windowTitle) + "\", EXE: " + exeName + ").");
 
                                     LOG_INFO("ProcessManager", "Forcing detected window to the foreground.");
                                     SetForegroundWindow(foregroundHwnd);
@@ -452,11 +484,10 @@ WaitResult WindowsProcessManager::wait(double timeoutSeconds, const std::functio
                                     jobAssigned_ = false;
 
                                     LOG_INFO("ProcessManager", "Transitioning to monitoring phase.");
-                                    isDetecting = false; // <-- Transition to Phase 2!
+                                    isDetecting = false;
                                 }
                             }
                             else {
-                                // It's a candidate, but not fullscreen. Log details for debugging.
                                 if (foregroundHwnd != lastLoggedHwnd) {
                                     logFullscreenCheckDetails(foregroundHwnd);
                                     lastLoggedHwnd = foregroundHwnd;
@@ -465,25 +496,24 @@ WaitResult WindowsProcessManager::wait(double timeoutSeconds, const std::functio
                         }
                     }
                 }
-                lastDetectionTime = now; // Reset the throttle timer.
+
+                lastDetectionTime = now;
             }
         }
-        // --- PHASE 2: MONITORING LOGIC ---
         else {
             if (WaitForSingleObject(hProcess_, 0) == WAIT_OBJECT_0) {
                 return WaitResult::ProcessExit;
             }
         }
 
-        // --- GLOBAL TIMEOUT CHECK (for attract mode) ---
         if (timeoutSeconds > 0) {
-            if (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - monitoringStartTime).count() >= timeoutSeconds) {
+            if (std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::steady_clock::now() - monitoringStartTime).count() >= timeoutSeconds)
+            {
                 return WaitResult::Timeout;
             }
         }
 
-        // --- MESSAGE PUMP and FINE-GRAINED WAIT ---
-        // Use a fine-grained wait for responsiveness, allowing the loop to run at ~30fps.
         MsgWaitForMultipleObjects(0, nullptr, FALSE, 33, QS_ALLINPUT);
         MSG msg;
         while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
@@ -493,40 +523,55 @@ WaitResult WindowsProcessManager::wait(double timeoutSeconds, const std::functio
 }
 
 void WindowsProcessManager::terminate() {
-    constexpr DWORD kGraceWaitMs = 3000; // tune as desired (1–5s typical)
+    // General grace vs MAME grace
+    constexpr DWORD kGraceWaitMsGeneral = 3000;
+    constexpr DWORD kGraceWaitMsMame = 8000;
+
+    if (!isRunning()) {
+        LOG_WARNING("ProcessManager", "Terminate called but no process was running.");
+        cleanupHandles();
+        return;
+    }
+
+    const bool isMame = isMameExeName(executableName_);
+    const DWORD graceBudget = isMame ? kGraceWaitMsMame : kGraceWaitMsGeneral;
 
     bool createdMameTrigger = false;
     std::filesystem::path mameTriggerPath;
 
     auto removeTriggerIfNeeded = [&]() {
-        if (!createdMameTrigger) {
-            return;
-        }
+        if (!createdMameTrigger) return;
         std::error_code ec;
         std::filesystem::remove(mameTriggerPath, ec);
-        // No log spam here; this is best-effort cleanup.
+        };
+
+    const auto t0 = std::chrono::steady_clock::now();
+    auto remainingMs = [&]() -> DWORD {
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - t0).count();
+        if (elapsed >= static_cast<long long>(graceBudget)) return 0;
+        return static_cast<DWORD>(graceBudget - elapsed);
         };
 
     // --- MAME special-case: ask it to quit via trigger file first ---
-    if (isRunning() && isMameExeName(executableName_) && !workingDirectory_.empty()) {
+    if (isMame && !workingDirectory_.empty()) {
         mameTriggerPath = std::filesystem::path(workingDirectory_) / "mame_exit.trigger";
 
-        // Create/overwrite as empty file.
         std::ofstream out(mameTriggerPath.string(), std::ios::out | std::ios::trunc);
         if (out.good()) {
             out.close();
             createdMameTrigger = true;
-
             LOG_INFO("ProcessManager", "MAME detected - wrote exit trigger: " + mameTriggerPath.string());
 
-            // Give the plugin time to see it and exit cleanly.
-            if (waitForPidExitBounded(processId_, kGraceWaitMs)) {
+            DWORD rem = remainingMs();
+            if (rem > 0 && waitForPidExitBounded(processId_, rem)) {
                 LOG_INFO("ProcessManager", "MAME exited cleanly after trigger.");
+                removeTriggerIfNeeded();
                 cleanupHandles();
                 return;
             }
 
-            // Didn't exit in time; remove trigger so next launch doesn't instantly quit.
+            // Remove trigger so next launch doesn't instantly quit.
             {
                 std::error_code ec;
                 std::filesystem::remove(mameTriggerPath, ec);
@@ -543,44 +588,58 @@ void WindowsProcessManager::terminate() {
         }
     }
 
+    // --- If we have a job, prefer job-based graceful shutdown ---
     if (jobAssigned_ && hJob_) {
-        LOG_INFO("ProcessManager", "Attempting graceful shutdown for job...");
-        if (requestGracefulShutdownForJob(kGraceWaitMs)) {
-            LOG_INFO("ProcessManager", "Graceful job shutdown succeeded.");
+        LOG_INFO("ProcessManager", "Attempting graceful shutdown for job (primary PID " + std::to_string(processId_) + ")...");
+
+        DWORD rem = remainingMs();
+        if (rem > 0 && requestGracefulShutdownForJob(rem)) {
+            LOG_INFO("ProcessManager", "Graceful job shutdown succeeded (primary exited).");
+            removeTriggerIfNeeded();
+            cleanupHandles();
+            return;
+        }
+
+        // Edge timing: if it exited while we were attempting, treat as success.
+        if (!isRunning()) {
+            LOG_INFO("ProcessManager", "Primary process already exited; treating as graceful success.");
+            removeTriggerIfNeeded();
             cleanupHandles();
             return;
         }
 
         LOG_WARNING("ProcessManager", "Graceful job shutdown failed; escalating to TerminateJobObject.");
-
-        // Best-effort: ensure trigger isn't left behind if we're about to sledgehammer.
         removeTriggerIfNeeded();
-
         TerminateJobObject(hJob_, 1);
         cleanupHandles();
         return;
     }
 
-    if (isRunning()) {
-        LOG_INFO("ProcessManager", "Attempting graceful shutdown for PID " + std::to_string(processId_) + "...");
-        if (requestGracefulShutdownForPid(processId_, kGraceWaitMs)) {
+    // --- No job: graceful shutdown for the single PID ---
+    LOG_INFO("ProcessManager", "Attempting graceful shutdown for PID " + std::to_string(processId_) + "...");
+    {
+        DWORD rem = remainingMs();
+        if (rem > 0 && requestGracefulShutdownForPid(processId_, rem)) {
             LOG_INFO("ProcessManager", "Graceful shutdown succeeded.");
+            removeTriggerIfNeeded();
             cleanupHandles();
             return;
         }
+    }
 
-        LOG_WARNING("ProcessManager", "Graceful shutdown failed; terminating process tree.");
-
-        // Best-effort: ensure trigger isn't left behind if we're about to sledgehammer.
+    // Edge timing re-check
+    if (!isRunning()) {
+        LOG_INFO("ProcessManager", "Primary process already exited; treating as graceful success.");
         removeTriggerIfNeeded();
-
-        std::set<DWORD> processedIds;
-        terminateProcessTree(processId_, processedIds);
         cleanupHandles();
         return;
     }
 
-    LOG_WARNING("ProcessManager", "Terminate called but no process was running.");
+    LOG_WARNING("ProcessManager", "Graceful shutdown failed; terminating process tree.");
+    removeTriggerIfNeeded();
+
+    std::set<DWORD> processedIds;
+    terminateProcessTree(processId_, processedIds);
     cleanupHandles();
 }
 
@@ -594,18 +653,10 @@ bool WindowsProcessManager::tryGetExitCode(int& outExitCode) const {
 }
 
 bool WindowsProcessManager::isRunning() const {
-    if (hProcess_ == nullptr) {
-        return false;
-    }
-    // Check if the process is still active.
+    if (hProcess_ == nullptr) return false;
     DWORD exitCode = 0;
-    if (GetExitCodeProcess(hProcess_, &exitCode) && exitCode == STILL_ACTIVE) {
-        return true;
-    }
-    return false;
+    return (GetExitCodeProcess(hProcess_, &exitCode) && exitCode == STILL_ACTIVE);
 }
-
-// --- Private Helper Implementations ---
 
 std::string WindowsProcessManager::getExeNameFromHwnd(HWND hwnd) {
     if (!hwnd) return "";
@@ -618,7 +669,6 @@ std::string WindowsProcessManager::getExeNameFromHwnd(HWND hwnd) {
     char exePath[MAX_PATH] = { 0 };
     std::string exeName;
     if (GetModuleFileNameExA(hProc, NULL, exePath, MAX_PATH)) {
-        // Assuming getExeNameFromPath is still in the anonymous namespace, which is fine.
         exeName = getExeNameFromPath(exePath);
     }
     CloseHandle(hProc);
@@ -654,7 +704,6 @@ void WindowsProcessManager::logFullscreenCheckDetails(HWND hwnd) {
     char windowTitle[256] = { 0 };
     GetWindowTextA(hwnd, windowTitle, sizeof(windowTitle));
 
-    // Format the rectangles into a clear string for comparison
     std::string windowRectStr = "L:" + std::to_string(appBounds.left) +
         " T:" + std::to_string(appBounds.top) +
         " R:" + std::to_string(appBounds.right) +
@@ -674,7 +723,6 @@ void WindowsProcessManager::terminateProcessTree(DWORD processId, std::set<DWORD
     if (processedIds.count(processId)) return;
     processedIds.insert(processId);
 
-    // First, recursively terminate all children.
     HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (hSnap != INVALID_HANDLE_VALUE) {
         PROCESSENTRY32 pe32{};
@@ -689,7 +737,6 @@ void WindowsProcessManager::terminateProcessTree(DWORD processId, std::set<DWORD
         CloseHandle(hSnap);
     }
 
-    // Now, terminate the parent.
     HANDLE hProc = OpenProcess(PROCESS_TERMINATE, FALSE, processId);
     if (hProc) {
         LOG_DEBUG("ProcessManager", "Terminating PID: " + std::to_string(processId));
@@ -697,8 +744,6 @@ void WindowsProcessManager::terminateProcessTree(DWORD processId, std::set<DWORD
         CloseHandle(hProc);
     }
 }
-
-// --- Static Helpers ---
 
 bool WindowsProcessManager::isWindowFullscreen(HWND hwnd) {
     if (!hwnd) return false;
@@ -713,31 +758,30 @@ bool WindowsProcessManager::isWindowFullscreen(HWND hwnd) {
     monitorInfo.cbSize = sizeof(MONITORINFO);
     if (!GetMonitorInfo(hMonitor, &monitorInfo)) return false;
 
-    const int tolerance = 4; // A small pixel tolerance for minor differences.
+    const int tolerance = 4;
 
-    // Case 1: True fullscreen or near-fullscreen borderless.
-    // Check if the window's dimensions are very close to the monitor's.
     long windowWidth = appBounds.right - appBounds.left;
     long windowHeight = appBounds.bottom - appBounds.top;
     long monitorWidth = monitorInfo.rcMonitor.right - monitorInfo.rcMonitor.left;
     long monitorHeight = monitorInfo.rcMonitor.bottom - monitorInfo.rcMonitor.top;
 
-    if (abs(windowWidth - monitorWidth) <= tolerance &&
-        abs(windowHeight - monitorHeight) <= tolerance) {
-        // Also check if it's positioned at the top-left corner.
-        if (abs(appBounds.left - monitorInfo.rcMonitor.left) <= tolerance &&
-            abs(appBounds.top - monitorInfo.rcMonitor.top) <= tolerance) {
-            return true; // This handles standard fullscreen and simple borderless.
+    if (std::abs(windowWidth - monitorWidth) <= tolerance &&
+        std::abs(windowHeight - monitorHeight) <= tolerance)
+    {
+        if (std::abs(appBounds.left - monitorInfo.rcMonitor.left) <= tolerance &&
+            std::abs(appBounds.top - monitorInfo.rcMonitor.top) <= tolerance)
+        {
+            return true;
         }
     }
 
-    // Case 2: Overscan/Negative Margin Fullscreen (like DRAGON BALL FighterZ).
-    // Check if the monitor's rectangle is contained within the window's rectangle.
+    // Overscan/negative-margin fullscreen
     if (appBounds.left <= monitorInfo.rcMonitor.left &&
         appBounds.top <= monitorInfo.rcMonitor.top &&
         appBounds.right >= monitorInfo.rcMonitor.right &&
-        appBounds.bottom >= monitorInfo.rcMonitor.bottom) {
-        return true; // The window completely envelops the screen.
+        appBounds.bottom >= monitorInfo.rcMonitor.bottom)
+    {
+        return true;
     }
 
     return false;
@@ -756,12 +800,10 @@ bool WindowsProcessManager::isSteamHelperWindow(HWND hwnd) {
     char exePath[MAX_PATH] = { 0 };
     bool result = false;
     if (GetModuleFileNameExA(hProc, NULL, exePath, MAX_PATH)) {
-        // Get the base executable name once.
         std::string exeName = getExeNameFromPath(exePath);
-
-        // Check if it's either of the known Steam executables.
         if (_stricmp(exeName.c_str(), "steamwebhelper.exe") == 0 ||
-            _stricmp(exeName.c_str(), "steam.exe") == 0) {
+            _stricmp(exeName.c_str(), "steam.exe") == 0)
+        {
             result = true;
         }
     }
