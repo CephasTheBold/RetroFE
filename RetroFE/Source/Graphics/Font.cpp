@@ -329,13 +329,18 @@ void FontManager::preloadGlyphRange(TTF_Font* font,
 bool FontManager::initialize() {
     clearMips();
 
-    const int   MIN_FONT_SIZE = 24;
+    const int   MIN_FONT_SIZE_DEFAULT = 24; // was hard floor
     const float DENSE_FACTOR = 0.70f;
     const float SPARSE_FACTOR = 0.50f;
     const int   SWITCH_THRESHOLD = 40;
 
+    // --- FIX: if maxFontSize_ is smaller than the default floor, allow it ---
+    // e.g. loadFontSize=19 should still generate at least one mip level at 19.
+    const int minFontSize =
+        (maxFontSize_ > 0) ? std::min(MIN_FONT_SIZE_DEFAULT, maxFontSize_) : MIN_FONT_SIZE_DEFAULT;
+
     bool first = true;
-    for (int currentSize = maxFontSize_; currentSize >= MIN_FONT_SIZE; ) {
+    for (int currentSize = maxFontSize_; currentSize >= minFontSize; ) {
         TTF_Font* font = TTF_OpenFont(fontPath_.c_str(), currentSize);
         if (!font) {
             LOG_WARNING("Font", "Failed to open font '" + fontPath_ + "' at size " +
