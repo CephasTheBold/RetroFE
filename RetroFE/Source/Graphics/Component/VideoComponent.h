@@ -67,4 +67,5 @@ private:
 	bool instanceReady_{ false }; // Track if the video instance is ready to play
 	bool pendingRestart_{ false }; // Track if a restart is pending after fast-scroll
     bool pendingRetarget_ = false;
+    bool restartOnHide_ = false;
 };
