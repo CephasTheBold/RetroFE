@@ -18,9 +18,10 @@
 
 #include "WindowsProcessManager.h"
 
+#include <fstream>
 #include <filesystem>
 #include <Psapi.h> // For GetModuleFileNameExA
-#include <tlhelp32.h> // For CreateToolhelp32Snapshot
+#include <Tlhelp32.h> // For CreateToolhelp32Snapshot
 #include <SDL2/SDL_syswm.h>
 #include "../../../SDL.h" // For SDL::getActiveWindow
 
@@ -36,6 +37,11 @@ namespace {
             return path.substr(pos + 1);
         }
         return path;
+    }
+    
+    static bool isMameExeName(const std::string& exeName) {
+        std::string n = Utils::toLower(exeName);
+        return (n.rfind("mame", 0) == 0); // starts with "mame"
     }
 }
 
@@ -192,6 +198,9 @@ void WindowsProcessManager::cleanupHandles() {
         hJob_ = nullptr;
     }
     jobAssigned_ = false;
+    processId_ = 0;
+    executableName_.clear();
+    workingDirectory_.clear();
 }
 
 // --- Public Interface Implementation ---
@@ -262,6 +271,7 @@ bool WindowsProcessManager::launch(const std::string& executable, const std::str
     std::string exePathStr = exePath.string();
     std::string currDirStr = currDir.string();
     executableName_ = getExeNameFromPath(exePathStr);
+    workingDirectory_ = currDirStr;
 
     LOG_INFO("ProcessManager", "Attempting to launch: " + exePathStr);
     if (!args.empty()) {
@@ -485,6 +495,54 @@ WaitResult WindowsProcessManager::wait(double timeoutSeconds, const std::functio
 void WindowsProcessManager::terminate() {
     constexpr DWORD kGraceWaitMs = 3000; // tune as desired (1–5s typical)
 
+    bool createdMameTrigger = false;
+    std::filesystem::path mameTriggerPath;
+
+    auto removeTriggerIfNeeded = [&]() {
+        if (!createdMameTrigger) {
+            return;
+        }
+        std::error_code ec;
+        std::filesystem::remove(mameTriggerPath, ec);
+        // No log spam here; this is best-effort cleanup.
+        };
+
+    // --- MAME special-case: ask it to quit via trigger file first ---
+    if (isRunning() && isMameExeName(executableName_) && !workingDirectory_.empty()) {
+        mameTriggerPath = std::filesystem::path(workingDirectory_) / "mame_exit.trigger";
+
+        // Create/overwrite as empty file.
+        std::ofstream out(mameTriggerPath.string(), std::ios::out | std::ios::trunc);
+        if (out.good()) {
+            out.close();
+            createdMameTrigger = true;
+
+            LOG_INFO("ProcessManager", "MAME detected - wrote exit trigger: " + mameTriggerPath.string());
+
+            // Give the plugin time to see it and exit cleanly.
+            if (waitForPidExitBounded(processId_, kGraceWaitMs)) {
+                LOG_INFO("ProcessManager", "MAME exited cleanly after trigger.");
+                cleanupHandles();
+                return;
+            }
+
+            // Didn't exit in time; remove trigger so next launch doesn't instantly quit.
+            {
+                std::error_code ec;
+                std::filesystem::remove(mameTriggerPath, ec);
+                if (ec) {
+                    LOG_WARNING("ProcessManager", "Failed to remove MAME exit trigger (" + mameTriggerPath.string() + "): " + ec.message());
+                }
+                else {
+                    LOG_INFO("ProcessManager", "MAME did not exit in time; removed exit trigger and escalating.");
+                }
+            }
+        }
+        else {
+            LOG_WARNING("ProcessManager", "MAME detected but could not write exit trigger: " + mameTriggerPath.string());
+        }
+    }
+
     if (jobAssigned_ && hJob_) {
         LOG_INFO("ProcessManager", "Attempting graceful shutdown for job...");
         if (requestGracefulShutdownForJob(kGraceWaitMs)) {
@@ -492,7 +550,12 @@ void WindowsProcessManager::terminate() {
             cleanupHandles();
             return;
         }
+
         LOG_WARNING("ProcessManager", "Graceful job shutdown failed; escalating to TerminateJobObject.");
+
+        // Best-effort: ensure trigger isn't left behind if we're about to sledgehammer.
+        removeTriggerIfNeeded();
+
         TerminateJobObject(hJob_, 1);
         cleanupHandles();
         return;
@@ -505,7 +568,12 @@ void WindowsProcessManager::terminate() {
             cleanupHandles();
             return;
         }
+
         LOG_WARNING("ProcessManager", "Graceful shutdown failed; terminating process tree.");
+
+        // Best-effort: ensure trigger isn't left behind if we're about to sledgehammer.
+        removeTriggerIfNeeded();
+
         std::set<DWORD> processedIds;
         terminateProcessTree(processId_, processedIds);
         cleanupHandles();

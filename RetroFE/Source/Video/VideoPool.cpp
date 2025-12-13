@@ -43,6 +43,29 @@ VideoPool::VideoPtr VideoPool::acquireVideo(int monitor, int listId, bool softOv
 	std::unique_lock<std::mutex> lk(s_mutex);
 	PoolInfo& pool = pools_[monitor][listId];
 
+	auto pump_ready_hints = [&]() {
+		for (const auto& up : pool.available) {
+			IVideo* key = up.get();
+			if (!key) continue;
+
+			bool becameReady = (key->getActualState() == IVideo::VideoState::None);
+
+			// Prefer the one-shot flag if it’s a GStreamerVideo
+			if (!becameReady) {
+				if (auto* gsv = dynamic_cast<GStreamerVideo*>(key)) {
+					if (gsv->consumeBecameNone()) {
+						becameReady = true;
+					}
+				}
+			}
+
+			if (becameReady && pool.index.find(key) != pool.index.end() && !pool.hinted.count(key)) {
+				pool.readyHints.push_back(key);
+				pool.hinted.insert(key);
+			}
+		}
+		};
+
 	auto try_pop_ready = [&]() -> VideoPtr {
 		// fast path: ready hint
 		while (!pool.readyHints.empty()) {
@@ -106,6 +129,9 @@ VideoPool::VideoPtr VideoPool::acquireVideo(int monitor, int listId, bool softOv
 			LOG_DEBUG("VideoPool", "Acquire (bail: shutdown/cleanup) " + poolStateStr(monitor, listId, pool));
 			return nullptr;
 		}
+
+		pump_ready_hints();
+
 		// 1) any ready?
 		if (auto vid = try_pop_ready()) {
 			LOG_DEBUG("VideoPool", "Acquire (reuse OK) " + poolStateStr(monitor, listId, pool));
@@ -138,15 +164,19 @@ VideoPool::VideoPtr VideoPool::acquireVideo(int monitor, int listId, bool softOv
 		LOG_DEBUG("VideoPool", "Acquire (wait) " + poolStateStr(monitor, listId, pool));
 
 		// 3) wait until: hint arrives, an idle reaches None, cleanup/shutdown, or growth becomes possible
-		s_cv.wait(lk, [&pool] {
+		using namespace std::chrono_literals;
+
+		s_cv.wait_for(lk, 50ms, [&pool] {
 			if (shuttingDown_ || pool.markedForCleanup) return true;
 			if (!pool.readyHints.empty()) return true;
+
 			if (std::any_of(pool.available.begin(), pool.available.end(),
-				[](const VideoPtr& v) { return v->getActualState() == IVideo::VideoState::None; })) return true;
-			// growth may become possible after releases reduce total
+				[](const VideoPtr& v) { return v && v->getActualState() == IVideo::VideoState::None; })) return true;
+
 			const size_t totalNow = pool.currentActive + pool.available.size();
 			return totalNow < pool.requiredInstanceCount;
 			});
+		pump_ready_hints();
 		// loop re-checks everything
 	}
 }
@@ -172,26 +202,10 @@ void VideoPool::releaseVideo(VideoPtr vid, int monitor, int listId) {
 		pool.initialCountLatched = true;
 	}
 
-	// Arm “became None” to hint + notify
+	// Arm one-shot "became NONE" flag (no callback)
 	if (auto* gsv = dynamic_cast<GStreamerVideo*>(it->get())) {
-		gsv->armOnBecameNone([monitor, listId, key](GStreamerVideo*) {
-			{
-				std::scoped_lock<std::mutex> lk(s_mutex);
-				auto mit = pools_.find(monitor);
-				if (mit == pools_.end()) return;
-				auto lit = mit->second.find(listId);
-				if (lit == mit->second.end()) return;
-				PoolInfo& pool = lit->second;
-
-				if (pool.index.find(key) != pool.index.end() && !pool.hinted.count(key)) {
-					pool.readyHints.push_back(key);
-					pool.hinted.insert(key);
-				}
-			} // release s_mutex
-			s_cv.notify_all();
-			});
+		gsv->armOnBecameNone(); // <- new no-arg arm (sets notifyOnNone_/clears flag)
 	}
-
 
 	const bool tryErase = pool.markedForCleanup && pool.currentActive == 0;
 	lk.unlock();

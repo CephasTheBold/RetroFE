@@ -43,13 +43,11 @@ ReloadableMedia::ReloadableMedia(Configuration& config, bool systemMode, bool la
     , displayOffset_(displayOffset)
     , imageType_(imageType)
     , jukebox_(jukebox)
-    , jukeboxNumLoops_(jukeboxNumLoops)
-{
+    , jukeboxNumLoops_(jukeboxNumLoops) {
     allocateGraphicsMemory();
 }
 
-ReloadableMedia::~ReloadableMedia()
-{
+ReloadableMedia::~ReloadableMedia() {
     ReloadableMedia::freeGraphicsMemory();
 }
 
@@ -57,13 +55,11 @@ void ReloadableMedia::enableTextureCache_(bool value) {
     useTextureCache_ = value;
 }
 
-void ReloadableMedia::enableTextFallback_(bool value)
-{
+void ReloadableMedia::enableTextFallback_(bool value) {
     textFallback_ = value;
 }
 
-bool ReloadableMedia::update(float dt)
-{
+bool ReloadableMedia::update(float dt) {
     if (newItemSelected ||
         (newScrollItemSelected && getMenuScrollReload())) {
         newItemSelected = false;
@@ -96,9 +92,8 @@ bool ReloadableMedia::update(float dt)
 }
 
 
-void ReloadableMedia::allocateGraphicsMemory()
-{
-    if(loadedComponent_) {
+void ReloadableMedia::allocateGraphicsMemory() {
+    if (loadedComponent_) {
         loadedComponent_->allocateGraphicsMemory();
     }
 
@@ -107,8 +102,7 @@ void ReloadableMedia::allocateGraphicsMemory()
 }
 
 
-void ReloadableMedia::freeGraphicsMemory()
-{
+void ReloadableMedia::freeGraphicsMemory() {
     Component::freeGraphicsMemory();
     if (loadedComponent_ != nullptr) {
         delete loadedComponent_;
@@ -117,25 +111,24 @@ void ReloadableMedia::freeGraphicsMemory()
 }
 
 
-Component *ReloadableMedia::reloadTexture()
-{
+Component* ReloadableMedia::reloadTexture() {
     std::string typeLC = Utils::toLower(type_);
     Item* selectedItem = page.getSelectedItem(displayOffset_);
 
-    if(loadedComponent_ && !selectedItem) {
-            
-            delete loadedComponent_;
-            loadedComponent_ = nullptr;
+    if (loadedComponent_ && !selectedItem) {
+
+        delete loadedComponent_;
+        loadedComponent_ = nullptr;
     }
 
-    if(!selectedItem) return nullptr;
+    if (!selectedItem) return nullptr;
 
     // build clone list
     std::vector<std::string> names;
 
     names.push_back(selectedItem->name);
     names.push_back(selectedItem->fullTitle);
-    if(selectedItem->cloneof.length() > 0) {
+    if (selectedItem->cloneof.length() > 0) {
         names.push_back(selectedItem->cloneof);
     }
 
@@ -180,15 +173,15 @@ Component *ReloadableMedia::reloadTexture()
     names.emplace_back("default");
     // if same playlist then use existing loaded component
     Component* foundComponent = nullptr;
-    if (loadedComponent_ != nullptr && 
-        (typeLC.rfind("playlist", 0) == 0 && 
-        page.getPlaylistName() == loadedComponent_->playlistName)
-    ) {
+    if (loadedComponent_ != nullptr &&
+        (typeLC.rfind("playlist", 0) == 0 &&
+            page.getPlaylistName() == loadedComponent_->playlistName)
+        ) {
         return loadedComponent_;
     }
 
-    if(isVideo_) {
-        for(unsigned int n = 0; n < names.size() && !foundComponent; ++n) {
+    if (isVideo_) {
+        for (unsigned int n = 0; n < names.size() && !foundComponent; ++n) {
             std::string basename = names[n];
 
             // support reloadable video based on playlist# type
@@ -196,12 +189,12 @@ Component *ReloadableMedia::reloadTexture()
                 basename = page.getPlaylistName();
             }
 
-            if(systemMode_) {
+            if (systemMode_) {
                 // check the master collection for the system artifact
                 foundComponent = findComponent(collectionName, type_, type_, "", true, true);
 
                 // check the collection for the system artifact
-                if(!foundComponent)
+                if (!foundComponent)
                 {
                     foundComponent = findComponent(selectedItem->collectionInfo->name, type_, type_, "", true, true);
                 }
@@ -212,115 +205,115 @@ Component *ReloadableMedia::reloadTexture()
                 if (selectedItem->leaf) // item is a leaf 
                 {
 
-                  // check the master collection for the artifact 
+                    // check the master collection for the artifact 
                     foundComponent = findComponent(collectionName, type_, basename, "", false, true);
 
-                  // check the collection for the artifact
-                  if(!foundComponent) {
-                      foundComponent = findComponent(selectedItem->collectionInfo->name, type_, basename, "", false, true);
-                  }
+                    // check the collection for the artifact
+                    if (!foundComponent) {
+                        foundComponent = findComponent(selectedItem->collectionInfo->name, type_, basename, "", false, true);
+                    }
 
-                  // check the rom directory for the artifact
-                  if(!foundComponent) {
-                      foundComponent = findComponent(selectedItem->collectionInfo->name, type_, type_, selectedItem->filepath, false, true);
-                  }
+                    // check the rom directory for the artifact
+                    if (!foundComponent) {
+                        foundComponent = findComponent(selectedItem->collectionInfo->name, type_, type_, selectedItem->filepath, false, true);
+                    }
                 }
                 else // item is a submenu
                 {
-                  // check the master collection for the artifact 
+                    // check the master collection for the artifact 
                     foundComponent = findComponent(collectionName, type_, basename, "", false, true);
 
-                  // check the collection for the artifact
-                  if(!foundComponent) {
-                      foundComponent = findComponent(selectedItem->collectionInfo->name, type_, basename, "", false, true);
-                  }
+                    // check the collection for the artifact
+                    if (!foundComponent) {
+                        foundComponent = findComponent(selectedItem->collectionInfo->name, type_, basename, "", false, true);
+                    }
 
-                  // check the submenu collection for the system artifact
-                  if (!foundComponent) {
-                      foundComponent = findComponent(selectedItem->name, type_, type_, "", true, true);
-                  }
+                    // check the submenu collection for the system artifact
+                    if (!foundComponent) {
+                        foundComponent = findComponent(selectedItem->name, type_, type_, "", true, true);
+                    }
                 }
             }
-            if(foundComponent) {
+            if (foundComponent) {
                 return foundComponent;
             }
         }
     }
 
     // check for images, also if video could not be found (and was specified)
-    for(unsigned int n = 0; n < names.size() && !foundComponent; ++n) {
+    for (unsigned int n = 0; n < names.size() && !foundComponent; ++n) {
         std::string basename = names[n];
-        bool        defined  = false;
-        std::string type     = type_;
+        bool        defined = false;
+        std::string type = type_;
 
-        if ( isVideo_ ) {
+        if (isVideo_) {
             typeLC = Utils::toLower(imageType_);
-            type   = imageType_;
+            type = imageType_;
         }
 
-        if(basename == "default") {
+        if (basename == "default") {
             basename = "default";
-            defined  = true;
+            defined = true;
         }
-        else if(typeLC == "numberbuttons") {
+        else if (typeLC == "numberbuttons") {
             basename = selectedItem->numberButtons;
-            defined  = true;
+            defined = true;
         }
-        else if(typeLC == "numberplayers") {
+        else if (typeLC == "numberplayers") {
             basename = selectedItem->numberPlayers;
-            defined  = true;
+            defined = true;
         }
-        else if(typeLC == "year") {
+        else if (typeLC == "year") {
             basename = selectedItem->year;
-            defined  = true;
+            defined = true;
         }
-        else if(typeLC == "title") {
+        else if (typeLC == "title") {
             basename = selectedItem->title;
-            defined  = true;
+            defined = true;
         }
-        else if(typeLC == "developer") {
+        else if (typeLC == "developer") {
             basename = selectedItem->developer;
-            defined  = true;
+            defined = true;
             // Overwrite in case developer has not been specified
             if (basename == "") {
                 basename = selectedItem->manufacturer;
             }
         }
-        else if(typeLC == "manufacturer") {
+        else if (typeLC == "manufacturer") {
             basename = selectedItem->manufacturer;
-            defined  = true;
+            defined = true;
         }
-        else if(typeLC == "genre") {
+        else if (typeLC == "genre") {
             basename = selectedItem->genre;
-            defined  = true;
+            defined = true;
         }
-        else if(typeLC == "ctrltype") {
+        else if (typeLC == "ctrltype") {
             basename = selectedItem->ctrlType;
-            defined  = true;
+            defined = true;
         }
-        else if(typeLC == "joyways") {
+        else if (typeLC == "joyways") {
             basename = selectedItem->joyWays;
-            defined  = true;
+            defined = true;
         }
-        else if(typeLC == "rating") {
+        else if (typeLC == "rating") {
             basename = selectedItem->rating;
-            defined  = true;
+            defined = true;
         }
-        else if(typeLC == "score") {
+        else if (typeLC == "score") {
             basename = selectedItem->score;
-            defined  = true;
+            defined = true;
         }
         else if (typeLC == "playcount") {
             basename = std::to_string(selectedItem->playCount);
             defined = true;
         }
-        else if(typeLC.rfind( "playlist", 0 ) == 0) {
+        else if (typeLC.rfind("playlist", 0) == 0) {
             basename = page.getPlaylistName();
-            defined  = true;
+            defined = true;
         }
         else if (typeLC == "firstletter") {
             basename = selectedItem->fullTitle.at(0);
-            defined  = true;
+            defined = true;
         }
         else if (typeLC == "position" && !selectedItem->collectionInfo->items.empty()) {
             if (size_t position = page.getSelectedIndex() + 1; position == 1) {
@@ -337,16 +330,16 @@ Component *ReloadableMedia::reloadTexture()
 
         if (!selectedItem->leaf) // item is not a leaf
         {
-            (void)config_.getProperty("collections." + selectedItem->name + "." + type, basename );
+            (void)config_.getProperty("collections." + selectedItem->name + "." + type, basename);
         }
 
         bool overwriteXML = false;
-        config_.getProperty( OPTION_OVERWRITEXML, overwriteXML );
-        if ( !defined || overwriteXML ) // No basename was found yet; check the info in stead
+        config_.getProperty(OPTION_OVERWRITEXML, overwriteXML);
+        if (!defined || overwriteXML) // No basename was found yet; check the info in stead
         {
             std::string basename_tmp;
-            selectedItem->getInfo( type, basename_tmp );
-            if ( basename_tmp != "" )
+            selectedItem->getInfo(type, basename_tmp);
+            if (basename_tmp != "")
             {
                 basename = basename_tmp;
             }
@@ -360,15 +353,15 @@ Component *ReloadableMedia::reloadTexture()
             basename = basename + " - " + std::to_string(randImage);
         }
 
-        if(systemMode_) {
+        if (systemMode_) {
             // check the master collection for the system artifact 
             foundComponent = findComponent(collectionName, type, type, "", true, false);
 
             // check collection for the system artifact
-            if(!foundComponent) {
+            if (!foundComponent) {
                 foundComponent = findComponent(selectedItem->collectionInfo->name, type, type, "", true, false);
             }
-            
+
             // check selected item that's a collection
             if (!foundComponent && !selectedItem->leaf) {
                 foundComponent = findComponent(selectedItem->name, type, type, "", true, false);
@@ -381,29 +374,29 @@ Component *ReloadableMedia::reloadTexture()
                 // check the master collection for the artifact
                 foundComponent = findComponent(collectionName, type, basename, "", false, false);
 
-            // check the collection for the artifact
-            if(!foundComponent) {
-                foundComponent = findComponent(selectedItem->collectionInfo->name, type, basename, "", false, false);
-            }
+                // check the collection for the artifact
+                if (!foundComponent) {
+                    foundComponent = findComponent(selectedItem->collectionInfo->name, type, basename, "", false, false);
+                }
 
-            // check the rom directory for the artifact
-            if(!foundComponent){
-                foundComponent = findComponent(selectedItem->collectionInfo->name, type, type, selectedItem->filepath, false, false);
+                // check the rom directory for the artifact
+                if (!foundComponent) {
+                    foundComponent = findComponent(selectedItem->collectionInfo->name, type, type, selectedItem->filepath, false, false);
+                }
             }
-        }
             else // item is a submenu
             {
                 // check the master collection for the artifact 
                 foundComponent = findComponent(collectionName, type, basename, "", false, false);
 
                 // check the collection for the artifact
-                if(!foundComponent) {
-                  foundComponent = findComponent(selectedItem->collectionInfo->name, type, basename, "", false, false);
+                if (!foundComponent) {
+                    foundComponent = findComponent(selectedItem->collectionInfo->name, type, basename, "", false, false);
                 }
 
                 // check the submenu collection for the system artifact
-                if (!foundComponent){
-                  foundComponent = findComponent(selectedItem->name, type, type, "", true, false);
+                if (!foundComponent) {
+                    foundComponent = findComponent(selectedItem->name, type, type, "", true, false);
                 }
             }
         }
@@ -414,7 +407,7 @@ Component *ReloadableMedia::reloadTexture()
     }
 
     // if image and artwork was not specified, fall back to displaying text
-    if(!foundComponent && textFallback_) {
+    if (!foundComponent && textFallback_) {
         return new Text(selectedItem->fullTitle, page, FfntInst_, baseViewInfo.Monitor);
     }
     return foundComponent;
@@ -428,259 +421,156 @@ Component* ReloadableMedia::findComponent(
     std::string_view filepath,
     bool systemMode,
     bool isVideo) {
-    // Build "dir + sep + name" with one allocation.
-    auto makePrefix = [](std::string_view dir, std::string_view name) -> std::string {
-        std::string s;
-        s.reserve(dir.size() + name.size() + 2);
-        s.append(dir);
-        if (!dir.empty()) {
-            const char c = dir.back();
-            if (c != '/' && c != '\\')
-#ifdef _WIN32
-                s.push_back('\\');
-#else
-                s.push_back('/');
-#endif
-        }
-        s.append(name);
-        return s;
-        };
-
-#ifdef WIN32
-    static constexpr std::string_view kImgExts[] = { "png","webp","gif","jpg","jpeg" };
-    static constexpr std::string_view kVidExts[] = { "mp4","avi","mkv" };
-#else
-    static constexpr std::string_view kImgExts[] =
-    { "png","PNG", "webp", "WEBP", "gif","GIF", "jpg","JPG","jpeg","JPEG" };
-    static constexpr std::string_view kVidExts[] =
-    { "mp4","MP4","avi","AVI","mkv","MKV" };
-#endif
-    const auto* extsBegin = isVideo ? std::begin(kVidExts) : std::begin(kImgExts);
-    const auto* extsEnd = isVideo ? std::end(kVidExts) : std::end(kImgExts);
-
+    std::string imagePath;
+    Component* component = nullptr;
     VideoBuilder videoBuild{};
     ImageBuilder imageBuild{};
 
-    // 0) If explicit file path is provided, short-circuit: reuse or retarget; else create.
-    if (!filepath.empty()) {
-        const std::string pathStr(filepath);
-        if (loadedComponent_ && loadedComponent_->filePath() == pathStr) {
-            return loadedComponent_;
-        }
-
-        std::filesystem::path p(pathStr);
-        const std::string dir = p.parent_path().string();
-        const std::string stem = p.stem().string();
-
-        if (loadedComponent_) {
-            if (isVideo) {
-                if (videoBuild.RetargetVideo(
-                    *static_cast<VideoComponent*>(loadedComponent_), dir, stem)) {
-                    return loadedComponent_;
-                }
-            }
-            else {
-                if (imageBuild.RetargetImage(
-                    *static_cast<Image*>(loadedComponent_), dir, stem)) {
-                    return loadedComponent_;
-                }
-            }
-        }
-
-        // No loaded component or retarget failed ? create fresh.
-        if (isVideo) {
-            return jukebox_
-                ? videoBuild.createVideo(dir, page, stem, baseViewInfo.Monitor, jukeboxNumLoops_)
-                : videoBuild.createVideo(dir, page, stem, baseViewInfo.Monitor);
-        }
-        else {
-            return imageBuild.CreateImage(
-                dir, page, stem, baseViewInfo.Monitor, baseViewInfo.Additive, useTextureCache_);
-        }
-    }
-
-    // 1) Resolve the base artwork directory (unchanged logic).
-    std::string imagePath;
-    if (layoutMode_) {
-        std::string layoutName;
-        config_.getProperty("collections." + collection + ".layout", layoutName);
-        if (layoutName.empty()) {
-            config_.getProperty(OPTION_LAYOUT, layoutName);
-        }
-        if (commonMode_) {
-            imagePath = Utils::combinePath(
-                Configuration::absolutePath, "layouts", layoutName, "collections", "_common");
-        }
-        else {
-            imagePath = Utils::combinePath(
-                Configuration::absolutePath, "layouts", layoutName, "collections", collection);
-        }
-        imagePath = systemMode
-            ? Utils::combinePath(imagePath, "system_artwork")
-            : Utils::combinePath(imagePath, "medium_artwork", type);
+    if (filepath != "") {
+        imagePath = filepath;
     }
     else {
-        if (commonMode_) {
-            imagePath = Utils::combinePath(Configuration::absolutePath, "collections", "_common");
-            imagePath = systemMode
-                ? Utils::combinePath(imagePath, "system_artwork")
-                : Utils::combinePath(imagePath, "medium_artwork", type);
+        // check the system folder
+        if (layoutMode_) {
+            // check if collection's assets are in a different theme
+            std::string layoutName;
+            config_.getProperty("collections." + collection + ".layout", layoutName);
+            if (layoutName == "") {
+                config_.getProperty(OPTION_LAYOUT, layoutName);
+            }
+            if (commonMode_) {
+                imagePath = Utils::combinePath(Configuration::absolutePath, "layouts", layoutName, "collections", "_common");
+            }
+            else {
+                imagePath = Utils::combinePath(Configuration::absolutePath, "layouts", layoutName, "collections", collection);
+            }
+            if (systemMode)
+                imagePath = Utils::combinePath(imagePath, "system_artwork");
+            else
+                imagePath = Utils::combinePath(imagePath, "medium_artwork", type);
         }
         else {
-            config_.getMediaPropertyAbsolutePath(collection, type, systemMode, imagePath);
+            if (commonMode_) {
+                imagePath = Utils::combinePath(Configuration::absolutePath, "collections", "_common");
+                if (systemMode)
+                    imagePath = Utils::combinePath(imagePath, "system_artwork");
+                else
+                    imagePath = Utils::combinePath(imagePath, "medium_artwork", type);
+            }
+            else {
+                config_.getMediaPropertyAbsolutePath(collection, type, systemMode, imagePath);
+            }
         }
     }
 
-    // 2) Fast reuse check: if loaded component already matches the resolved file.
-    if (loadedComponent_ && !imagePath.empty()) {
-        const std::string prefix = makePrefix(imagePath, basename); // dir + stem (no ext)
+    // if file already loaded, don't load again
+    const std::vector<std::string>& extensions = isVideo ? ReloadableMedia::videoExtensions : ReloadableMedia::imageExtensions;
+
+    if (loadedComponent_ != nullptr && !imagePath.empty()) {
         std::string filePath;
-        if (Utils::findMatchingFile(std::string_view(prefix), extsBegin, extsEnd, filePath)) {
+        if (Utils::findMatchingFile(Utils::combinePath(imagePath, basename), extensions, filePath)) {
             if (filePath == loadedComponent_->filePath()) {
                 return loadedComponent_;
             }
         }
     }
 
-    // 3) Resolve concrete file via cache, then retarget or create.
-    {
-        const std::string prefix = makePrefix(imagePath, basename);
-        std::string foundPath;
-        if (Utils::findMatchingFile(std::string_view(prefix), extsBegin, extsEnd, foundPath)) {
-            if (loadedComponent_) {
-                std::filesystem::path p(foundPath);
-                const std::string dir = p.parent_path().string();
-                const std::string stem = p.stem().string();
-
-                if (isVideo) {
-                    if (videoBuild.RetargetVideo(
-                        *static_cast<VideoComponent*>(loadedComponent_), dir, stem)) {
-                        return loadedComponent_;
-                    }
-                }
-                else {
-                    if (imageBuild.RetargetImage(
-                        *static_cast<Image*>(loadedComponent_), dir, stem)) {
-                        return loadedComponent_;
-                    }
-                }
-            }
-
-            // Create fresh if no component or retarget failed.
-            std::filesystem::path p(foundPath);
-            const std::string dir = p.parent_path().string();
-            const std::string stem = p.stem().string();
-
-            if (isVideo) {
-                return jukebox_
-                    ? videoBuild.createVideo(dir, page, stem, baseViewInfo.Monitor, jukeboxNumLoops_)
-                    : videoBuild.createVideo(dir, page, stem, baseViewInfo.Monitor);
-            }
-            else {
-                return imageBuild.CreateImage(
-                    dir, page, stem, baseViewInfo.Monitor, baseViewInfo.Additive, useTextureCache_);
-            }
-        }
+    if (isVideo) {
+        if (jukebox_)
+            component = videoBuild.createVideo(imagePath, page, basename, baseViewInfo.Monitor, jukeboxNumLoops_);
+        else
+            component = videoBuild.createVideo(imagePath, page, basename, baseViewInfo.Monitor);
+    }
+    else {
+        component = imageBuild.CreateImage(imagePath, page, basename, baseViewInfo.Monitor, baseViewInfo.Additive, useTextureCache_);
     }
 
-    // 4) Not found ? let caller fall back (e.g., text).
-    return nullptr;
+    return component;
+
 }
 
-std::string filePath()
-{
+
+std::string filePath() {
     return "";
 }
 
-void ReloadableMedia::draw()
-{
+void ReloadableMedia::draw() {
     Component::draw();
 
-    if(loadedComponent_) {
-    	baseViewInfo.ImageHeight = loadedComponent_->baseViewInfo.ImageHeight;
-    	baseViewInfo.ImageWidth = loadedComponent_->baseViewInfo.ImageWidth;
+    if (loadedComponent_) {
+        baseViewInfo.ImageHeight = loadedComponent_->baseViewInfo.ImageHeight;
+        baseViewInfo.ImageWidth = loadedComponent_->baseViewInfo.ImageWidth;
         loadedComponent_->baseViewInfo = baseViewInfo;
-        if(baseViewInfo.Alpha > 0.0f)
+        if (baseViewInfo.Alpha > 0.0f)
             loadedComponent_->draw();
     }
 }
 
 
-bool ReloadableMedia::isJukeboxPlaying()
-{
-    if ( jukebox_ && loadedComponent_ )
+bool ReloadableMedia::isJukeboxPlaying() {
+    if (jukebox_ && loadedComponent_)
         return loadedComponent_->isPlaying();
     else
         return false;
 }
 
 
-void ReloadableMedia::skipForward( )
-{
-    if ( jukebox_ && loadedComponent_ )
-        loadedComponent_->skipForward( );
+void ReloadableMedia::skipForward() {
+    if (jukebox_ && loadedComponent_)
+        loadedComponent_->skipForward();
 }
 
 
-void ReloadableMedia::skipBackward( )
-{
-    if ( jukebox_ && loadedComponent_ )
-        loadedComponent_->skipBackward( );
+void ReloadableMedia::skipBackward() {
+    if (jukebox_ && loadedComponent_)
+        loadedComponent_->skipBackward();
 }
 
 
-void ReloadableMedia::skipForwardp( )
-{
-    if ( jukebox_ && loadedComponent_ )
-        loadedComponent_->skipForwardp( );
+void ReloadableMedia::skipForwardp() {
+    if (jukebox_ && loadedComponent_)
+        loadedComponent_->skipForwardp();
 }
 
 
-void ReloadableMedia::skipBackwardp( )
-{
-    if ( jukebox_ && loadedComponent_ )
-        loadedComponent_->skipBackwardp( );
+void ReloadableMedia::skipBackwardp() {
+    if (jukebox_ && loadedComponent_)
+        loadedComponent_->skipBackwardp();
 }
 
 
-void ReloadableMedia::pause( )
-{
-    if ( jukebox_ && loadedComponent_ )
-        loadedComponent_->pause( );
+void ReloadableMedia::pause() {
+    if (jukebox_ && loadedComponent_)
+        loadedComponent_->pause();
 }
 
 
-void ReloadableMedia::restart( )
-{
-    if ( jukebox_ && loadedComponent_ )
-        loadedComponent_->restart( );
+void ReloadableMedia::restart() {
+    if (jukebox_ && loadedComponent_)
+        loadedComponent_->restart();
 }
 
 
-unsigned long long ReloadableMedia::getCurrent( )
-{
-    if ( jukebox_ && loadedComponent_ )
-        return loadedComponent_->getCurrent( );
+unsigned long long ReloadableMedia::getCurrent() {
+    if (jukebox_ && loadedComponent_)
+        return loadedComponent_->getCurrent();
     else
         return 0;
 }
 
 
-unsigned long long ReloadableMedia::getDuration( )
-{
-    if ( jukebox_ && loadedComponent_ )
-        return loadedComponent_->getDuration( );
+unsigned long long ReloadableMedia::getDuration() {
+    if (jukebox_ && loadedComponent_)
+        return loadedComponent_->getDuration();
     else
         return 0;
 }
 
 
-bool ReloadableMedia::isPaused( )
-{
-    if ( jukebox_ && loadedComponent_ )
-        return loadedComponent_->isPaused( );
+bool ReloadableMedia::isPaused() {
+    if (jukebox_ && loadedComponent_)
+        return loadedComponent_->isPaused();
     else
         return false;
 }
-
 

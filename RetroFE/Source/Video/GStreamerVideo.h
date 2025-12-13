@@ -93,17 +93,19 @@ public:
 	bool isPipelineReady() const override { return pipeLineReady_.load(std::memory_order_acquire); }
 	static void enablePlugin(const std::string& pluginName);
 	static void disablePlugin(const std::string& pluginName);
+	
+	std::atomic<bool> becameNone_{ false };
 
-	void armOnBecameNone(std::function<void(GStreamerVideo*)> cb) {
-		std::lock_guard<std::mutex> g(cbMutex_);
-		onBecameNone_ = std::move(cb);
+	bool consumeBecameNone() {
+		return becameNone_.exchange(false, std::memory_order_acq_rel);
+	}
+	void armOnBecameNone() {
+		becameNone_.store(false, std::memory_order_release);
 		notifyOnNone_.store(true, std::memory_order_release);
 	}
 	void disarmOnBecameNone() {
-		// Clear flag first so bus thread won’t fire after this point
 		notifyOnNone_.store(false, std::memory_order_release);
-		std::lock_guard<std::mutex> g(cbMutex_);
-		onBecameNone_ = nullptr;
+		becameNone_.store(false, std::memory_order_release);
 	}
 
 private:
@@ -193,10 +195,8 @@ private:
 	bool updateTextureFromFrameRGBA(SDL_Texture*, GstVideoFrame*) const;
 	std::string generateDotFileName(const std::string& prefix, const std::string& videoFilePath) const;
 
-	std::function<void(GStreamerVideo*)> onBecameNone_;
 	std::atomic<bool> notifyOnNone_{ false };
 	std::atomic<bool> unloading_{ false };
-	std::mutex cbMutex_;
 
 	// Audio bus integration
 	AudioBus::SourceId videoSourceId_{ 0 };   // ID of this video’s source in AudioBus

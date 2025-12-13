@@ -150,14 +150,13 @@ void ReloadableGlobalHiscores::snapshotPrevPage_(SDL_Renderer* r, int compositeW
         compositeW,
         compositeH
     );
+	SDL_SetTextureBlendMode(prevCompositeTexture_, SDL_BLENDMODE_BLEND);
 
     if (!prevCompositeTexture_) {
         Logger::write(Logger::ZONE_ERROR, "ReloadableGlobalHiscores",
             "Failed to create prevCompositeTexture_");
         return;
     }
-
-    SDL_SetTextureBlendMode(prevCompositeTexture_, SDL_BLENDMODE_BLEND);
 
     // Copy current composite (which includes QRs) into prev
     SDL_Texture* oldRT = SDL_GetRenderTarget(r);
@@ -518,31 +517,65 @@ void ReloadableGlobalHiscores::draw() {
     float prevCompA, newCompA;
     computeAlphas_(baseAlpha, prevCompA, newCompA);
 
-    // === OPTIMIZATION: Pre-composite during crossfade ===
     if (pagePhase_ == PagePhase::Crossfading && prevCompositeTexture_) {
-        // Create/resize crossfade texture if needed
-        if (!crossfadeTexture_ || compW_ != (int)std::lround(baseViewInfo.ScaledWidth()) ||
-            compH_ != (int)std::lround(baseViewInfo.ScaledHeight())) {
+        // Ensure crossfadeTexture_ exists at the right size
+        const int wantW = compW_;
+        const int wantH = compH_;
+        if (!crossfadeTexture_ || wantW <= 0 || wantH <= 0 ||
+            wantW != (int)std::lround(baseViewInfo.ScaledWidth()) ||
+            wantH != (int)std::lround(baseViewInfo.ScaledHeight())) {
 
-            if (crossfadeTexture_) {
-                SDL_DestroyTexture(crossfadeTexture_);
-            }
-
-            crossfadeTexture_ = SDL_CreateTexture(
-                renderer,
+            if (crossfadeTexture_) SDL_DestroyTexture(crossfadeTexture_);
+            crossfadeTexture_ = SDL_CreateTexture(renderer,
                 SDL_PIXELFORMAT_ABGR8888,
                 SDL_TEXTUREACCESS_TARGET,
-                compW_,
-                compH_
-            );
-
-            if (crossfadeTexture_) {
-                SDL_SetTextureBlendMode(crossfadeTexture_, SDL_BLENDMODE_BLEND);
-            }
+                wantW, wantH);
+			SDL_SetTextureBlendMode(crossfadeTexture_, SDL_BLENDMODE_BLEND);
+            // Reset alpha caches upon (re)creation so first mod definitely sets
+            prevPageAlphaCache_ = 255;
+            newPageAlphaCache_ = 255;
         }
 
         if (crossfadeTexture_) {
-            // Render old + new to crossfade texture
+            // Compute relative alphas once (your baseAlpha will be applied at the final renderCopyF)
+            float prevCompA, newCompA;
+            computeAlphas_(baseAlpha, prevCompA, newCompA);
+
+            const float relPrevA = (baseAlpha > 0.f) ? (prevCompA / baseAlpha) : 0.f;
+            const float relNewA = (baseAlpha > 0.f) ? (newCompA / baseAlpha) : 1.f;
+
+            const Uint8 aPrev = (Uint8)std::lround(std::clamp(relPrevA, 0.f, 1.f) * 255.f);
+            const Uint8 aNew = (Uint8)std::lround(std::clamp(relNewA, 0.f, 1.f) * 255.f);
+
+            // Common early-outs
+            if (aPrev == 0 && aNew == 0) {
+                // Nothing to draw; just skip and fall back to nothing (rare)
+                return;
+            }
+            if (aPrev == 0 && intermediateTexture_) {
+                // Only new page visible → no need to clear: overwrite fully
+                SDL_Texture* oldRT = SDL_GetRenderTarget(renderer);
+                SDL_SetRenderTarget(renderer, crossfadeTexture_);
+                setAlphaIfChanged_(intermediateTexture_, newPageAlphaCache_, aNew);
+                SDL_RenderCopy(renderer, intermediateTexture_, nullptr, nullptr);
+                SDL_SetRenderTarget(renderer, oldRT);
+
+                SDL::renderCopyF(crossfadeTexture_, baseAlpha, nullptr, &rect, baseViewInfo, layoutW, layoutH);
+                return;
+            }
+            if (aNew == 0 && prevCompositeTexture_) {
+                // Only prev page visible → overwrite fully
+                SDL_Texture* oldRT = SDL_GetRenderTarget(renderer);
+                SDL_SetRenderTarget(renderer, crossfadeTexture_);
+                setAlphaIfChanged_(prevCompositeTexture_, prevPageAlphaCache_, aPrev);
+                SDL_RenderCopy(renderer, prevCompositeTexture_, nullptr, nullptr);
+                SDL_SetRenderTarget(renderer, oldRT);
+
+                SDL::renderCopyF(crossfadeTexture_, baseAlpha, nullptr, &rect, baseViewInfo, layoutW, layoutH);
+                return;
+            }
+
+            // Both contribute → clear once, composite both layers with alpha state-change skip
             SDL_Texture* oldRT = SDL_GetRenderTarget(renderer);
             SDL_SetRenderTarget(renderer, crossfadeTexture_);
 
@@ -551,29 +584,17 @@ void ReloadableGlobalHiscores::draw() {
             SDL_RenderClear(renderer);
             SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
 
-            // Compute relative alphas (baseAlpha will be applied by SDL::renderCopyF)
-            const float relPrevA = (baseAlpha > 0.f) ? (prevCompA / baseAlpha) : 0.f;
-            const float relNewA = (baseAlpha > 0.f) ? (newCompA / baseAlpha) : 1.f;
+            setAlphaIfChanged_(prevCompositeTexture_, prevPageAlphaCache_, aPrev);
+            SDL_RenderCopy(renderer, prevCompositeTexture_, nullptr, nullptr);
 
-            // Composite old page
-            if (relPrevA > 0.f) {
-                SDL_SetTextureAlphaMod(prevCompositeTexture_, (Uint8)(relPrevA * 255.f));
-                SDL_RenderCopy(renderer, prevCompositeTexture_, nullptr, nullptr);
-            }
-
-            // Composite new page
-            if (relNewA > 0.f) {
-                SDL_SetTextureAlphaMod(intermediateTexture_, (Uint8)(relNewA * 255.f));
-                SDL_RenderCopy(renderer, intermediateTexture_, nullptr, nullptr);
-            }
+            setAlphaIfChanged_(intermediateTexture_, newPageAlphaCache_, aNew);
+            SDL_RenderCopy(renderer, intermediateTexture_, nullptr, nullptr);
 
             SDL_SetRenderTarget(renderer, oldRT);
 
-            // Single render of crossfaded result (expensive wrapper called ONCE)
-            SDL::renderCopyF(crossfadeTexture_, baseAlpha,
-                nullptr, &rect, baseViewInfo, layoutW, layoutH);
-
-            return;  // Done!
+            // Single render of the result
+            SDL::renderCopyF(crossfadeTexture_, baseAlpha, nullptr, &rect, baseViewInfo, layoutW, layoutH);
+            return;
         }
     }
 
@@ -756,6 +777,7 @@ void ReloadableGlobalHiscores::reloadTexture() {
                 }
             }
         };
+
     // --- Exact width measure (mip + kerning + outline overhang) ---
     auto measureTextWidthExact = [&](FontManager* f, const std::string& s, float scale) -> float {
         if (!f || s.empty()) return 0.0f;
@@ -798,12 +820,13 @@ void ReloadableGlobalHiscores::reloadTexture() {
         }
         return std::max(0.0f, maxX - minX);
         };
+
     // --- Column alignment helper ---
     enum class ColAlign { Left, Center, Right };
     auto colAlignFor = [](size_t idx, size_t nCols) -> ColAlign {
         if (nCols >= 4) {
-            if (idx == 0) return ColAlign::Left; // rank
-            if (idx == 1) return ColAlign::Left; // name
+            if (idx == 0) return ColAlign::Left;  // rank
+            if (idx == 1) return ColAlign::Left;  // name
             if (idx == 2) return ColAlign::Right; // score
             if (idx == 3) return ColAlign::Right; // time
         }
@@ -811,9 +834,9 @@ void ReloadableGlobalHiscores::reloadTexture() {
         };
     auto alignX = [](float x, float colW, float textW, ColAlign a) -> float {
         switch (a) {
-            case ColAlign::Left: return x + 1.0f; // 1px guard
+            case ColAlign::Left:   return x + 1.0f; // 1px guard
             case ColAlign::Center: return x + (colW - textW) * 0.5f;
-            case ColAlign::Right: return x + (colW - textW);
+            case ColAlign::Right:  return x + (colW - textW);
         }
         return x;
         };
@@ -821,8 +844,55 @@ void ReloadableGlobalHiscores::reloadTexture() {
         return std::max(lo, std::min(v, hi));
         };
     auto quantize_down = [](float s) {
-        const float q = 64.f;
+        const float q = 64.f; // quantize to 1/64th
         return std::max(0.f, std::floor(s * q) / q);
+        };
+
+    // Small helper: compute/snap a QR dst given a panel rect and QR size
+    auto placeQrInPanel = [&](const SDL_FRect& panel, int qrW, int qrH) -> SDL_FRect {
+        SDL_FRect r{};
+        float x = 0.f, y = 0.f;
+
+        switch (qrPlacement_) {
+            case QrPlacement::TopCentered:
+            x = panel.x + (panel.w - qrW) * 0.5f;
+            y = panel.y - qrMarginPx_ - qrH;
+            break;
+            case QrPlacement::BottomCenter:
+            x = panel.x + (panel.w - qrW) * 0.5f;
+            y = panel.y + panel.h + qrMarginPx_;
+            break;
+            case QrPlacement::TopRight:
+            x = panel.x + panel.w + qrMarginPx_;
+            y = panel.y + qrMarginPx_;
+            break;
+            case QrPlacement::TopLeft:
+            x = panel.x - qrMarginPx_ - qrW;
+            y = panel.y + qrMarginPx_;
+            break;
+            case QrPlacement::BottomRight:
+            x = panel.x + panel.w + qrMarginPx_;
+            y = panel.y + panel.h - qrH - qrMarginPx_;
+            break;
+            case QrPlacement::BottomLeft:
+            x = panel.x - qrMarginPx_ - qrW;
+            y = panel.y + panel.h - qrH - qrMarginPx_;
+            break;
+            case QrPlacement::RightMiddle:
+            x = panel.x + panel.w + qrMarginPx_;
+            y = panel.y + (panel.h - qrH) * 0.5f;
+            break;
+            case QrPlacement::LeftMiddle:
+            x = panel.x - qrMarginPx_ - qrW;
+            y = panel.y + (panel.h - qrH) * 0.5f;
+            break;
+        }
+
+        r.x = std::round(x);
+        r.y = std::round(y);
+        r.w = std::round((float)qrW);
+        r.h = std::round((float)qrH);
+        return r;
         };
 
     // --- Setup / early-outs ---
@@ -832,17 +902,14 @@ void ReloadableGlobalHiscores::reloadTexture() {
     if (!selectedItem || !renderer) {
         highScoreTable_ = nullptr;
 
-        // Clear any lingering overlays / crossfade artifacts
         if (prevCompositeTexture_) {
             SDL_DestroyTexture(prevCompositeTexture_);
             prevCompositeTexture_ = nullptr;
         }
 
-        // Reset QR state so nothing fades back in
         qrPhase_ = QrPhase::Hidden;
         qrT_ = 0.f;
 
-        // Clear the current composite texture to transparent
         if (intermediateTexture_ && renderer) {
             SDL_Texture* old = SDL_GetRenderTarget(renderer);
             SDL_SetRenderTarget(renderer, intermediateTexture_);
@@ -858,17 +925,14 @@ void ReloadableGlobalHiscores::reloadTexture() {
 
     highScoreTable_ = HiScores::getInstance().getGlobalHiScoreTable(selectedItem);
     if (!highScoreTable_ || highScoreTable_->tables.empty()) {
-        // No data for this game: purge any leftover overlays
         if (prevCompositeTexture_) {
             SDL_DestroyTexture(prevCompositeTexture_);
             prevCompositeTexture_ = nullptr;
         }
 
-        // Keep QR system fully hidden
         qrPhase_ = QrPhase::Hidden;
         qrT_ = 0.f;
 
-        // Clear the current composite texture to transparent
         if (intermediateTexture_) {
             SDL_Texture* old = SDL_GetRenderTarget(renderer);
             SDL_SetRenderTarget(renderer, intermediateTexture_);
@@ -902,49 +966,42 @@ void ReloadableGlobalHiscores::reloadTexture() {
 
     constexpr float kPanelGuardPx = 1.0f;
 
-    // Calculate composite dimensions (used for texture sizing and snapshot)
+    // Composite (render target) size
     const int compositeW = (int)std::lround(baseViewInfo.ScaledWidth());
     const int compositeH = (int)std::lround(baseViewInfo.ScaledHeight());
 
-    // --- Create/resize intermediate texture BEFORE snapshot (needed for snapshot source) ---
+    // Create/resize the intermediate composite (set blend ONCE at creation)
     if (!intermediateTexture_ || compW_ != compositeW || compH_ != compositeH) {
-        if (intermediateTexture_) {
-            SDL_DestroyTexture(intermediateTexture_);
-        }
-        intermediateTexture_ = SDL_CreateTexture(
-            renderer,
+        if (intermediateTexture_) SDL_DestroyTexture(intermediateTexture_);
+        intermediateTexture_ = SDL_CreateTexture(renderer,
             SDL_PIXELFORMAT_ABGR8888,
             SDL_TEXTUREACCESS_TARGET,
-            compositeW,
-            compositeH
-        );
-        if (!intermediateTexture_) {
-            needsRedraw_ = true;
-            return;
-        }
+            compositeW, compositeH);
+        if (!intermediateTexture_) { needsRedraw_ = true; return; }
         SDL_SetTextureBlendMode(intermediateTexture_, SDL_BLENDMODE_BLEND);
         compW_ = compositeW;
         compH_ = compositeH;
+
+        // Resized → we’ll need fresh layout + QR dsts
+        tablesNeedRedraw_ = true;
+        for (auto& L : cachedTableLayouts_) L.qrDstDirty = true;
     }
 
-    // --- Snapshot previous page if crossfading ---
+    // Snapshot previous page if we’re entering a crossfade
     if (pagePhase_ == PagePhase::SnapshotPending) {
         snapshotPrevPage_(renderer, compositeW, compositeH);
-        // snapshotPrevPage_() will transition to Crossfading
     }
     else if (pagePhase_ == PagePhase::Single) {
-        // Make sure there's no stale prev
         if (prevCompositeTexture_) {
             SDL_DestroyTexture(prevCompositeTexture_);
             prevCompositeTexture_ = nullptr;
         }
     }
 
-    // --- Compute baseline ---
+    // Compute grid baseline if needed
     if (!gridBaselineValid_) {
         computeGridBaseline_(font, totalTables, compW, compH, baseScale, asc);
     }
-
     const int cols = gridBaselineCols_;
     const int rows = gridBaselineRows_;
     const float cellW = gridBaselineCellW_;
@@ -959,65 +1016,54 @@ void ReloadableGlobalHiscores::reloadTexture() {
         return;
     }
 
-    // --- Load QRs for visible set ---
+    // --- Resolve the list of QR IDs for the selected game ---
     std::vector<std::string> gameIds;
     if (!selectedItem->iscoredId.empty()) {
         Utils::listToVector(selectedItem->iscoredId, gameIds, ',');
     }
 
-    // --- Check if we need to reload QR textures ---
+    // Check QR cache validity by IDs
     bool qrCacheValid = (cachedQrGameIds_.size() == gameIds.size());
     if (qrCacheValid) {
         for (size_t i = 0; i < gameIds.size(); ++i) {
             if (i >= cachedQrGameIds_.size() || cachedQrGameIds_[i] != gameIds[i]) {
-                qrCacheValid = false;
-                break;
+                qrCacheValid = false; break;
             }
         }
     }
 
-    // --- Load/cache QR textures (ONLY when cache invalid) ---
+    // (Re)load QR textures only if IDs changed
     if (!qrCacheValid) {
-        // Clear old cache
-        for (SDL_Texture* tex : cachedQrTextures_) {
-            if (tex) SDL_DestroyTexture(tex);
-        }
+        for (SDL_Texture* tex : cachedQrTextures_) if (tex) SDL_DestroyTexture(tex);
         cachedQrTextures_.clear();
         cachedQrSizes_.clear();
         cachedQrGameIds_.clear();
 
-        // Load new QRs as textures
         cachedQrTextures_.resize(gameIds.size(), nullptr);
-        cachedQrSizes_.resize(gameIds.size(), { 0, 0 });
+        cachedQrSizes_.resize(gameIds.size(), { 0,0 });
 
         for (size_t i = 0; i < gameIds.size(); ++i) {
-            if (!gameIds[i].empty()) {
-                std::string path = Configuration::absolutePath + "/iScored/qr/" + gameIds[i] + ".png";
-
-                // Load surface temporarily
-                SDL_Surface* surf = IMG_Load(path.c_str());
-                if (surf) {
-                    // Create texture from surface
-                    SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer, surf);
-                    if (tex) {
-                        SDL_SetTextureScaleMode(tex, SDL_ScaleModeNearest);
-                        SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
-                        cachedQrTextures_[i] = tex;
-                        cachedQrSizes_[i] = { surf->w, surf->h };
-                    }
-                    // Free surface immediately (texture owns the data now)
-                    SDL_FreeSurface(surf);
+            if (gameIds[i].empty()) continue;
+            const std::string path = Configuration::absolutePath + "/iScored/qr/" + gameIds[i] + ".png";
+            if (SDL_Surface* surf = IMG_Load(path.c_str())) {
+                if (SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer, surf)) {
+                    SDL_SetTextureScaleMode(tex, SDL_ScaleModeNearest);
+                    SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND); // set once
+                    cachedQrTextures_[i] = tex;
+                    cachedQrSizes_[i] = { surf->w, surf->h };
                 }
+                SDL_FreeSurface(surf);
             }
         }
 
         cachedQrGameIds_ = gameIds;
+        // IDs changed → sizes likely changed somewhere; mark all dirty
+        for (auto& L : cachedTableLayouts_) L.qrDstDirty = true;
     }
 
-    // --- Map cached textures to visible range ---
+    // Map cached QR textures/sizes to the visible range
     std::vector<SDL_Texture*> qrTextures(Nvisible, nullptr);
-    std::vector<std::pair<int, int>> qrSizes(Nvisible, { 0, 0 });
-
+    std::vector<std::pair<int, int>> qrSizes(Nvisible, { 0,0 });
     for (int t = 0; t < Nvisible; ++t) {
         const int gi = startIdx + t;
         if (gi < (int)cachedQrTextures_.size()) {
@@ -1026,100 +1072,76 @@ void ReloadableGlobalHiscores::reloadTexture() {
         }
     }
 
-    // --- QR reservation (size + placement) ---
+    // Compute QR “reserve” margins (affects table panel layout)
     struct Margins { float L = 0, R = 0, T = 0, B = 0; };
     std::vector<Margins> qrReserve(Nvisible);
     const bool reserveVerticalForCorners = false;
     const bool reserveHorizontalForSides = true;
-
     for (int t = 0; t < Nvisible; ++t) {
         const auto& [qrW, qrH] = qrSizes[t];
         if (qrW == 0 || qrH == 0) continue;
-
         auto& m = qrReserve[t];
-
         switch (qrPlacement_) {
-            case QrPlacement::TopCentered:
-            m.T = (float)qrMarginPx_ + (float)qrH;
-            break;
-            case QrPlacement::BottomCenter:
-            m.B = (float)qrMarginPx_ + (float)qrH;
-            break;
-            case QrPlacement::LeftMiddle:
-            if (reserveHorizontalForSides) m.L = (float)qrMarginPx_ + (float)qrW;
-            break;
-            case QrPlacement::RightMiddle:
-            if (reserveHorizontalForSides) m.R = (float)qrMarginPx_ + (float)qrW;
-            break;
+            case QrPlacement::TopCentered:    m.T = (float)qrMarginPx_ + (float)qrH; break;
+            case QrPlacement::BottomCenter:   m.B = (float)qrMarginPx_ + (float)qrH; break;
+            case QrPlacement::LeftMiddle:     if (reserveHorizontalForSides) m.L = (float)qrMarginPx_ + (float)qrW; break;
+            case QrPlacement::RightMiddle:    if (reserveHorizontalForSides) m.R = (float)qrMarginPx_ + (float)qrW; break;
             case QrPlacement::TopLeft:
             if (reserveHorizontalForSides) m.L = (float)qrMarginPx_ + (float)qrW;
-            if (reserveVerticalForCorners) m.T = (float)qrMarginPx_ + (float)qrH;
-            break;
+            if (reserveVerticalForCorners) m.T = (float)qrMarginPx_ + (float)qrH; break;
             case QrPlacement::TopRight:
             if (reserveHorizontalForSides) m.R = (float)qrMarginPx_ + (float)qrW;
-            if (reserveVerticalForCorners) m.T = (float)qrMarginPx_ + (float)qrH;
-            break;
+            if (reserveVerticalForCorners) m.T = (float)qrMarginPx_ + (float)qrH; break;
             case QrPlacement::BottomLeft:
             if (reserveHorizontalForSides) m.L = (float)qrMarginPx_ + (float)qrW;
-            if (reserveVerticalForCorners) m.B = (float)qrMarginPx_ + (float)qrH;
-            break;
+            if (reserveVerticalForCorners) m.B = (float)qrMarginPx_ + (float)qrH; break;
             case QrPlacement::BottomRight:
             if (reserveHorizontalForSides) m.R = (float)qrMarginPx_ + (float)qrW;
-            if (reserveVerticalForCorners) m.B = (float)qrMarginPx_ + (float)qrH;
-            break;
-            default:
-            break;
+            if (reserveVerticalForCorners) m.B = (float)qrMarginPx_ + (float)qrH; break;
         }
     }
-
-    std::vector<float> qrExtraW(Nvisible, 0.0f), qrExtraH(Nvisible, 0.0f);
+    std::vector<float> qrExtraW(Nvisible, 0.f), qrExtraH(Nvisible, 0.f);
     for (int t = 0; t < Nvisible; ++t) {
         qrExtraW[t] = qrReserve[t].L + qrReserve[t].R;
         qrExtraH[t] = qrReserve[t].T + qrReserve[t].B;
     }
 
-    // --- Shared column layout (measure exact widths at baseScale) ---
+    // Shared column layout (measure exact widths at baseScale)
     size_t maxCols = 0;
-    for (int t = 0; t < Nvisible; ++t) {
+    for (int t = 0; t < Nvisible; ++t)
         maxCols = std::max(maxCols, highScoreTable_->tables[startIdx + t].columns.size());
-    }
-    if (maxCols == 0) {
-        needsRedraw_ = true;
-        return;
-    }
+    if (maxCols == 0) { needsRedraw_ = true; return; }
 
-    std::vector<float> maxColW0(maxCols, 0.0f);
-    float maxTitleW0 = 0.0f;
+    std::vector<float> maxColW0(maxCols, 0.f);
+    float maxTitleW0 = 0.f;
     std::vector<float> height0(Nvisible, lineH0 * (1 + kRowsPerPage));
 
     for (int t = 0; t < Nvisible; ++t) {
         const auto& table = highScoreTable_->tables[startIdx + t];
 
         for (size_t c = 0; c < maxCols; ++c) {
-            float w = 0.0f;
+            float w = 0.f;
             if (c < table.columns.size()) {
                 w = measureTextWidthExact(font, table.columns[c], baseScale);
                 for (const auto& row : table.rows) {
-                    if (c < row.size()) {
+                    if (c < row.size())
                         w = std::max(w, measureTextWidthExact(font, row[c], baseScale));
-                    }
                 }
             }
             maxColW0[c] = std::max(maxColW0[c], w);
         }
 
-        if (!table.id.empty()) {
+        if (!table.id.empty())
             maxTitleW0 = std::max(maxTitleW0, measureTextWidthExact(font, table.id, baseScale));
-        }
 
-        float h = lineH0;  // header
+        float h = lineH0;              // header
         if (!table.id.empty()) h += lineH0;  // title
-        h += lineH0 * kRowsPerPage;  // rows
+        h += lineH0 * kRowsPerPage;    // rows
         height0[t] = h;
     }
 
-    // --- Build exact shared width @ baseScale (columns + pads + guard) ---
-    float sumCols0 = 0.0f;
+    // Build exact shared width @ baseScale (columns + pads + guard)
+    float sumCols0 = 0.f;
     for (float w : maxColW0) sumCols0 += w;
 
     float sharedPad0 = colPad0;
@@ -1133,8 +1155,8 @@ void ReloadableGlobalHiscores::reloadTexture() {
     }
     sharedW0_exact += 2.0f * kPanelGuardPx;
 
-    // --- Fit: compute per-slot scale needs using the exact width/height ---
-    std::vector<float> needScale(Nvisible, 1.0f);
+    // Fit per slot (width/height)
+    std::vector<float> needScale(Nvisible, 1.f);
     constexpr float fitEps = 0.5f;
     for (int t = 0; t < Nvisible; ++t) {
         const float availW = std::max(0.0f, cellW - qrExtraW[t] - fitEps);
@@ -1146,12 +1168,12 @@ void ReloadableGlobalHiscores::reloadTexture() {
             std::min(1.0f, std::max(0.0f, sH)));
     }
 
-    // --- Row-wise min, then quantize DOWN so draw never exceeds the fit ---
-    std::vector<float> rowScale(rows, 1.0f);
+    // Row-wise min, quantized down so we never exceed fit
+    std::vector<float> rowScale(rows, 1.f);
     for (int r = 0; r < rows; ++r) {
-        float s = 1.0f;
+        float s = 1.f;
         for (int c = 0; c < cols; ++c) {
-            int i = r * cols + c;
+            const int i = r * cols + c;
             if (i >= Nvisible) break;
             s = std::min(s, needScale[i]);
         }
@@ -1159,30 +1181,18 @@ void ReloadableGlobalHiscores::reloadTexture() {
     }
 
     // ========================================================================
-    // STAGE 1: Render tables to tableTexture_ (ONLY when tables change)
+    // STAGE 1: Render tables → tableTexture_ (ONLY when tables change)
     // ========================================================================
-
     if (tablesNeedRedraw_) {
-        // NEW: Clear and resize layout cache
-        cachedTableLayouts_.clear();
-        cachedTableLayouts_.resize(Nvisible);
+        cachedTableLayouts_.assign(Nvisible, TableLayout{}); // reset & size exactly
 
-        // Create/resize table texture if needed
         if (!tableTexture_ || compW_ != compositeW || compH_ != compositeH) {
-            if (tableTexture_) {
-                SDL_DestroyTexture(tableTexture_);
-            }
-            tableTexture_ = SDL_CreateTexture(
-                renderer,
+            if (tableTexture_) SDL_DestroyTexture(tableTexture_);
+            tableTexture_ = SDL_CreateTexture(renderer,
                 SDL_PIXELFORMAT_ABGR8888,
                 SDL_TEXTUREACCESS_TARGET,
-                compositeW,
-                compositeH
-            );
-            if (!tableTexture_) {
-                needsRedraw_ = true;
-                return;
-            }
+                compositeW, compositeH);
+            if (!tableTexture_) { needsRedraw_ = true; return; }
             SDL_SetTextureBlendMode(tableTexture_, SDL_BLENDMODE_BLEND);
         }
 
@@ -1192,7 +1202,6 @@ void ReloadableGlobalHiscores::reloadTexture() {
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
         SDL_RenderClear(renderer);
 
-        // Render all tables
         for (int t = 0; t < Nvisible; ++t) {
             const int gi = startIdx + t;
             const auto& table = highScoreTable_->tables[gi];
@@ -1211,8 +1220,8 @@ void ReloadableGlobalHiscores::reloadTexture() {
             const float colPad = sharedPad0 * ratio;
 
             // Per-column widths at finalScale (exact)
-            std::vector<float> colW(maxCols, 0.0f);
-            float totalWCols = 0.0f;
+            std::vector<float> colW(maxCols, 0.f);
+            float totalWCols = 0.f;
             for (size_t c = 0; c < maxCols; ++c) {
                 colW[c] = maxColW0[c] * ratio;
                 totalWCols += colW[c];
@@ -1221,13 +1230,13 @@ void ReloadableGlobalHiscores::reloadTexture() {
             totalWCols += 2.0f * kPanelGuardPx;
 
             // Heights
-            const float titleH = table.id.empty() ? 0.0f : lineH;
+            const float titleH = table.id.empty() ? 0.f : lineH;
             const float headerH = lineH;
             const float dataH = lineH * kRowsPerPage;
             const float panelH = titleH + headerH + dataH;
             const float panelW = totalWCols;
 
-            // QR margins (same as used in fit)
+            // QR margins (same as in fit)
             const int extraL = (int)std::lround(qrReserve[t].L);
             const int extraR = (int)std::lround(qrReserve[t].R);
             const int extraT = (int)std::lround(qrReserve[t].T);
@@ -1246,25 +1255,15 @@ void ReloadableGlobalHiscores::reloadTexture() {
             float drawX0 = anchorX + (float)extraL + kPanelGuardPx;
             float y = anchorY + (float)extraT;
 
-            // NEW: Store layout in cache before rendering
+            // Store panel in cache (and mark QR dst dirty because panel changed)
             auto& layout = cachedTableLayouts_[t];
-            layout.finalScale = finalScale;
-            layout.ratio = ratio;
-            layout.panelW = panelW;
-            layout.panelH = panelH;
-            layout.anchorX = anchorX;
-            layout.anchorY = anchorY;
-            layout.drawX0 = drawX0;
-            layout.titleH = titleH;
-            layout.headerH = headerH;
-            layout.dataH = dataH;
-            layout.colW = colW;
             layout.panelRect = {
                 drawX0 - kPanelGuardPx,
                 anchorY + (float)extraT,
                 panelW,
                 panelH
             };
+            layout.qrDstDirty = true; // panel changed → must re-place QR
 
             // ---- Title ----
             if (!table.id.empty()) {
@@ -1276,7 +1275,7 @@ void ReloadableGlobalHiscores::reloadTexture() {
 
             // ---- Headers ----
             {
-                float x = 0.0f;
+                float x = 0.f;
                 for (size_t c = 0; c < maxCols; ++c) {
                     if (c < table.columns.size()) {
                         const std::string& header = table.columns[c];
@@ -1292,7 +1291,7 @@ void ReloadableGlobalHiscores::reloadTexture() {
 
             // ---- Rows ----
             for (int r = 0; r < kRowsPerPage; ++r) {
-                float x = 0.0f;
+                float x = 0.f;
                 const auto* rowV = (r < (int)table.rows.size()) ? &table.rows[r] : nullptr;
                 for (size_t c = 0; c < maxCols; ++c) {
                     std::string cell;
@@ -1300,13 +1299,11 @@ void ReloadableGlobalHiscores::reloadTexture() {
                     const float tw = measureTextWidthExact(font, cell, finalScale);
                     const bool ph = (r < (int)table.isPlaceholder.size() &&
                         c < table.isPlaceholder[r].size())
-                        ? table.isPlaceholder[r][c]
-                        : false;
+                        ? table.isPlaceholder[r][c] : false;
                     const ColAlign a = ph ? ColAlign::Center : colAlignFor(c, maxCols);
                     const float xAligned = alignX(drawX0 + x, colW[c], tw, a);
-                    if (!cell.empty()) {
+                    if (!cell.empty())
                         renderTextOutlined(renderer, font, cell, std::round(xAligned), y, finalScale);
-                    }
                     x += colW[c];
                     if (c + 1 < maxCols) x += colPad;
                 }
@@ -1315,18 +1312,49 @@ void ReloadableGlobalHiscores::reloadTexture() {
         }
 
         SDL_SetRenderTarget(renderer, old);
-        tablesNeedRedraw_ = false;  // Tables rendered, cache is fresh
-    }
-
-    // ========================================================================
-    // STAGE 2: Composite tableTexture_ + QRs → intermediateTexture_
-    // ========================================================================
-
-    // intermediateTexture_ should already exist from above
-    if (!intermediateTexture_) {
+        tablesNeedRedraw_ = false;
         needsRedraw_ = true;
-        return;
     }
+
+    // ========================================================================
+    // STAGE 1.5: Update per-table QR meta + recompute cached dst if dirty
+    // ========================================================================
+    // Ensure layout cache sized
+    if ((int)cachedTableLayouts_.size() < Nvisible)
+        cachedTableLayouts_.resize(Nvisible);
+
+    for (int t = 0; t < Nvisible; ++t) {
+        auto& L = cachedTableLayouts_[t];
+        SDL_Texture* tex = qrTextures[t];
+        int qW = qrSizes[t].first, qH = qrSizes[t].second;
+
+        // Trust actual texture size if present
+        if (tex && (qW == 0 || qH == 0)) {
+            SDL_QueryTexture(tex, nullptr, nullptr, &qW, &qH);
+            qrSizes[t] = { qW, qH };
+        }
+
+        const bool had = L.qrHave;
+        L.qrHave = (tex != nullptr && qW > 0 && qH > 0);
+        if (L.qrHave) {
+            if (!had || L.qrSrcW != qW || L.qrSrcH != qH) {
+                L.qrSrcW = qW; L.qrSrcH = qH;
+                L.qrDstDirty = true; // size change → re-place
+            }
+            if (L.qrDstDirty) {
+                L.qrDst = placeQrInPanel(L.panelRect, L.qrSrcW, L.qrSrcH);
+                L.qrDstDirty = false;
+            }
+        }
+        else {
+            L.qrSrcW = L.qrSrcH = 0;
+        }
+    }
+
+    // ========================================================================
+    // STAGE 2: Composite tables + cached QR dsts → intermediateTexture_
+    // ========================================================================
+    if (!intermediateTexture_) { needsRedraw_ = true; return; }
 
     SDL_Texture* old = SDL_GetRenderTarget(renderer);
     SDL_SetRenderTarget(renderer, intermediateTexture_);
@@ -1343,70 +1371,28 @@ void ReloadableGlobalHiscores::reloadTexture() {
 
     // Add QRs on top (if QR phase allows)
     if (qrPhase_ == QrPhase::FadingIn || qrPhase_ == QrPhase::Visible) {
-        // Calculate QR alpha
-        float qrAlpha = 1.0f;
-        if (qrPhase_ == QrPhase::FadingIn) {
-            qrAlpha = std::clamp(qrT_ / qrFadeSec_, 0.f, 1.f);
+        float qrAlphaF = 1.0f;
+        if (qrPhase_ == QrPhase::FadingIn && qrFadeSec_ > 0.f) {
+            qrAlphaF = std::clamp(qrT_ / qrFadeSec_, 0.f, 1.f);
         }
+        const Uint8 qrAlpha = (Uint8)std::lround(qrAlphaF * 255.f);
 
-        // Composite QRs with current alpha
         for (int t = 0; t < Nvisible; ++t) {
-            const auto& [qrW, qrH] = qrSizes[t];
-            if (qrW == 0 || qrH == 0) continue;
-            if (t >= (int)qrTextures.size() || !qrTextures[t]) continue;
+            SDL_Texture* tex = qrTextures[t];
+            if (!tex) continue;
 
-            // NEW: Use cached layout (no recomputation)
-            const auto& layout = cachedTableLayouts_[t];
-            const SDL_FRect& panelRect = layout.panelRect;
-
-            // Calculate QR position
-            float qrX = 0.f, qrY = 0.f;
-            switch (qrPlacement_) {
-                case QrPlacement::TopCentered:
-                qrX = panelRect.x + (panelRect.w - qrW) * 0.5f;
-                qrY = panelRect.y - qrMarginPx_ - qrH;
-                break;
-                case QrPlacement::BottomCenter:
-                qrX = panelRect.x + (panelRect.w - qrW) * 0.5f;
-                qrY = panelRect.y + panelRect.h + qrMarginPx_;
-                break;
-                case QrPlacement::TopRight:
-                qrX = panelRect.x + panelRect.w + qrMarginPx_;
-                qrY = panelRect.y + qrMarginPx_;
-                break;
-                case QrPlacement::TopLeft:
-                qrX = panelRect.x - qrMarginPx_ - qrW;
-                qrY = panelRect.y + qrMarginPx_;
-                break;
-                case QrPlacement::BottomRight:
-                qrX = panelRect.x + panelRect.w + qrMarginPx_;
-                qrY = panelRect.y + panelRect.h - qrH - qrMarginPx_;
-                break;
-                case QrPlacement::BottomLeft:
-                qrX = panelRect.x - qrMarginPx_ - qrW;
-                qrY = panelRect.y + panelRect.h - qrH - qrMarginPx_;
-                break;
-                case QrPlacement::RightMiddle:
-                qrX = panelRect.x + panelRect.w + qrMarginPx_;
-                qrY = panelRect.y + (panelRect.h - qrH) * 0.5f;
-                break;
-                case QrPlacement::LeftMiddle:
-                qrX = panelRect.x - qrMarginPx_ - qrW;
-                qrY = panelRect.y + (panelRect.h - qrH) * 0.5f;
-                break;
-            }
-
-            // Use cached texture - just modulate alpha!
-            SDL_SetTextureAlphaMod(qrTextures[t], (Uint8)(qrAlpha * 255));
-
-            SDL_FRect qrDst = { std::round(qrX), std::round(qrY), std::round((float)qrW), std::round((float)qrH) };
-            SDL_RenderCopyF(renderer, qrTextures[t], nullptr, &qrDst);
-
-            // NO destruction - texture is cached!
+            const auto& L = cachedTableLayouts_[t];
+            // QR dst rect is cached; no per-frame math
+            SDL_SetTextureAlphaMod(tex, qrAlpha); // (optional) add per-QR alpha cache to skip repeats
+            SDL_RenderCopyF(renderer, tex, nullptr, &L.qrDst);
         }
     }
 
     SDL_SetRenderTarget(renderer, old);
-
     needsRedraw_ = false;
+
+    // If we just built the current page and need to enter a flip, snapshot now
+    if (pagePhase_ == PagePhase::SnapshotPending) {
+        snapshotPrevPage_(renderer, compositeW, compositeH);
+    }
 }

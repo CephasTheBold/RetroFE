@@ -87,6 +87,12 @@ private:
         float dataH = 0.0f;
         std::vector<float> colW;  // per-column width at finalScale
         SDL_FRect panelRect = { 0,0,0,0 }; // for QR positioning
+        // --- QR cache (one per table) ---
+        SDL_FRect qrDst{ 0,0,0,0 };  // final destination rect on the composite
+        int       qrSrcW = 0;      // QR texture size seen last time
+        int       qrSrcH = 0;
+        bool      qrHave = false;  // this table actually has a QR
+        bool      qrDstDirty = true; // recompute when true
     };
 
     // --- Core rendering ---
@@ -105,6 +111,18 @@ private:
 
     // One-shot snapshot helper used during crossfading
     void snapshotPrevPage_(SDL_Renderer* r, int compositeW, int compositeH);
+
+    inline void setAlphaIfChanged_(SDL_Texture* tex, Uint8& cache, Uint8 a) const {
+        if (!tex) return;
+        if (cache != a) {
+            SDL_SetTextureAlphaMod(tex, a);
+            cache = a;
+        }
+    }
+
+    // Cached "last alpha" for hot textures we modulate during crossfade precomposite
+    mutable Uint8 prevPageAlphaCache_ = 255;
+    mutable Uint8 newPageAlphaCache_ = 255;
 
     // --- Change detection ---
     std::string cachedIscoredId_;                    // last iscoredId string we processed

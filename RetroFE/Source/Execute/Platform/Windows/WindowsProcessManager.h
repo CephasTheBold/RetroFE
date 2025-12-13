@@ -95,6 +95,7 @@ private:
     HANDLE hJob_ = nullptr;         // Handle to the Job Object for child process management.
     bool jobAssigned_ = false;      // True if the process was successfully added to the job.
     std::string executableName_;    // The base name of the launched executable (e.g., "mame.exe").
+    std::string workingDirectory_;  // Working directory used at launch (used for MAME exit trigger).
     DWORD processId_ = 0;           // The process ID of the launched process.
 };
 #endif

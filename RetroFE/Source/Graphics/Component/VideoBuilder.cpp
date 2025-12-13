@@ -16,13 +16,12 @@
 
 #include "VideoBuilder.h"
 #include "../../Utility/Utils.h"
-#include <string_view>
+#include <fstream>
 
 
-VideoComponent * VideoBuilder::createVideo(const std::string& path, Page &page, const std::string& name, int monitor, int numLoops, bool softOverlay, int listId, const int* perspectiveCorners)
-{
-    VideoComponent *component = nullptr;
-    
+VideoComponent* VideoBuilder::createVideo(const std::string& path, Page& page, const std::string& name, int monitor, int numLoops, bool softOverlay, int listId, const int* perspectiveCorners) {
+    VideoComponent* component = nullptr;
+
     // Declare the extensions vector as static so it's only initialized once.
 #ifdef WIN32
     static std::vector<std::string> extensions = {
@@ -38,13 +37,10 @@ VideoComponent * VideoBuilder::createVideo(const std::string& path, Page &page, 
 
     std::string prefix = Utils::combinePath(path, name);
 
-    const std::string prefix = makePrefix(path, name);
-    std::string file;
-    if (Utils::findMatchingFile(std::string_view(prefix),
-        std::begin(kVidExts), std::end(kVidExts),
-        file)) {
+    if (std::string file; Utils::findMatchingFile(prefix, extensions, file)) {
         component = new VideoComponent(page, file, monitor, numLoops, softOverlay, listId, perspectiveCorners);
+        //component->allocateGraphicsMemory();
     }
+
     return component;
 }
-

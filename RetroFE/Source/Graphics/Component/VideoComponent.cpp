@@ -55,6 +55,21 @@ VideoComponent::~VideoComponent() {
 }
 
 bool VideoComponent::update(float dt) {
+    // --- NEW: complete pending retarget on the main thread ---
+    if (videoInst_ && pendingRetarget_) {
+        if (auto* gst = dynamic_cast<GStreamerVideo*>(videoInst_.get())) {
+            if (gst->consumeBecameNone()) {
+                instanceReady_ = videoInst_->play(videoFile_); // preroll to PAUSED
+                pendingRetarget_ = false;
+            }
+        }
+        else {
+            // Shouldn't happen (we only set pendingRetarget_ for GStreamer),
+            // but fail safe:
+            pendingRetarget_ = false;
+        }
+    }
+    
     if (!videoInst_ || !currentPage_ || !instanceReady_)
         return Component::update(dt);
 
@@ -205,7 +220,7 @@ void VideoComponent::freeGraphicsMemory() {
 		VideoPool::releaseVideo(std::move(video), monitor_, listId_);
 		return;
 	}
-
+    pendingRetarget_ = false;
 	LOG_DEBUG("VideoComponent", "Stopping and resetting video: " + videoFile_);
 	videoInst_.reset();
 }

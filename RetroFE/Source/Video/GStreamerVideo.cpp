@@ -227,9 +227,7 @@ gboolean GStreamerVideo::busCallback(GstBus* bus, GstMessage* msg, gpointer user
 						video->pipeLineReady_.store(false, std::memory_order_release);
 						// NEW: one-shot notify if armed
 						if (video->notifyOnNone_.exchange(false, std::memory_order_acq_rel)) {
-							std::function<void(GStreamerVideo*)> cb;
-							{ std::lock_guard<std::mutex> g(video->cbMutex_); cb = std::move(video->onBecameNone_); }
-							if (cb) cb(video);
+							video->becameNone_.store(true, std::memory_order_release);
 						}
 						break;
 					}
@@ -537,9 +535,7 @@ bool GStreamerVideo::unload() {
 	if (!playbin_ || actualState_.load(std::memory_order_acquire) == IVideo::VideoState::None) {
 		actualState_.store(IVideo::VideoState::None, std::memory_order_release);
 		if (notifyOnNone_.exchange(false, std::memory_order_acq_rel)) {
-			std::function<void(GStreamerVideo*)> cb;
-			{ std::lock_guard<std::mutex> g(cbMutex_); cb = std::move(onBecameNone_); }
-			if (cb) cb(this);
+			becameNone_.store(true, std::memory_order_release);
 		}
 		LOG_DEBUG("GStreamerVideo", "Unload: Already unloaded for " + fileForLog);
 		return true;
