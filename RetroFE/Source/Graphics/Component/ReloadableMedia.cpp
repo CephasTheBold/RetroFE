@@ -60,34 +60,55 @@ void ReloadableMedia::enableTextFallback_(bool value) {
 }
 
 bool ReloadableMedia::update(float dt) {
+    // --- Force reload on playlist change for playlist-driven types ---
+    if (isPlaylistDrivenType_()) {
+        const std::string curPlaylist = page.getPlaylistName();
+
+        if (!lastPlaylistNameInit_) {
+            lastPlaylistName_ = curPlaylist;
+            lastPlaylistNameInit_ = true;
+        }
+        else if (curPlaylist != lastPlaylistName_) {
+            lastPlaylistName_ = curPlaylist;
+
+            // Force a reload even if the selected item didn't change.
+            newItemSelected = true;
+            newScrollItemSelected = true;
+        }
+    }
+
     if (newItemSelected ||
         (newScrollItemSelected && getMenuScrollReload())) {
+
         newItemSelected = false;
         newScrollItemSelected = false;
-        Component* foundComponent = reloadTexture();  // Removed the re-declaration here.
+
+        Component* foundComponent = reloadTexture();
         if (foundComponent) {
             foundComponent->playlistName = page.getPlaylistName();
             foundComponent->allocateGraphicsMemory();
             baseViewInfo.ImageWidth = foundComponent->baseViewInfo.ImageWidth;
             baseViewInfo.ImageHeight = foundComponent->baseViewInfo.ImageHeight;
             foundComponent->update(dt);
-            // if found and it's not the same as loaded, then finally delete the loaded component
+
             if (foundComponent != loadedComponent_) {
                 delete loadedComponent_;
                 loadedComponent_ = foundComponent;
             }
         }
         else {
-            // delete previous loaded item if none found
             delete loadedComponent_;
-            loadedComponent_ = nullptr;  // Set to nullptr to avoid dangling pointer.
+            loadedComponent_ = nullptr;
         }
     }
     else if (loadedComponent_) {
+        // Keep this in sync even when no reload happens.
+        if (isPlaylistDrivenType_()) {
+            loadedComponent_->playlistName = page.getPlaylistName();
+        }
         loadedComponent_->update(dt);
     }
 
-    // needs to be ran at the end to prevent the NewItemSelected flag from being detected
     return Component::update(dt);
 }
 
@@ -173,12 +194,6 @@ Component* ReloadableMedia::reloadTexture() {
     names.emplace_back("default");
     // if same playlist then use existing loaded component
     Component* foundComponent = nullptr;
-    if (loadedComponent_ != nullptr &&
-        (typeLC.rfind("playlist", 0) == 0 &&
-            page.getPlaylistName() == loadedComponent_->playlistName)
-        ) {
-        return loadedComponent_;
-    }
 
     if (isVideo_) {
         for (unsigned int n = 0; n < names.size() && !foundComponent; ++n) {
@@ -487,6 +502,24 @@ Component* ReloadableMedia::findComponent(
 
     return component;
 
+}
+
+bool ReloadableMedia::isPlaylistDrivenType_() const {
+    const std::string typeLC = Utils::toLower(type_);
+    if (typeLC.rfind("playlist", 0) == 0) {
+        return true;
+    }
+
+    // If this ReloadableMedia is "video with image fallback", the *imageType_*
+    // might be the playlist-driven one.
+    if (isVideo_) {
+        const std::string imageTypeLC = Utils::toLower(imageType_);
+        if (imageTypeLC.rfind("playlist", 0) == 0) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 
