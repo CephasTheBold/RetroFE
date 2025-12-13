@@ -297,7 +297,8 @@ void Text::updateGlyphPositions(FontManager* font, float scale, float maxWidth) 
     Uint32 prev = 0;
 
     struct PosTmp { SDL_Rect src; float xOff, yOff, advance_px; };
-    std::vector<PosTmp> tmp; tmp.reserve(textData_.size());
+    std::vector<PosTmp> tmp;
+    tmp.reserve(textData_.size());
 
     const char* ptr = textData_.c_str();
     const char* end = ptr + textData_.size();
@@ -352,40 +353,23 @@ void Text::updateGlyphPositions(FontManager* font, float scale, float maxWidth) 
 
         const auto& g = it->second;
 
-        if (ch >= 65 && ch <= 90) {  // A-Z
-            bool isDynamic = (mip->glyphs.find(ch) == mip->glyphs.end());
-            LOG_INFO("Text", "Char '" + std::string(1, (char)ch) +
-                "' advance=" + std::to_string(g.advance) +
-                " minX=" + std::to_string(g.minX) +
-                " maxX=" + std::to_string(g.maxX) +
-                " source=" + (isDynamic ? "DYNAMIC" : "PRELOADED"));
-        }
-
-        // Get kerning and apply to pen
+        // Kerning (computed in max-font units, scaled to target size)
         const int kern_fp = font->getKerning(prev, ch);
         const float kern_px = static_cast<float>(kern_fp) * kerningScale;
         penX += static_cast<double>(kern_px);
 
-        // FIXED: Position glyph at penX directly (don't add minX!)
+        // X position (your existing fix: don't add minX)
         const float gx = static_cast<float>(penX);
 
-        // Y position (this was already correct)
-        const float minY_px = static_cast<float>(g.minY) * scale;
-        const float gy = (ascent_f * scale) - minY_px - (g.fillH * scale);
+        // Y position FIX:
+        // Align to baseline using font metrics only (maxY), not bitmap height (fillH),
+        // which can include extra transparent rows for punctuation like '\''.
+        const float gy = (ascent_f - static_cast<float>(g.maxY)) * scale;
 
         // Advance pen
         const float adv_px = static_cast<float>(g.advance) * scale;
 
-        if (ch >= 65 && ch <= 90) {  // A-Z
-            LOG_INFO("Text", "Char '" + std::string(1, (char)ch) +
-                "' penX=" + std::to_string(penX) +
-                " gx=" + std::to_string(gx) +
-                " kern_px=" + std::to_string(kern_px) +
-                " adv_px=" + std::to_string(adv_px));
-        }
-
         const double nextPen = penX + static_cast<double>(adv_px);
-
         if (maxWidth > 0.0f && static_cast<float>(nextPen) > maxWidth) break;
 
         tmp.push_back({ g.rect, gx, gy, adv_px });
@@ -395,7 +379,9 @@ void Text::updateGlyphPositions(FontManager* font, float scale, float maxWidth) 
 
     // Commit
     cachedPositions_.reserve(tmp.size());
-    for (auto& t : tmp) cachedPositions_.push_back({ t.src, t.xOff, t.yOff, t.advance_px });
+    for (auto& t : tmp) {
+        cachedPositions_.push_back({ t.src, t.xOff, t.yOff, t.advance_px });
+    }
 
     cachedWidth_ = static_cast<float>(penX);
     cachedHeight_ = baseViewInfo.FontSize;
