@@ -29,6 +29,123 @@
 #include <iostream>
 #include <algorithm>
 #include <string_view>
+#include <cmath>
+
+namespace {
+
+static float measureTextWidthExact(FontManager* f, const std::string& s, float scale) {
+    if (!f || s.empty()) return 0.0f;
+    const float targetH = scale * f->getMaxHeight();
+    const FontManager::MipLevel* mip = f->getMipLevelForSize((int)targetH);
+    if (!mip || !mip->fillTexture) {
+        return (float)f->getWidth(s) * scale;
+    }
+    const float k = (mip->height > 0) ? (targetH / mip->height) : 1.0f;
+    const bool hasOutline = (mip->outlineTexture != nullptr);
+
+    float penX = 0.0f, minX = 0.0f, maxX = 0.0f;
+    bool first = true;
+    Uint16 prev = 0;
+
+    for (unsigned char uc : s) {
+        const Uint16 ch = (Uint16)uc;
+        if (prev) penX += f->getKerning(prev, ch) * scale;
+
+        auto it = mip->glyphs.find(ch);
+        if (it != mip->glyphs.end()) {
+            const auto& g = it->second;
+
+            float left = penX;
+            float right = penX + g.fillW * k;
+
+            if (hasOutline) {
+                const float oL = penX - g.fillX * k;
+                const float oR = oL + g.rect.w * k;
+                left = std::min(left, oL);
+                right = std::max(right, oR);
+            }
+
+            if (first) {
+                minX = left;
+                maxX = right;
+                first = false;
+            }
+            else {
+                minX = std::min(minX, left);
+                maxX = std::max(maxX, right);
+            }
+
+            penX += g.advance * k;
+        }
+
+        prev = ch;
+    }
+
+    return std::max(0.0f, maxX - minX);
+}
+
+static void renderTextOutlined(
+    SDL_Renderer* r,
+    FontManager* f,
+    const FontManager::MipLevel* mip,
+    SDL_Texture* fillTex,
+    SDL_Texture* outlineTex,
+    const std::string& s,
+    float x,
+    float y,
+    float finalScale,
+    float k)
+{
+    if (!r || !f || !mip || !fillTex || s.empty()) return;
+
+    const float ySnap = std::round(y);
+
+    // --- Outline pass ---
+    if (outlineTex) {
+        float penX = x;
+        Uint16 prev = 0;
+        for (unsigned char uc : s) {
+            const Uint16 ch = (Uint16)uc;
+            if (prev) penX += f->getKerning(prev, ch) * finalScale;
+
+            auto it = mip->glyphs.find(ch);
+            if (it != mip->glyphs.end()) {
+                const auto& g = it->second;
+                const SDL_Rect& src = g.rect;
+                SDL_FRect dst = { penX - g.fillX * k, ySnap - g.fillY * k, src.w * k, src.h * k };
+                SDL_RenderCopyF(r, outlineTex, &src, &dst);
+                penX += g.advance * k;
+            }
+
+            prev = ch;
+        }
+    }
+
+    // --- Fill pass ---
+    {
+        float penX = x;
+        Uint16 prev = 0;
+        for (unsigned char uc : s) {
+            const Uint16 ch = (Uint16)uc;
+            if (prev) penX += f->getKerning(prev, ch) * finalScale;
+
+            auto it = mip->glyphs.find(ch);
+            if (it != mip->glyphs.end()) {
+                const auto& g = it->second;
+
+                SDL_Rect srcFill{ g.rect.x + g.fillX, g.rect.y + g.fillY, g.fillW, g.fillH };
+                SDL_FRect dst{ penX, ySnap, g.fillW * k, g.fillH * k };
+                SDL_RenderCopyF(r, fillTex, &srcFill, &dst);
+
+                penX += g.advance * k;
+            }
+
+            prev = ch;
+        }
+    }
+}
+
+} // namespace
 
 ReloadableHiscores::ReloadableHiscores(Configuration& config, std::string textFormat,
 	Page& p, int displayOffset, FontManager* font, float scrollingSpeed, float startTime,
@@ -524,11 +641,11 @@ float ReloadableHiscores::computeTableScaleAndWidths(
 		float maxColumnWidth = 0.0f;
 		// Header
 		if (colIndex < table.columns.size())
-			maxColumnWidth = std::max(maxColumnWidth, float(font->getWidth(table.columns[colIndex])) * initialScale);
+			maxColumnWidth = std::max(maxColumnWidth, measureTextWidthExact(font, table.columns[colIndex], initialScale));
 		// Rows
 		for (const auto& row : table.rows) {
 			if (colIndex < row.size())
-				maxColumnWidth = std::max(maxColumnWidth, float(font->getWidth(row[colIndex])) * initialScale);
+				maxColumnWidth = std::max(maxColumnWidth, measureTextWidthExact(font, row[colIndex], initialScale));
 		}
 		outColumnWidths.push_back(maxColumnWidth);
 		outTotalTableWidth += maxColumnWidth + paddingBetweenColumns;
@@ -552,10 +669,10 @@ float ReloadableHiscores::computeTableScaleAndWidths(
 			size_t colIndex = visibleColumnIndices_[visibleIndex];
 			float maxColumnWidth = 0.0f;
 			if (colIndex < table.columns.size())
-				maxColumnWidth = std::max(maxColumnWidth, float(font->getWidth(table.columns[colIndex])) * scale);
+				maxColumnWidth = std::max(maxColumnWidth, measureTextWidthExact(font, table.columns[colIndex], scale));
 			for (const auto& row : table.rows) {
 				if (colIndex < row.size())
-					maxColumnWidth = std::max(maxColumnWidth, float(font->getWidth(row[colIndex])) * scale);
+					maxColumnWidth = std::max(maxColumnWidth, measureTextWidthExact(font, row[colIndex], scale));
 			}
 			outColumnWidths.push_back(maxColumnWidth);
 			outTotalTableWidth += maxColumnWidth + paddingBetweenColumns;
@@ -623,26 +740,16 @@ void ReloadableHiscores::renderHeaderTexture(
 		return;
 	}
 	const float mipRelativeScale = (mip->height > 0) ? (targetPixelHeight / mip->height) : 1.0f;
-	SDL_Texture* tex = mip->fillTexture;
+	SDL_Texture* fillTex = mip->fillTexture;
+	SDL_Texture* outlineTex = mip->outlineTexture;
 
 	float y = 0.0f; // This is the baseline y for the current row.
 
 	// Title
 	if (!table.id.empty()) {
-		float titleWidth = static_cast<float>(font->getWidth(table.id)) * scale;
+		float titleWidth = measureTextWidthExact(font, table.id, scale);
 		float titleX = (totalTableWidth - titleWidth) / 2.0f;
-		float penX = titleX;
-		for (char c : table.id) {
-			auto it = mip->glyphs.find(c);
-			if (it != mip->glyphs.end()) {
-				const auto& g = it->second;
-				SDL_Rect src = g.rect;
-				// CORRECTED: Use the row's 'y' directly. Do not recalculate per-glyph vertical alignment.
-				SDL_FRect dst = { penX, y, g.rect.w * mipRelativeScale, g.rect.h * mipRelativeScale };
-				SDL_RenderCopyF(renderer, tex, &src, &dst);
-				penX += g.advance * mipRelativeScale;
-			}
-		}
+		renderTextOutlined(renderer, font, mip, fillTex, outlineTex, table.id, titleX, y, scale, mipRelativeScale);
 		y += drawableHeight + rowPadding;
 	}
 
@@ -651,20 +758,9 @@ void ReloadableHiscores::renderHeaderTexture(
 	for (size_t i = 0; i < visibleColumnIndices_.size(); ++i) {
 		size_t colIndex = visibleColumnIndices_[i];
 		const std::string& header = table.columns[colIndex];
-		float headerWidth = static_cast<float>(font->getWidth(header)) * scale;
+		float headerWidth = measureTextWidthExact(font, header, scale);
 		float xAligned = x + (cachedColumnWidths_[i] - headerWidth) / 2.0f;
-		float penX = xAligned;
-		for (char c : header) {
-			auto it = mip->glyphs.find(c);
-			if (it != mip->glyphs.end()) {
-				const auto& g = it->second;
-				SDL_Rect src = g.rect;
-				// CORRECTED: Use the row's 'y' directly.
-				SDL_FRect dst = { penX, y, g.rect.w * mipRelativeScale, g.rect.h * mipRelativeScale };
-				SDL_RenderCopyF(renderer, tex, &src, &dst);
-				penX += g.advance * mipRelativeScale;
-			}
-		}
+		renderTextOutlined(renderer, font, mip, fillTex, outlineTex, header, xAligned, y, scale, mipRelativeScale);
 		x += cachedColumnWidths_[i] + paddingBetweenColumns;
 	}
 
@@ -705,7 +801,8 @@ void ReloadableHiscores::renderTableRowsTexture(
 		return;
 	}
 	const float mipRelativeScale = (mip->height > 0) ? (targetPixelHeight / mip->height) : 1.0f;
-	SDL_Texture* tex = mip->fillTexture;
+	SDL_Texture* fillTex = mip->fillTexture;
+	SDL_Texture* outlineTex = mip->outlineTexture;
 
 	for (int rowIndex = 0; rowIndex < rowsToActuallyRender; ++rowIndex) {
 		float y = (drawableHeight + rowPadding) * rowIndex; // This is the baseline y for this row.
@@ -717,20 +814,9 @@ void ReloadableHiscores::renderTableRowsTexture(
 				continue;
 			}
 			const std::string& cell = table.rows[rowIndex][colIndex];
-			float cellWidth = static_cast<float>(font->getWidth(cell)) * scale;
+			float cellWidth = measureTextWidthExact(font, cell, scale);
 			float xAligned = x + (cachedColumnWidths_[i] - cellWidth) / 2.0f;
-			float penX = xAligned;
-			for (char c : cell) {
-				auto it = mip->glyphs.find(c);
-				if (it != mip->glyphs.end()) {
-					const auto& g = it->second;
-					SDL_Rect src = g.rect;
-					// CORRECTED: Use the row's 'y' directly. Do not recalculate per-glyph vertical alignment.
-					SDL_FRect dst = { penX, y, g.rect.w * mipRelativeScale, g.rect.h * mipRelativeScale };
-					SDL_RenderCopyF(renderer, tex, &src, &dst);
-					penX += g.advance * mipRelativeScale;
-				}
-			}
+			renderTextOutlined(renderer, font, mip, fillTex, outlineTex, cell, xAligned, y, scale, mipRelativeScale);
 			x += cachedColumnWidths_[i] + paddingBetweenColumns;
 		}
 	}
