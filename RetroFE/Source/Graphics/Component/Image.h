@@ -60,8 +60,6 @@ public:
 
     // Static Cache Management
     static void cleanupTextureCache();
-    void retarget(const std::string& newFile, const std::string& newAltFile);
-
 
 private:
     //-------------------------------------------------------------------------

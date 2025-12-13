@@ -36,7 +36,6 @@ public:
     bool update(float dt) override;
     void draw() override;
     void freeGraphicsMemory() override;
-    void retarget(const std::string& newFile);
     void allocateGraphicsMemory() override;
     std::unique_ptr<IVideo> extractVideo();
     bool isPlaying() override;

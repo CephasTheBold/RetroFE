@@ -1284,213 +1284,15 @@ void ScrollingList::scroll(bool forward) {
         itemIndex_ = loopDecrement(itemIndex_, 1, itemsSize);
     }
 
-    const std::string imageTypeLC = Utils::toLower(imageType_);
-    const std::string videoTypeLC = Utils::toLower(videoType_);
-    const bool haveVideo = !videoTypeLC.empty() && videoTypeLC != "null";
-    const bool haveImage = !imageTypeLC.empty() && imageTypeLC != "null";
+    // Rebuild only the exiting slot (consider switching to recycle/retarget later)
+    deallocateTexture(exitIndex);
+    allocateTexture(exitIndex, itemToScroll);
 
-    const std::vector<std::string_view> emptySV;
-    const auto& imgBase = haveImage ? itemToScroll->baseNameCandidates(imageTypeLC) : emptySV;
-    const auto& vidBase = haveVideo ? itemToScroll->baseNameCandidates(videoTypeLC) : emptySV;
-
-    // helpers: specifics first (skip "default"), then a single "default" probe
-    auto trySpecific = [&](auto&& tryOne, const std::vector<std::string_view>& base) -> bool {
-        for (auto sv : base) {
-            if (sv == "default") continue;
-            if (tryOne(std::string(sv))) return true;
-        }
-        return false;
-        };
-    auto tryDefaultOnly = [&](auto&& tryOne) -> bool {
-        return tryOne(std::string("default"));
-        };
-
-    // scope runners (buildPaths kept exactly as you have it)
-    auto runScopesSpecific = [&](auto&& tryOne, bool isVideo) -> bool {
-        std::string layoutName; config_.getProperty(OPTION_LAYOUT, layoutName);
-
-        auto run = [&](const std::string& baseDir, const std::string& subDir,
-            const std::vector<std::string_view>& base) -> bool {
-                std::string imagePath, videoPath;
-                buildPaths(imagePath, videoPath, baseDir, subDir, imageType_, videoType_);
-                const std::string& mediaPath = isVideo ? videoPath : imagePath;
-                return trySpecific([&](const std::string& n) { return tryOne(mediaPath, n); }, base);
-            };
-        // 1) primary
-        if (layoutMode_) {
-            if (run(Utils::combinePath(Configuration::absolutePath, "layouts", layoutName, "collections"),
-                commonMode_ ? "_common" : collectionName,
-                isVideo ? vidBase : imgBase)) return true;
-        }
-        else {
-            if (run(Configuration::absolutePath,
-                commonMode_ ? "collections/_common" : collectionName,
-                isVideo ? vidBase : imgBase)) return true;
-        }
-        // 2) sub-collection
-        if (!commonMode_) {
-            if (layoutMode_) {
-                if (run(Utils::combinePath(Configuration::absolutePath, "layouts", layoutName, "collections",
-                    itemToScroll->collectionInfo->name),
-                    "",
-                    isVideo ? vidBase : imgBase)) return true;
-            }
-            else {
-                std::string mediaPath;
-                if (isVideo) {
-                    config_.getMediaPropertyAbsolutePath(itemToScroll->collectionInfo->name, videoType_, false, mediaPath);
-                }
-                else {
-                    config_.getMediaPropertyAbsolutePath(itemToScroll->collectionInfo->name, imageType_, false, mediaPath);
-                }
-                if (trySpecific([&](const std::string& n) { return tryOne(mediaPath, n); },
-                    isVideo ? vidBase : imgBase)) return true;
-            }
-        }
-        // 3) system collection
-        {
-            std::string mediaPath;
-            if (layoutMode_) {
-                mediaPath = Utils::combinePath(Configuration::absolutePath, "layouts", layoutName, "collections",
-                    commonMode_ ? "_common" : itemToScroll->name);
-                if (!isVideo) mediaPath = Utils::combinePath(mediaPath, "system_artwork");
-            }
-            else {
-                if (commonMode_) {
-                    mediaPath = !isVideo
-                        ? Utils::combinePath(Configuration::absolutePath, "collections/_common/system_artwork")
-                        : Utils::combinePath(Configuration::absolutePath, "collections/_common"); // consistent base
-                }
-                else {
-                    if (isVideo) config_.getMediaPropertyAbsolutePath(itemToScroll->name, videoType_, true, mediaPath);
-                    else         config_.getMediaPropertyAbsolutePath(itemToScroll->name, imageType_, true, mediaPath);
-                }
-            }
-            if (trySpecific([&](const std::string& n) { return tryOne(mediaPath, n); },
-                isVideo ? vidBase : imgBase)) return true;
-            if (!isVideo) {
-                if (tryOne(mediaPath, imageType_)) return true;
-            }
-        }
-        // 4) ROM dir
-        {
-            const std::string& romDir = itemToScroll->filepath;
-            if (trySpecific([&](const std::string& n) { return tryOne(romDir, n); },
-                isVideo ? vidBase : imgBase)) return true;
-        }
-        return false;
-        };
-
-    auto runScopesDefault = [&](auto&& tryOne, bool isVideo) -> bool {
-        std::string layoutName; config_.getProperty(OPTION_LAYOUT, layoutName);
-        auto run = [&](const std::string& baseDir, const std::string& subDir) -> bool {
-            std::string imagePath, videoPath;
-            buildPaths(imagePath, videoPath, baseDir, subDir, imageType_, videoType_);
-            const std::string& mediaPath = isVideo ? videoPath : imagePath;
-            return tryDefaultOnly([&](const std::string& n) { return tryOne(mediaPath, n); });
-            };
-        // 1) primary
-        if (layoutMode_) {
-            if (run(Utils::combinePath(Configuration::absolutePath, "layouts", layoutName, "collections"),
-                commonMode_ ? "_common" : collectionName)) return true;
-        }
-        else {
-            if (run(Configuration::absolutePath,
-                commonMode_ ? "collections/_common" : collectionName)) return true;
-        }
-        // 2) sub-collection
-        if (!commonMode_) {
-            if (layoutMode_) {
-                if (run(Utils::combinePath(Configuration::absolutePath, "layouts", layoutName, "collections",
-                    itemToScroll->collectionInfo->name),
-                    "")) return true;
-            }
-            else {
-                std::string mediaPath;
-                if (isVideo) {
-                    config_.getMediaPropertyAbsolutePath(itemToScroll->collectionInfo->name, videoType_, false, mediaPath);
-                }
-                else {
-                    config_.getMediaPropertyAbsolutePath(itemToScroll->collectionInfo->name, imageType_, false, mediaPath);
-                }
-                if (tryDefaultOnly([&](const std::string& n) { return tryOne(mediaPath, n); })) return true;
-            }
-        }
-        // 3) system collection
-        {
-            std::string mediaPath;
-            if (layoutMode_) {
-                mediaPath = Utils::combinePath(Configuration::absolutePath, "layouts", layoutName, "collections",
-                    commonMode_ ? "_common" : itemToScroll->name);
-                if (!isVideo) mediaPath = Utils::combinePath(mediaPath, "system_artwork");
-            }
-            else {
-                if (commonMode_) {
-                    mediaPath = !isVideo
-                        ? Utils::combinePath(Configuration::absolutePath, "collections/_common/system_artwork")
-                        : Utils::combinePath(Configuration::absolutePath, "collections/_common");
-                }
-                else {
-                    if (isVideo) config_.getMediaPropertyAbsolutePath(itemToScroll->name, videoType_, true, mediaPath);
-                    else         config_.getMediaPropertyAbsolutePath(itemToScroll->name, imageType_, true, mediaPath);
-                }
-            }
-            if (tryDefaultOnly([&](const std::string& n) { return tryOne(mediaPath, n); })) return true;
-        }
-        // 4) ROM dir
-        {
-            const std::string& romDir = itemToScroll->filepath;
-            if (tryDefaultOnly([&](const std::string& n) { return tryOne(romDir, n); })) return true;
-        }
-        return false;
-        };
-
-    // media appliers
-    auto tryRetargetVideo = [&](const std::string& dir, const std::string& name) -> bool {
-        if (auto* vc = dynamic_cast<VideoComponent*>(components_[exitIndex])) {
-            return VideoBuilder::RetargetVideo(*vc, dir, name);
-        }
-        return false;
-        };
-    auto tryRetargetImage = [&](const std::string& dir, const std::string& name) -> bool {
-        if (auto* img = dynamic_cast<Image*>(components_[exitIndex])) {
-            ImageBuilder ib;
-            return ib.RetargetImage(*img, dir, name);
-        }
-        return false;
-        };
-
-    bool reused = false;
-
-    if (haveVideo && haveImage) {
-        // 1) video specifics
-        reused = runScopesSpecific(tryRetargetVideo, /*isVideo=*/true);
-        // 2) default video
-        if (!reused) reused = runScopesDefault(tryRetargetVideo, /*isVideo=*/true);
-        // 3) image specifics
-        if (!reused) reused = runScopesSpecific(tryRetargetImage, /*isVideo=*/false);
-        // 4) default image
-        if (!reused) reused = runScopesDefault(tryRetargetImage, /*isVideo=*/false);
-    }
-    else if (haveVideo) {
-        // video-only path (specifics then default)
-        reused = runScopesSpecific(tryRetargetVideo, true);
-        if (!reused) reused = runScopesDefault(tryRetargetVideo, true);
-    }
-    else { // image only (legacy)
-        reused = runScopesSpecific(tryRetargetImage, false);
-        if (!reused) reused = runScopesDefault(tryRetargetImage, false);
-    }
-
-    if (!reused) {
-        // Fallback: your original rebuild behavior
-        deallocateTexture(exitIndex);
-        allocateTexture(exitIndex, itemToScroll);
-    }
-
-    // --- tweens (unchanged) ---
+    // --- Use precomputed tuples ---
     const auto& T = forward ? forwardTween_ : backwardTween_;
+    // Guard (paranoia) in case N changed without setPoints being called:
     if (T.size() != N) {
+        // fallback to maps if ever mismatched
         const auto& neighbor = forward ? forwardMap_ : backwardMap_;
         for (size_t index = 0; index < N; ++index) {
             const size_t nextIndex = neighbor[index];
@@ -1512,6 +1314,8 @@ void ScrollingList::scroll(bool forward) {
             if (!component) continue;
 
             const TweenNeighbor& t = T[index];
+
+            component->allocateGraphicsMemory(); // consider removing per-scroll alloc later
             resetTweens(component, t.tween, t.cur, t.next, scrollPeriod_);
             if (component->baseViewInfo.font != t.next->font)
                 component->baseViewInfo.font = t.next->font;

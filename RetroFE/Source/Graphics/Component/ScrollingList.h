@@ -134,6 +134,7 @@ public:
     void triggerBuildInfoExit(int menuIndex = -1);
     void triggerJukeboxJumpEvent(int menuIndex = -1);
     void triggerEventOnAll(const std::string& event, int menuIndex);;
+
     bool allocateTexture(size_t index, const Item* i);
     void buildPaths(std::string& imagePath, std::string& videoPath, const std::string& base, const std::string& subPath, const std::string& mediaType, const std::string& videoType);
     void deallocateTexture(size_t index);

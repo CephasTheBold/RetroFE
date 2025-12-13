@@ -18,37 +18,25 @@
 #include "../../Utility/Utils.h"
 #include <string_view>
 
+
+VideoComponent * VideoBuilder::createVideo(const std::string& path, Page &page, const std::string& name, int monitor, int numLoops, bool softOverlay, int listId, const int* perspectiveCorners)
+{
+    VideoComponent *component = nullptr;
+    
+    // Declare the extensions vector as static so it's only initialized once.
 #ifdef WIN32
-static constexpr std::string_view kVidExts[] = {
-    "mp4","avi","mkv"
-};
+    static std::vector<std::string> extensions = {
+        "mp4", "avi", "mkv",
+        "mp3", "wav", "flac"
+    };
 #else
-static constexpr std::string_view kVidExts[] = {
-    "mp4","MP4","avi","AVI","mkv","MKV"
-};
+    static std::vector<std::string> extensions = {
+    "mp4", "MP4", "avi", "AVI", "mkv", "MKV",
+    "mp3", "MP3", "wav", "WAV", "flac", "FLAC"
+    };
 #endif
 
-static inline std::string makePrefix(const std::string& path, const std::string& name) {
-    std::string s;
-    s.reserve(path.size() + name.size() + 2);
-    s.append(path);
-    if (!path.empty()) {
-        const char c = path.back();
-        if (c != '/' && c != '\\')
-#ifdef _WIN32
-            s.push_back('\\');
-#else
-            s.push_back('/');
-#endif
-    }
-    s.append(name);
-    return s;
-}
-
-VideoComponent* VideoBuilder::createVideo(const std::string& path, Page& page,
-    const std::string& name, int monitor, int numLoops, bool softOverlay,
-    int listId, const int* perspectiveCorners) {
-    VideoComponent* component = nullptr;
+    std::string prefix = Utils::combinePath(path, name);
 
     const std::string prefix = makePrefix(path, name);
     std::string file;
@@ -60,18 +48,3 @@ VideoComponent* VideoBuilder::createVideo(const std::string& path, Page& page,
     return component;
 }
 
-bool VideoBuilder::RetargetVideo(VideoComponent& comp,
-    const std::string& directory,
-    const std::string& stem) {
-    if (directory.empty() || stem.empty()) return false;
-
-    const std::string prefix = makePrefix(directory, stem);
-    std::string found;
-    if (!Utils::findMatchingFile(std::string_view(prefix),
-        std::begin(kVidExts), std::end(kVidExts),
-        found))
-        return false;
-
-    comp.retarget(found);     // existing non-blocking retarget behavior
-    return true;
-}

@@ -56,16 +56,3 @@ Image* ImageBuilder::CreateImage(const std::string& path, Page& p,
     }
     return image;
 }
-
-bool ImageBuilder::RetargetImage(Image& img, const std::string& path, const std::string& name) {
-    const std::string prefix = makePrefix(path, name);
-    std::string found;
-    if (Utils::findMatchingFile(std::string_view(prefix),
-        std::begin(kImgExts), std::end(kImgExts),
-        found)) {
-        img.retarget(found, "");
-        return true;
-    }
-    return false;
-}
-
