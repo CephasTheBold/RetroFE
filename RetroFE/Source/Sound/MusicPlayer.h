@@ -18,6 +18,7 @@
 #include <string>
 #include <vector>
 #include <filesystem>
+#include <atomic>
 #include <memory>
 #include <random>
 #include <atomic>
@@ -155,8 +156,6 @@ public:
     const std::vector<float>& getAudioLevels() const { return audioLevels_; }
     int getAudioChannels() const { return audioChannels_; }
 	int getAudioSampleRate() const { return audioSampleRate_; }
-    bool registerVisualizerCallback();
-    void unregisterVisualizerCallback();
     bool hasVuMeter() const { return hasVuMeter_; }
     void setHasVuMeter(bool enable) { hasVuMeter_ = enable; }
 
@@ -172,8 +171,6 @@ private:
 
     // Private Helper Functions
     void loadTrack(int index);
-    bool readTrackMetadataWithGst(const std::string& filePath, TrackMetadata& metadata);
-    bool read_id3v2_tags(const std::string& path, TrackMetadata& meta);
     bool readTrackMetadata(const std::string& filePath, TrackMetadata& metadata) const;
     bool parseM3UFile(const std::string& playlistPath);
     bool isValidAudioFile(const std::string& filePath) const;
@@ -201,8 +198,9 @@ private:
     std::vector<int> shuffledIndices_;
     int currentShufflePos_;
     int currentIndex_;
-    int volume_;
-    int logicalVolume_;
+    std::atomic<int> volume_{ MIX_MAX_VOLUME };        // actual mixer vol 0..128
+    std::atomic<int> logicalVolume_{ MIX_MAX_VOLUME }; // UI/bar vol 0..128
+    std::atomic<int> previousVolume_{ MIX_MAX_VOLUME };
     bool loopMode_;
     bool shuffleMode_;
     std::atomic<bool> isShuttingDown_;
@@ -213,7 +211,6 @@ private:
     bool isPendingTrackChange_;
     int pendingTrackIndex_;
     int fadeMs_;
-    int previousVolume_;
     bool buttonPressed_;
     std::string lastCheckedTrackPath_;
     bool hasStartedPlaying_;
@@ -230,15 +227,4 @@ private:
 	int audioSampleRate_;
     bool hasVuMeter_;
     int sampleSize_;  // 1, 2, or 4 bytes per sample
-
-    Configuration* config;
-    Mix_Music* currentMusic;
-    std::vector<std::string> musicFiles;
-    std::vector<std::string> musicNames;
-    int currentIndex;
-    int volume;
-    bool loopMode;
-    bool shuffleMode;
-    bool isShuttingDown;
-    std::mt19937 rng;
 };

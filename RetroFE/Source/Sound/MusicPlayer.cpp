@@ -25,9 +25,26 @@
 #include <thread>
 #include <iomanip>
 #include <sstream>
+#include <fstream>
+#include <cmath>
+#include <chrono>
 
 
 namespace fs = std::filesystem;
+
+namespace {
+	inline int clampInt(int v, int lo, int hi) { return std::max(lo, std::min(hi, v)); }
+
+	inline int pctTo128(int pct) {
+		pct = clampInt(pct, 0, 100);
+		return static_cast<int>((pct / 100.0f) * MIX_MAX_VOLUME + 0.5f);
+	}
+
+	inline int vol128ToPct(int v128) {
+		v128 = clampInt(v128, 0, MIX_MAX_VOLUME);
+		return static_cast<int>((v128 / static_cast<float>(MIX_MAX_VOLUME)) * 100.0f + 0.5f);
+	}
+}
 
 MusicPlayer* MusicPlayer::instance_ = nullptr;
 
@@ -48,7 +65,8 @@ MusicPlayer::MusicPlayer()
 	, currentShufflePos_(-1)
 	, currentIndex_(-1)
 	, volume_(MIX_MAX_VOLUME)
-	, logicalVolume_(volume_)
+	, logicalVolume_(MIX_MAX_VOLUME)
+	, previousVolume_(MIX_MAX_VOLUME)
 	, loopMode_(false)
 	, shuffleMode_(false)
 	, isShuttingDown_(false)
@@ -59,7 +77,6 @@ MusicPlayer::MusicPlayer()
 	, isPendingTrackChange_(false)
 	, pendingTrackIndex_(-1)
 	, fadeMs_(1500)
-	, previousVolume_(volume_)
 	, buttonPressed_(false)
 	, lastCheckedTrackPath_("")
 	, hasStartedPlaying_(false)
@@ -97,19 +114,29 @@ bool MusicPlayer::initialize(Configuration& config) {
 	this->config_ = &config;
 
 	// Get volume from config if available
-	int configVolume;
-	if (config.getProperty("musicPlayer.volume", configVolume))
-	{
+	int configVolume = 100;
+	if (config.getProperty("musicPlayer.volume", configVolume)) {
 		configVolume = std::max(0, std::min(100, configVolume));
-		// Convert from percentage (0-100) to internal volume (0-128)
-		volume_ = static_cast<int>((configVolume / 100.0f) * MIX_MAX_VOLUME + 0.5f);
 	}
+
+	// IMPORTANT: this is the UI/bar value (0-128), derived from the human 0-100
+	logicalVolume_ = pctTo128(configVolume);
+
+	// Apply your curve -> sets Mix_VolumeMusic(...) and keeps volume_ in sync
+	setLogicalVolume(logicalVolume_);
 
 	// Set the music callback for handling when music finishes
 	Mix_HookMusicFinished(MusicPlayer::musicFinishedCallback);
 
 	// Set music volume
-	Mix_VolumeMusic(volume_);
+	Mix_VolumeMusic(volume_.load(std::memory_order_relaxed));
+
+	LOG_INFO("MusicPlayer", "Initialized with volume: " +
+		std::to_string(volume_.load(std::memory_order_relaxed)) +
+		", loop: " + std::to_string(loopMode_) +
+		", shuffle: " + std::to_string(shuffleMode_) +
+		", fade: " + std::to_string(fadeMs_) + "ms" +
+		", tracks found: " + std::to_string(musicFiles_.size()));
 
 	// Get loop mode from config
 	bool configLoop;
@@ -167,12 +194,6 @@ bool MusicPlayer::initialize(Configuration& config) {
 		loadMusicFolderFromConfig();
 	}
 
-	LOG_INFO("MusicPlayer", "Initialized with volume: " + std::to_string(volume_) +
-		", loop: " + std::to_string(loopMode_) +
-		", shuffle: " + std::to_string(shuffleMode_) +
-		", fade: " + std::to_string(fadeMs_) + "ms" +
-		", tracks found: " + std::to_string(musicFiles_.size()));
-
 	return true;
 }
 
@@ -181,38 +202,35 @@ bool MusicPlayer::initialize(Configuration& config) {
 void MusicPlayer::reinitialize() {
 	LOG_INFO("MusicPlayer", "Re-initializing hooks after SDL cycle.");
 	Mix_HookMusicFinished(MusicPlayer::musicFinishedCallback);
-	Mix_VolumeMusic(volume_);
+	Mix_VolumeMusic(volume_.load(std::memory_order_relaxed));
 	// No Mix_SetPostMix here anymore.
 }
 
 void MusicPlayer::onGameLaunchStart() {
 	if (!config_) return;
 
-	// Always save the current state in case we need to restore it (for unloadSDL).
 	savedTrackIndex_ = getCurrentTrackIndex();
 	savedPosition_ = saveCurrentMusicPosition();
 
-	// Now, decide how to handle the music based on configuration.
 	bool playInGame = false;
 	config_->getProperty("musicPlayer.playInGame", playInGame);
 
 	if (playInGame) {
+		// IMPORTANT: always snapshot the pre-launch volume, even if no fade occurs
+		previousVolume_ = getVolume();
+
 		int playInGameVol = -1;
-		// Check for a specific volume to fade down to.
 		if (config_->getProperty("musicPlayer.playInGameVol", playInGameVol) &&
 			playInGameVol >= 0 && playInGameVol <= 100) {
 
-			// Convert percentage (0-100) to SDL_mixer's range (0-128).
 			int targetMixVolume = static_cast<int>((playInGameVol / 100.0f) * MIX_MAX_VOLUME + 0.5f);
 
-			// Only fade if the current volume is higher than the target.
 			if (getVolume() > targetMixVolume) {
 				fadeToVolume(targetMixVolume);
 			}
 		}
 	}
 	else {
-		// If not playing in-game, the requirement is to pause.
 		pauseMusic();
 	}
 }
@@ -224,21 +242,16 @@ void MusicPlayer::onGameLaunchEnd(bool wasSdlUnloaded) {
 	config_->getProperty("musicPlayer.playInGame", playInGame);
 
 	if (playInGame) {
-		// If music was faded down for the game, the requirement is to fade it back up.
-		// fadeBackToPreviousVolume() correctly handles this.
-		fadeBackToPreviousVolume();
+		if (getVolume() != previousVolume_)
+			fadeBackToPreviousVolume();
 	}
 	else {
-		// Music was paused. How we resume depends on whether SDL was unloaded.
 		if (wasSdlUnloaded) {
-			// SDL was torn down. We cannot simply "resume". We must reload the track
-			// and seek to the saved position.
 			if (savedTrackIndex_ != -1) {
 				playMusic(savedTrackIndex_, -1, savedPosition_);
 			}
 		}
 		else {
-			// SDL was running the whole time. A simple resume is correct.
 			resumeMusic();
 		}
 	}
@@ -1134,7 +1147,7 @@ bool MusicPlayer::resumeMusic(int customFadeMs) {
 				return false;
 			}
 #else
-			if (Mix_FadeInMusic(currentMusic, loopMode ? -1 : 1, useFadeMs) == -1)
+			if (Mix_FadeInMusic(currentMusic_, loopMode_ ? -1 : 1, useFadeMs) == -1)
 			{
 				LOG_ERROR("MusicPlayer", "Failed to resume music with fade: " + std::string(Mix_GetError()));
 				return false;
@@ -1299,13 +1312,9 @@ void MusicPlayer::changeVolume(bool increase) {
 	lastVolumeChangeTime_ = now;
 
 	int currentVolume = getLogicalVolume();
-	int newVolume;
-	if (increase) {
-		newVolume = std::min(128, currentVolume + 1);
-	}
-	else {
-		newVolume = std::max(0, currentVolume - 1);
-	}
+	int newVolume = increase
+		? std::min(MIX_MAX_VOLUME, currentVolume + 1)
+		: std::max(0, currentVolume - 1);
 
 	setLogicalVolume(newVolume);
 	setButtonPressed(true); // Trigger volume bar update
@@ -1316,85 +1325,96 @@ void MusicPlayer::setVolume(int newVolume) {
 	if (isFading())
 		return;
 
-	// Ensure volume is within SDL_Mixer's range (0-128)
-	volume_ = std::max(0, std::min(MIX_MAX_VOLUME, newVolume));
-	Mix_VolumeMusic(volume_);
+	const int v = std::clamp(newVolume, 0, MIX_MAX_VOLUME);
 
-	// Save to config if available
-	if (config_)
-	{
-		config_->setProperty("musicPlayer.volume", volume_);
+	volume_.store(v, std::memory_order_relaxed);
+	Mix_VolumeMusic(v);
+
+	// Keep the bar consistent if this path is used:
+	logicalVolume_.store(v, std::memory_order_relaxed);
+
+	if (config_) {
+		config_->setProperty("musicPlayer.volume", vol128ToPct(v)); // store HUMAN 0-100
 	}
 
-	LOG_INFO("MusicPlayer", "Volume set to " + std::to_string(volume_));
+	LOG_INFO("MusicPlayer", "Volume set to " + std::to_string(v));
 }
 
+
 void MusicPlayer::setLogicalVolume(int v) {
-	logicalVolume_ = std::clamp(v, 0, 128);
-	if (logicalVolume_ == 0) {
-		Mix_VolumeMusic(0);
-		return;
+	v = std::clamp(v, 0, MIX_MAX_VOLUME);
+	logicalVolume_.store(v, std::memory_order_relaxed);
+
+	if (config_) {
+		config_->setProperty("musicPlayer.volume", vol128ToPct(v));
 	}
-	float normalized = static_cast<float>(logicalVolume_) / 128.0f;
-	float dB = normalized * 40.0f - 40.0f;
-	float gain = std::pow(10.0f, dB / 20.0f);
-	int finalVolume = static_cast<int>(gain * 128.0f + 0.5f);
+
+	int finalVolume = 0;
+	if (v != 0) {
+		float normalized = static_cast<float>(v) / 128.0f;
+		float dB = normalized * 40.0f - 40.0f;
+		float gain = std::pow(10.0f, dB / 20.0f);
+		finalVolume = static_cast<int>(gain * 128.0f + 0.5f);
+		finalVolume = std::clamp(finalVolume, 0, MIX_MAX_VOLUME);
+	}
+
+	volume_.store(finalVolume, std::memory_order_relaxed);
 	Mix_VolumeMusic(finalVolume);
 }
 
 
+
 int MusicPlayer::getLogicalVolume() {
-	return logicalVolume_;
+	return logicalVolume_.load(std::memory_order_relaxed);
 }
 
 
 int MusicPlayer::getVolume() const {
-	return Mix_VolumeMusic(-1);
+	return volume_.load(std::memory_order_relaxed);
 }
 
 void MusicPlayer::fadeToVolume(int targetVolume, int customFadeMs) {
-	int durationMs = (customFadeMs >= 0) ? customFadeMs : fadeMs_;
-	targetVolume = std::max(0, std::min(MIX_MAX_VOLUME, targetVolume));
-	previousVolume_ = getVolume();
+    int durationMs = (customFadeMs >= 0) ? customFadeMs : fadeMs_;
+    targetVolume = std::clamp(targetVolume, 0, MIX_MAX_VOLUME);
 
-	const int steps = 50;
-	int sleepDuration = (durationMs > 0) ? (durationMs / steps) : 0;
-	uint32_t mySerial = ++fadeSerial_; // aborts previous fades
+    previousVolume_.store(getVolume(), std::memory_order_relaxed);
 
-	int startVolume = getVolume();
+    const int startVolume = getVolume();
+    if (startVolume == targetVolume)
+        return;
 
-	std::thread([this, mySerial, startVolume, targetVolume, steps, sleepDuration]() {
-		for (int i = 0; i <= steps; ++i)
-		{
-			if (mySerial != fadeSerial_ || isShuttingDown_) return; // abort this fade
-			float t = static_cast<float>(i) / steps;
-			int newVolume = static_cast<int>(startVolume + t * (targetVolume - startVolume));
-			Mix_VolumeMusic(newVolume);
-			if (sleepDuration > 0)
-				std::this_thread::sleep_for(std::chrono::milliseconds(sleepDuration));
-		}
-		}).detach();
+    const int steps = 50;
+    const int sleepDuration = (durationMs > 0) ? (durationMs / steps) : 0;
+    const uint32_t mySerial = ++fadeSerial_; // abort previous fades
+
+    std::thread([this, mySerial, startVolume, targetVolume, steps, sleepDuration]() {
+        for (int i = 0; i <= steps; ++i) {
+            if (mySerial != fadeSerial_.load(std::memory_order_relaxed) || isShuttingDown_.load())
+                return;
+
+            float t = static_cast<float>(i) / steps;
+            int newVolume = static_cast<int>(startVolume + t * (targetVolume - startVolume));
+
+            Mix_VolumeMusic(newVolume);
+            volume_.store(newVolume, std::memory_order_relaxed);
+
+            if (sleepDuration > 0)
+                std::this_thread::sleep_for(std::chrono::milliseconds(sleepDuration));
+        }
+
+        // lock final value
+        if (mySerial == fadeSerial_.load(std::memory_order_relaxed) && !isShuttingDown_.load()) {
+            Mix_VolumeMusic(targetVolume);
+            volume_.store(targetVolume, std::memory_order_relaxed);
+        }
+    }).detach();
 }
 
 void MusicPlayer::fadeBackToPreviousVolume() {
-	int targetVolume = previousVolume_;
-	const int steps = 50;
-	int sleepDuration = (fadeMs_ > 0) ? (fadeMs_ / steps) : 0;
-
-	std::thread([this, targetVolume, steps, sleepDuration]() {
-		int startVolume = getVolume();
-		for (int i = 0; i <= steps; ++i)
-		{
-			float t = static_cast<float>(i) / steps;
-			int newVolume = static_cast<int>(startVolume + t * (targetVolume - startVolume));
-			Mix_VolumeMusic(newVolume);
-			if (sleepDuration > 0)
-			{
-				std::this_thread::sleep_for(std::chrono::milliseconds(sleepDuration));
-			}
-		}
-		}).detach();
+    int targetVolume = previousVolume_.load(std::memory_order_relaxed);
+    fadeToVolume(targetVolume, fadeMs_); // reuse cancellation + sync behavior
 }
+
 
 std::string MusicPlayer::getCurrentTrackName() const {
 	if (currentIndex_ >= 0 && currentIndex_ < static_cast<int>(musicNames_.size()))
