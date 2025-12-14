@@ -476,7 +476,8 @@ void ReloadableHiscores::reloadTexture(bool resetScroll) {
 			// Split into two lines so it stays readable at typical layout widths.
 			const std::string line1 = "LOCAL SCORES NOT AVAILABLE";
 			const std::string line2 = "OR NOT YET SUPPORTED";
-			const std::vector<std::string> lines = { line1, line2 };
+			const std::string line3 = "FOR THIS GAME";
+			const std::vector<std::string> lines = { line1, line2, line3 };
 
 			const float scale = baseViewInfo.FontSize / static_cast<float>(font->getMaxHeight());
 			const float drawableHeight = font->getMaxAscent() * scale;
