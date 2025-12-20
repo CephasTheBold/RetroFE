@@ -1025,25 +1025,27 @@ bool ScrollingList::allocateTexture(size_t index, const Item* item) {
         }
         if (t) break;
 
-        // --------- Sub-collection fallback ---------
-        if (!commonMode_) {
+        // --------- Per-item collection fallback (ALWAYS allowed) ---------
+        if (!t) {
+            std::string imagePath, videoPath;
+
             if (layoutMode_) {
-                std::string base = Utils::combinePath(Configuration::absolutePath, "layouts", layoutName, "collections", item->collectionInfo->name);
-                buildPaths(imagePath, videoPath, base, "", imageType_, videoType_);
+                // Keep base stable; pass collection as subPath (matches your other layoutMode_ code)
+                std::string base = Utils::combinePath(Configuration::absolutePath, "layouts", layoutName, "collections");
+                buildPaths(imagePath, videoPath, base, item->collectionInfo->name, imageType_, videoType_);
             }
             else {
                 config_.getMediaPropertyAbsolutePath(item->collectionInfo->name, imageType_, false, imagePath);
                 config_.getMediaPropertyAbsolutePath(item->collectionInfo->name, videoType_, false, videoPath);
             }
 
-            if (!t) {
-                if (videoType_ != "null") {
-                    t = videoBuild.createVideo(videoPath, page, name, baseViewInfo.Monitor, -1, false, listId_, perspectiveCornersInitialized_ ? perspectiveCorners_ : nullptr);
-                }
-                else {
-                    std::string imageName = (selectedImage_ && item->name == selectedItemName) ? name + "-selected" : name;
-                    t = imageBuild.CreateImage(imagePath, page, imageName, baseViewInfo.Monitor, baseViewInfo.Additive, useTextureCaching_);
-                }
+            if (videoType_ != "null") {
+                t = videoBuild.createVideo(videoPath, page, name, baseViewInfo.Monitor, -1, false, listId_,
+                    perspectiveCornersInitialized_ ? perspectiveCorners_ : nullptr);
+            }
+            else {
+                std::string imageName = (selectedImage_ && item->name == selectedItemName) ? name + "-selected" : name;
+                t = imageBuild.CreateImage(imagePath, page, imageName, baseViewInfo.Monitor, baseViewInfo.Additive, useTextureCaching_);
             }
         }
         if (t) break;
