@@ -392,7 +392,7 @@ void RetroFE::launchExit(bool userInitiated) {
 	}
 	else
 	{
-		currentPage_->reallocateMenuSpritePoints();
+		currentPage_->reallocateMenuSpritePoints(false);
 	}
 
 #ifdef WIN32
@@ -427,7 +427,7 @@ void RetroFE::launchExit(bool userInitiated) {
 	lastFrameTimePointMs_ = SDL_GetPerformanceCounter() * 1000.0 / freq_;
 	keyLastTime_ = currentTime_;
 	lastLaunchReturnTime_ = currentTime_;
-	currentPage_->updateReloadables(0);
+	//currentPage_->updateReloadables(0);
 	currentPage_->onNewItemSelected();
 	//currentPage_->reallocateMenuSpritePoints(false);
 
@@ -2311,7 +2311,7 @@ bool RetroFE::run() {
 					if (currentPage_->getPlaylistName() == "lastplayed")
 					{
 						currentPage_->setScrollOffsetIndex(0);
-						currentPage_->reallocateMenuSpritePoints();
+						currentPage_->reallocateMenuSpritePoints(false);
 					}
 
 					// Call launchExit and tell it a reboot IS NOT happening.
