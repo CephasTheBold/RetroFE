@@ -25,7 +25,7 @@
 
 static constexpr int DYNAMIC_ATLAS_SIZE = 2048;
 
- // This is a temporary struct used only during atlas generation for a single mip level.
+// This is a temporary struct used only during atlas generation for a single mip level.
 struct GlyphInfoBuild {
     FontManager::GlyphInfo glyph;
     SDL_Surface* surface = nullptr; // Kept for compatibility with original code structure, but not used.
@@ -140,6 +140,35 @@ void FontManager::fillHolesInOutline(SDL_Surface* s,
     SDL_UnlockSurface(s);
 }
 
+// Helper: count rows of mostly-transparent pixels at the top of a glyph surface.
+// This compensates for fonts that render punctuation with extra blank padding.
+static int computeGlyphTopPad(SDL_Surface* s, Uint8 alphaThresh = 8) {
+    if (!s || s->format->BytesPerPixel != 4) return 0;
+
+    SDL_LockSurface(s);
+    const int w = s->w;
+    const int h = s->h;
+    const int pitch32 = s->pitch / 4;
+    Uint32* px = static_cast<Uint32*>(s->pixels);
+
+    const Uint32 AMASK = s->format->Amask;
+    const int ASH = s->format->Ashift;
+
+    for (int y = 0; y < h; ++y) {
+        Uint32* row = px + y * pitch32;
+        for (int x = 0; x < w; ++x) {
+            Uint8 a = static_cast<Uint8>((row[x] & AMASK) >> ASH);
+            if (a > alphaThresh) {
+                SDL_UnlockSurface(s);
+                return y;
+            }
+        }
+    }
+
+    SDL_UnlockSurface(s);
+    return 0;
+}
+
 // MipLevel destructor to release textures
 FontManager::MipLevel::~MipLevel() {
     if (fillTexture)          SDL_DestroyTexture(fillTexture);
@@ -184,7 +213,7 @@ SDL_Surface* FontManager::applyVerticalGrayGradient(SDL_Surface* s, Uint8 topGra
     const int pitch = s->pitch;
 
     for (int y = 0; y < s->h; ++y) {
-        // vertical ramp in sRGB space (we’ll convert the result to linear)
+        // vertical ramp in sRGB space (we?ll convert the result to linear)
         const float t = (s->h > 1) ? float(y) / float(s->h - 1) : 0.f;
         const float Gs = ((1.f - t) * (topGray / 255.0f)) + (t * (bottomGray / 255.0f));
         const float Glin = toLinear(Gs);  // target luminance in linear
@@ -317,6 +346,10 @@ void FontManager::preloadGlyphRange(TTF_Font* font,
             info->glyph.fillH = packedH;
         }
 
+        // Measure how much transparent padding exists at the top of the packed glyph surface.
+        // This is used to stabilize baseline alignment for punctuation in some fonts.
+        info->glyph.topPad = computeGlyphTopPad(outline ? outline : fill, 8);
+
         temp_build[ch] = info;
         tmp.push_back(TmpGlyph{ fill, outline, dx, dy, info });
 
@@ -360,7 +393,7 @@ bool FontManager::initialize() {
         mip->height = TTF_FontHeight(font);
         mip->ascent = TTF_FontAscent(font);
         mip->descent = TTF_FontDescent(font);
-        mip->font = font; // <— keep per-mip handle
+        mip->font = font; // <? keep per-mip handle
 
         const int GLYPH_SPACING = std::max(1, std::max(outlinePx_ + 1, currentSize / 16));
         int atlasWidth = std::min(1024, currentSize * 16);
@@ -457,7 +490,7 @@ bool FontManager::initialize() {
         SDL_FreeSurface(atlasFill);
         if (atlasOutline) SDL_FreeSurface(atlasOutline);
 
-        // Dynamic atlases — STREAMING
+        // Dynamic atlases ? STREAMING
         mip->dynamicFillTexture = SDL_CreateTexture(
             SDL::getRenderer(monitor_),
             SDL_PIXELFORMAT_ARGB8888,
@@ -644,6 +677,9 @@ bool FontManager::loadGlyphOnDemand(Uint32 ch, MipLevel* mip) {
         glyph.fillX = 0; glyph.fillY = 0;
         glyph.fillW = packedW; glyph.fillH = packedH;
     }
+
+    // Measure how much transparent padding exists at the top of the packed glyph surface.
+    glyph.topPad = computeGlyphTopPad(outline ? outline : fill, 8);
 
     // --- Streaming upload (no temp textures, no RT switches) ---
     // Upload OUTLINE first (if present)

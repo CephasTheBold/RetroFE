@@ -52,7 +52,16 @@ ReloadableText::~ReloadableText()
 
 bool ReloadableText::update(float dt)
 {
-    if (newItemSelected || (newScrollItemSelected && getMenuScrollReload()) || type_ == "time" || type_ == "current" ||
+    if (type_ == "time") {
+        const time_t now = time(nullptr);
+        if (now != lastTimeSecond_) {
+            lastTimeSecond_ = now;
+            ReloadTexture();
+        }
+        return Component::update(dt);
+    }
+    
+    if (newItemSelected || (newScrollItemSelected && getMenuScrollReload()) || type_ == "current" ||
         type_ == "duration" || type_ == "isPaused" || type_ == "timeSpent")
     {
         ReloadTexture();
@@ -132,11 +141,13 @@ void ReloadableText::ReloadTexture()
     Item *selectedItem = page.getSelectedMenuItem();
 
     // If there's no selected item, we might be in a transition state
-    if (selectedItem == nullptr)
-    {
-        currentType_.clear();
-        currentValue_.clear();
-        return;
+    if (selectedItem == nullptr) {
+        // time / file / trackInfo don't depend on selected item; don't clear + flicker.
+        if (type_ != "time" && type_ != "file" && type_ != "trackInfo") {
+            currentType_.clear();
+            currentValue_.clear();
+            return;
+        }
     }
 
     std::stringstream ss;
@@ -213,19 +224,18 @@ void ReloadableText::ReloadTexture()
         }
     }
     else if (type_ == "time") {
-        // If timeFormat_ is undefined, assign a reasonable default
-        if (timeFormat_.empty()) {
-            timeFormat_ = "%I:%M:%S %p";
-        }
+        if (timeFormat_.empty()) timeFormat_ = "%I:%M:%S %p";
 
-
-            time_t now = time(0);           // Get current time in seconds
-            struct tm tstruct;
-            char buf[80];
-            tstruct = *localtime(&now);     // Convert to local time
-            strftime(buf, sizeof(buf), timeFormat_.c_str(), &tstruct);  // Format the time
-            ss << buf;                      // Append formatted time to stringstream
-        
+        time_t now = time(nullptr);
+        std::tm tstruct{};
+#if defined(_WIN32)
+        localtime_s(&tstruct, &now);
+#else
+        localtime_r(&now, &tstruct);
+#endif
+        char buf[80];
+        strftime(buf, sizeof(buf), timeFormat_.c_str(), &tstruct);
+        text = buf;
     }
 
     else if (type_ == "numberButtons")

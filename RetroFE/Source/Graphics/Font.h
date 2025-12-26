@@ -23,6 +23,7 @@ public:
         int advance = 0;
         SDL_Rect rect{ 0,0,0,0 };
         int fillX = 0, fillY = 0, fillW = 0, fillH = 0;
+        int topPad = 0; // rows of mostly-transparent pixels at top of packed glyph
     };
 
     // A structure to hold all data for a single mipmap level.

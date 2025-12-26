@@ -103,7 +103,7 @@ void Text::draw() {
     const float oldIH = baseViewInfo.ImageHeight;
 
     baseViewInfo.Width = cachedWidth_;
-    baseViewInfo.Height = baseViewInfo.FontSize;
+    baseViewInfo.Height = cachedHeight_;
     baseViewInfo.ImageWidth = float(mip->atlasW);
     baseViewInfo.ImageHeight = float(mip->atlasH);
 
@@ -163,8 +163,8 @@ void Text::draw() {
             const FontManager::GlyphInfo& g = it->second;
             const SDL_Rect& srcOutline = g.rect;
 
-            dst.x = xOrigin + pos.xOffset - g.fillX * scale;
-            dst.y = yOrigin + pos.yOffset - g.fillY * scale;
+            dst.x = xOrigin + pos.xOffset;
+            dst.y = yOrigin + pos.yOffset;
             dst.w = srcOutline.w * scale;
             dst.h = srcOutline.h * scale;
 
@@ -238,8 +238,8 @@ void Text::draw() {
                 g.fillH
             };
 
-            dst.x = xOrigin + pos.xOffset;
-            dst.y = yOrigin + pos.yOffset;
+            dst.x = xOrigin + pos.xOffset + g.fillX * scale;
+            dst.y = yOrigin + pos.yOffset + g.fillY * scale;
             dst.w = g.fillW * scale;
             dst.h = g.fillH * scale;
 
@@ -287,7 +287,9 @@ void Text::updateGlyphPositions(FontManager* font, float scale, float maxWidth) 
     if (!mip) return;
 
     const float ascent_f = static_cast<float>(mip->ascent);
+    const float outline_f = static_cast<float>(font->getOutlinePx());
 
+    // Kerning is computed in max-font units, scaled to target size
     const float kerningScale =
         (font->getMaxFontSize() > 0)
         ? static_cast<float>(targetFontSize) / static_cast<float>(font->getMaxFontSize())
@@ -296,7 +298,7 @@ void Text::updateGlyphPositions(FontManager* font, float scale, float maxWidth) 
     double penX = 0.0;
     Uint32 prev = 0;
 
-    struct PosTmp { SDL_Rect src; float xOff, yOff, advance_px; };
+    struct PosTmp { SDL_Rect src; float packedX, packedY, advance_px; };
     std::vector<PosTmp> tmp;
     tmp.reserve(textData_.size());
 
@@ -331,6 +333,7 @@ void Text::updateGlyphPositions(FontManager* font, float scale, float maxWidth) 
         if (it == mip->glyphs.end() || it->second.rect.h <= 0) {
             it = mip->dynamicGlyphs.find(ch);
             if (it == mip->dynamicGlyphs.end()) {
+                // On-demand only for "big" codepoints (your existing rule)
                 if (ch >= 1024) {
                     if (font->loadGlyphOnDemand(ch, const_cast<FontManager::MipLevel*>(mip))) {
                         it = mip->dynamicGlyphs.find(ch);
@@ -353,36 +356,37 @@ void Text::updateGlyphPositions(FontManager* font, float scale, float maxWidth) 
 
         const auto& g = it->second;
 
-        // Kerning (computed in max-font units, scaled to target size)
-        const int kern_fp = font->getKerning(prev, ch);
+        const int   kern_fp = font->getKerning(prev, ch);
         const float kern_px = static_cast<float>(kern_fp) * kerningScale;
         penX += static_cast<double>(kern_px);
 
-        // X position (your existing fix: don't add minX)
-        const float gx = static_cast<float>(penX);
+        // --- X ---
+        // Keep your current behavior (no minX); but pack-left must include outline padding.
+        const float packedX = static_cast<float>(penX) - (outline_f * scale);
 
-        // Y position FIX:
-        // Align to baseline using font metrics only (maxY), not bitmap height (fillH),
-        // which can include extra transparent rows for punctuation like '\''.
-        const float gy = (ascent_f - static_cast<float>(g.maxY)) * scale;
-
-        // Advance pen
+        // --- Y ---
+        const float packedY =
+            (ascent_f - (static_cast<float>(g.maxY) + outline_f + static_cast<float>(g.topPad))) * scale;
         const float adv_px = static_cast<float>(g.advance) * scale;
 
         const double nextPen = penX + static_cast<double>(adv_px);
         if (maxWidth > 0.0f && static_cast<float>(nextPen) > maxWidth) break;
 
-        tmp.push_back({ g.rect, gx, gy, adv_px });
+        tmp.push_back({ g.rect, packedX, packedY, adv_px });
+
         penX = nextPen;
         prev = ch;
     }
 
-    // Commit
     cachedPositions_.reserve(tmp.size());
     for (auto& t : tmp) {
-        cachedPositions_.push_back({ t.src, t.xOff, t.yOff, t.advance_px });
+        cachedPositions_.push_back({ t.src, t.packedX, t.packedY, t.advance_px });
     }
 
+    // Width is still penX in your “no minX” coordinate system
     cachedWidth_ = static_cast<float>(penX);
-    cachedHeight_ = baseViewInfo.FontSize;
+
+    // Use real font metrics (scaled) for layout/origin instead of "FontSize".
+    // This helps vertical centering/bottom alignment be consistent across fonts.
+    cachedHeight_ = static_cast<float>(mip->height) * scale + (2.0f * outline_f * scale);
 }

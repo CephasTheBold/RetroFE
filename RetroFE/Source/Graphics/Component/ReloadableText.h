@@ -59,4 +59,5 @@ private:
     std::filesystem::file_time_type lastWriteTime_;
     Uint32 lastFileReloadTime_ = 0;
     const Uint32 fileDebounceDuration_ = 1000; // 1 second debounce per instance
+    time_t lastTimeSecond_ = 0;
 };
