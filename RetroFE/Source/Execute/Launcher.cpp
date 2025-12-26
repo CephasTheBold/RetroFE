@@ -109,18 +109,33 @@ bool Launcher::run(std::string collection, Item* collectionItem, Page* currentPa
     std::string launcherName = collectionItem->collectionInfo->launcher;
     std::string launcherFile = Utils::combinePath(Configuration::absolutePath, "collections", collection, "launchers", collectionItem->name + ".conf");
 
-    // Per-item launcher override file
+    // Priority:
+    //  1) /collections/<collection>/launchers/<item>.conf  (single-line launcher id)
+    //  2) local launcher named the same as the item        (launchers.local/<item>.conf -> localLaunchers.<collection>.<item>.*)
+    //  3) collection-specific launcher                     (launcher(.<os>).conf import)
+
+    // 1) Per-item launcher override file
     if (std::ifstream launcherStream(launcherFile); launcherStream.good()) {
         std::string line;
         if (std::getline(launcherStream, line)) {
-            std::string localLauncherKey = "localLaunchers." + collection + "." + line;
-            launcherName = config_.propertyPrefixExists(localLauncherKey) ? (collection + "." + line) : line;
-            LOG_INFO("Launcher", "Using per-item launcher override: " + launcherName);
+            // Trim whitespace (helps avoid "retroarch\r" etc)
+            line.erase(line.find_last_not_of(" \t\r\n") + 1);
+            line.erase(0, line.find_first_not_of(" \t\r\n"));
+
+            if (!line.empty()) {
+                std::string localLauncherKey = "localLaunchers." + collection + "." + line;
+                launcherName = config_.propertyPrefixExists(localLauncherKey) ? (collection + "." + line) : line;
+                LOG_INFO("Launcher", "Using per-item launcher override: " + launcherName);
+            }
         }
     }
-
-    // Collection-specific launcher fallback
-    if (launcherName == collectionItem->collectionInfo->launcher) {
+    // 2) Auto-match item-named local launcher (skip /launchers/ folder entirely)
+    else if (config_.propertyExists("localLaunchers." + collection + "." + collectionItem->name + ".executable")) {
+        launcherName = collection + "." + collectionItem->name;
+        LOG_INFO("Launcher", "Using item-named local launcher: " + launcherName);
+    }
+    // 3) Collection-specific launcher fallback
+    else if (launcherName == collectionItem->collectionInfo->launcher) {
         std::string collectionLauncherKey = "collectionLaunchers." + collection;
         if (config_.propertyPrefixExists(collectionLauncherKey)) {
             launcherName = collectionItem->collectionInfo->name;
@@ -241,7 +256,7 @@ bool Launcher::run(std::string collection, Item* collectionItem, Page* currentPa
             };
     }
 
-// --- PRE HOOK (supports prewait in ms or bool) ---
+    // --- PRE HOOK (supports prewait in ms or bool) ---
     {
         std::string preExe;
         if (getPropChainStr("preexecutable", preExe)) {
@@ -367,6 +382,7 @@ bool Launcher::run(std::string collection, Item* collectionItem, Page* currentPa
             LOG_DEBUG("Launcher", "No preexecutable configured; skipping pre hook.");
         }
     }
+
     //
     // --- STEP 6: EXECUTION ---
     //
