@@ -642,8 +642,13 @@ bool MetadataDatabase::initialize() {
     }
 
     // Always check remotes; merge into local XMLs if remote is newer.
-    const bool anyRemoteChanged = syncAllHyperlistRemotes_();
+	bool anyRemoteChanged = false;
+    bool globalHiscoresEnabled = false;
+    config_.getProperty(OPTION_GLOBALHISCORESENABLED, globalHiscoresEnabled);
 
+    if (globalHiscoresEnabled) {
+        anyRemoteChanged = syncAllHyperlistRemotes_();
+    }
     // Import when DB is stale OR any XML changed on disk
     if (needsRefresh() || anyRemoteChanged) {
         importAllHyperlists_();
