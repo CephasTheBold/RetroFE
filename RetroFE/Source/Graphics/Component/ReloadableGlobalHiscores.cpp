@@ -46,7 +46,7 @@ ReloadableGlobalHiscores::ReloadableGlobalHiscores(
     , baseColumnPadding_(baseColumnPadding)
     , baseRowPadding_(baseRowPadding)
     , displayOffset_(displayOffset)
-	, tablesNeedRedraw_(true)  // Tables need initial rendering
+    , tablesNeedRedraw_(true)  // Tables need initial rendering
     , needsRedraw_(true)
     , highScoreTable_(nullptr)
     , tableTexture_(nullptr)
@@ -95,6 +95,13 @@ ReloadableGlobalHiscores::~ReloadableGlobalHiscores() {
 void ReloadableGlobalHiscores::beginContext_(bool resetQr) {
     pagePhase_ = PagePhase::Single;
     pageT_ = 0.f;
+
+    // IMPORTANT:
+    // When the selected item changes we may be in a debounce window before reloadTexture()
+    // rebuilds the table set for the new item. During that window, update()'s page-rotation
+    // logic must not compute a new grid baseline from the previous item's table set.
+    // Nulling this pointer prevents stale baselines (e.g., multi-table -> single-table).
+    highScoreTable_ = nullptr;
 
     if (resetQr) {
         qrPhase_ = QrPhase::Hidden;
@@ -150,7 +157,7 @@ void ReloadableGlobalHiscores::snapshotPrevPage_(SDL_Renderer* r, int compositeW
         compositeW,
         compositeH
     );
-	SDL_SetTextureBlendMode(prevCompositeTexture_, SDL_BLENDMODE_BLEND);
+    SDL_SetTextureBlendMode(prevCompositeTexture_, SDL_BLENDMODE_BLEND);
 
     if (!prevCompositeTexture_) {
         Logger::write(Logger::ZONE_ERROR, "ReloadableGlobalHiscores",
@@ -210,11 +217,11 @@ void ReloadableGlobalHiscores::allocateGraphicsMemory() {
     if (prevCompositeTexture_) {
         SDL_DestroyTexture(prevCompositeTexture_);
         prevCompositeTexture_ = nullptr;
-	}
+    }
     if (crossfadeTexture_) {
         SDL_DestroyTexture(crossfadeTexture_);
         crossfadeTexture_ = nullptr;
-	}
+    }
     // Clear QR texture cache (renderer changed)
     for (SDL_Texture* tex : cachedQrTextures_) {
         if (tex) SDL_DestroyTexture(tex);
@@ -464,9 +471,24 @@ bool ReloadableGlobalHiscores::update(float dt) {
     }
 
     // --- 6. Page rotation ---
-    if (highScoreTable_ && !highScoreTable_->tables.empty()) {
+    // Only rotate pages (and compute baselines) once the current selection has been rendered.
+    // This avoids computing a grid baseline from a stale table set during the debounce window
+    // after a selection change.
+    if (!needsRedraw_ && reloadDebounceTimer_ <= 0.f && highScoreTable_ && !highScoreTable_->tables.empty()) {
         const int totalTables = (int)highScoreTable_->tables.size();
-        const int pageSize = std::max(1, gridPageSize_);
+        int pageSize = std::max(1, gridBaselineValid_ ? gridBaselineSlots_ : gridPageSize_);
+
+        // If baseline isn't computed yet, compute it here so update() and reloadTexture() agree.
+        if (!gridBaselineValid_) {
+            FontManager* font = baseViewInfo.font ? baseViewInfo.font : fontInst_;
+            if (font && baseViewInfo.Width > 1.f && baseViewInfo.Height > 1.f) {
+                const float baseScale = baseViewInfo.FontSize / (float)font->getMaxHeight();
+                const float asc = (float)font->getMaxAscent();
+                computeGridBaseline_(font, totalTables, baseViewInfo.Width, baseViewInfo.Height, baseScale, asc);
+                pageSize = std::max(1, gridBaselineValid_ ? gridBaselineSlots_ : gridPageSize_);
+            }
+        }
+
         const int pageCount = std::max(1, (totalTables + pageSize - 1) / pageSize);
 
         if (pageCount > 1) {
@@ -530,7 +552,7 @@ void ReloadableGlobalHiscores::draw() {
                 SDL_PIXELFORMAT_ABGR8888,
                 SDL_TEXTUREACCESS_TARGET,
                 wantW, wantH);
-			SDL_SetTextureBlendMode(crossfadeTexture_, SDL_BLENDMODE_BLEND);
+            SDL_SetTextureBlendMode(crossfadeTexture_, SDL_BLENDMODE_BLEND);
             // Reset alpha caches upon (re)creation so first mod definitely sets
             prevPageAlphaCache_ = 255;
             newPageAlphaCache_ = 255;
@@ -624,83 +646,210 @@ void ReloadableGlobalHiscores::computeGridBaseline_(
     float compH,
     float baseScale,
     float asc) {
-    // Decide number of slots in the grid: gridPageSize_ if we have >= that many tables, else totalTables
-    const int slots = (totalTables >= gridPageSize_) ? gridPageSize_ : totalTables;
+    gridBaselineValid_ = false;
+    gridBaselineSlots_ = 0;
+    gridBaselineCols_ = 0;
+    gridBaselineRows_ = 0;
+    gridBaselineCellW_ = 0.f;
+    gridBaselineCellH_ = 0.f;
+    gridBaselineRowMin_.clear();
 
-    // Compute grid geometry from fixed 'slots' (NOT from how many are visible on this page)
-    int cols = gridColsHint_ > 0 ? gridColsHint_ : (int)std::ceil(std::sqrt((double)slots));
-    cols = std::max(1, cols);
-    int rows = (slots + cols - 1) / cols;
+    if (!font || !highScoreTable_ || totalTables <= 0 || compW <= 1.f || compH <= 1.f) {
+        return;
+    }
+
+    // --------------------------------------------------------------------
+    // Minimum text size policy (the knob you tune)
+    //
+    // baseScale * font->getMaxHeight() is effectively baseViewInfo.FontSize in px.
+    // We reject any grid layout where the *row-scale* (quantized-down) would
+    // make text smaller than minTextPx.
+    // --------------------------------------------------------------------
+    constexpr float kMinTextPx = 28.0f; // <--- TUNE THIS (e.g. 14..22 depending on your theme)
+    const float baseFontPx = baseScale * (float)font->getMaxHeight();
+    float minScaleThreshold = (baseFontPx > 0.f) ? (kMinTextPx / baseFontPx) : 0.f;
+    minScaleThreshold = std::clamp(minScaleThreshold, 0.f, 1.f);
+
+    const int configuredPageSize = std::max(1, gridPageSize_);
+    const int maxSlots = std::min(configuredPageSize, totalTables);
 
     const float spacingH = cellSpacingH_ * compW;
     const float spacingV = cellSpacingV_ * compH;
-    const float totalW = compW - spacingH * (cols - 1);
-    const float totalH = compH - spacingV * (rows - 1);
-    const float cellW = totalW / cols;
-    const float cellH = totalH / rows;
 
-    // Measure first page (startIdx=0) to produce per-row min scale
-    const int firstPageCount = std::min(slots, totalTables);
+    auto ceilDiv = [](int a, int b) { return (a + b - 1) / b; };
+    auto quantize_down = [](float s) {
+        const float q = 64.f; // quantize to 1/64th (must match reloadTexture)
+        return std::max(0.f, std::floor(s * q) / q);
+        };
 
-    std::vector<float> needScale(firstPageCount, 1.0f);
-    const float drawableH0 = asc * baseScale;
+    struct Candidate {
+        bool valid = false;
+        int slots = 0;
+        int cols = 0;
+        int rows = 0;
+        float cellW = 0.f;
+        float cellH = 0.f;
+        float minRowScale = 0.f;
+        float shapeFit = -1e9f;
+        std::vector<float> rowMin;
+    };
 
-    for (int t = 0; t < firstPageCount; ++t) {
-        const auto& table = highScoreTable_->tables[t];
+    Candidate best;
 
-        const float lineH0 = drawableH0 * (1.0f + baseRowPadding_);
-        const float colPad0 = baseColumnPadding_ * drawableH0;
+    // Iterate slots from most-dense to least-dense; pick the first slots count
+    // that can satisfy min text size, then choose the "best looking" columns.
+    for (int slots = maxSlots; slots >= 1; --slots) {
 
-        float width0 = 0.0f;
-        for (size_t c = 0; c < table.columns.size(); ++c) {
-            float w = (float)font->getWidth(table.columns[c]) * baseScale;
-            for (const auto& row : table.rows) {
-                if (c < row.size()) {
-                    w = std::max(w, (float)font->getWidth(row[c]) * baseScale);
+        int colStart = 1;
+        int colEnd = slots;
+
+        if (gridColsHint_ > 0) {
+            const int hinted = std::max(1, std::min(gridColsHint_, slots));
+            colStart = hinted;
+            colEnd = hinted;
+        }
+
+        Candidate bestForThisSlots;
+
+        for (int cols = colStart; cols <= colEnd; ++cols) {
+            const int rows = ceilDiv(slots, cols);
+
+            // Compute cell geometry
+            const float totalW = compW - spacingH * (cols - 1);
+            const float totalH = compH - spacingV * (rows - 1);
+            if (totalW <= 1.f || totalH <= 1.f) continue;
+
+            const float cellW = totalW / (float)cols;
+            const float cellH = totalH / (float)rows;
+            if (cellW <= 1.f || cellH <= 1.f) continue;
+
+            const int firstPageCount = std::min(slots, totalTables);
+
+            std::vector<float> needScale(firstPageCount, 1.0f);
+            std::vector<float> tableAspect(firstPageCount, 1.0f);
+
+            // Estimate per-table fit scale using the same basic model used in reloadTexture
+            const float drawableH0 = asc * baseScale;
+            const float lineH0 = drawableH0 * (1.0f + baseRowPadding_);
+            const float colPad0 = baseColumnPadding_ * drawableH0;
+
+            for (int t = 0; t < firstPageCount; ++t) {
+                const auto& table = highScoreTable_->tables[t];
+
+                // Width: max per-column string width + padding between columns
+                float width0 = 0.0f;
+                for (size_t c = 0; c < table.columns.size(); ++c) {
+                    float w = (float)font->getWidth(table.columns[c]) * baseScale;
+                    for (const auto& row : table.rows) {
+                        if (c < row.size()) {
+                            w = std::max(w, (float)font->getWidth(row[c]) * baseScale);
+                        }
+                    }
+                    width0 += w;
+                    if (c + 1 < table.columns.size()) {
+                        width0 += colPad0;
+                    }
+                }
+
+                // Title can force width
+                if (!table.id.empty()) {
+                    width0 = std::max(width0, (float)font->getWidth(table.id) * baseScale);
+                }
+
+                // Height: title (optional) + header + kRowsPerPage rows
+                float height0 = lineH0; // header
+                if (!table.id.empty()) height0 += lineH0; // title
+                height0 += lineH0 * kRowsPerPage;
+
+                // Fit scale needed
+                const float sW = (width0 > 0.f) ? (cellW / width0) : 1.0f;
+                const float sH = (height0 > 0.f) ? (cellH / height0) : 1.0f;
+                needScale[t] = std::min({ 1.0f, std::max(0.f, sW), std::max(0.f, sH) });
+
+                if (height0 > 0.f && width0 > 0.f) {
+                    tableAspect[t] = width0 / height0;
                 }
             }
-            width0 += w;
-            if (c + 1 < table.columns.size()) {
-                width0 += colPad0;
+
+            // Row-wise min (and quantized down) so we never exceed fit
+            std::vector<float> rowMin(rows, 1.0f);
+            for (int r = 0; r < rows; ++r) {
+                float s = 1.0f;
+                for (int c = 0; c < cols; ++c) {
+                    const int i = r * cols + c;
+                    if (i >= firstPageCount) break;
+                    s = std::min(s, needScale[i]);
+                }
+                rowMin[r] = quantize_down(s);
+            }
+
+            const float minRowScale = *std::min_element(rowMin.begin(), rowMin.end());
+
+            // Enforce minimum text size
+            if (minRowScale < minScaleThreshold) {
+                continue;
+            }
+
+            // Prefer cell aspect close to typical table aspect (avoids 1xN strip layouts)
+            float avgAspect = 1.0f;
+            if (!tableAspect.empty()) {
+                float sum = 0.f;
+                for (float a : tableAspect) sum += a;
+                avgAspect = sum / (float)tableAspect.size();
+                if (!std::isfinite(avgAspect) || avgAspect <= 0.f) avgAspect = 1.0f;
+            }
+
+            const float cellAspect = (cellH > 0.f) ? (cellW / cellH) : 1.0f;
+            const float eps = 1e-3f;
+            const float shapeFit = -std::abs(std::log((cellAspect + eps) / (avgAspect + eps))); // closer to 0 is better
+
+            // Keep the best-looking layout for this slots count
+            if (!bestForThisSlots.valid ||
+                (shapeFit > bestForThisSlots.shapeFit + 1e-6f) ||
+                (std::abs(shapeFit - bestForThisSlots.shapeFit) <= 1e-6f && minRowScale > bestForThisSlots.minRowScale + 1e-6f)) {
+
+                bestForThisSlots.valid = true;
+                bestForThisSlots.slots = slots;
+                bestForThisSlots.cols = cols;
+                bestForThisSlots.rows = rows;
+                bestForThisSlots.cellW = cellW;
+                bestForThisSlots.cellH = cellH;
+                bestForThisSlots.minRowScale = minRowScale;
+                bestForThisSlots.shapeFit = shapeFit;
+                bestForThisSlots.rowMin = std::move(rowMin);
             }
         }
 
-        if (!table.id.empty()) {
-            width0 = std::max(width0, (float)font->getWidth(table.id) * baseScale);
+        if (bestForThisSlots.valid) {
+            best = std::move(bestForThisSlots);
+            break; // slots are descending; first valid slots count wins
         }
-
-        float height0 = lineH0;  // header
-        if (!table.id.empty()) {
-            height0 += lineH0;  // title
-        }
-        height0 += lineH0 * kRowsPerPage;  // rows
-
-        const float sW = width0 > 0 ? (cellW / width0) : 1.0f;
-        const float sH = height0 > 0 ? (cellH / height0) : 1.0f;
-        needScale[t] = std::min({ 1.0f, sW, sH });
     }
 
-    // Per-row minimum over the first-page items
-    std::vector<float> rowMin(rows, 1.0f);
-    for (int r = 0; r < rows; ++r) {
-        float s = 1.0f;
-        for (int c = 0; c < cols; ++c) {
-            int i = r * cols + c;
-            if (i >= firstPageCount) break;
-            s = std::min(s, needScale[i]);
-        }
-        rowMin[r] = s;
+    if (!best.valid) {
+        // Fallback: at least compute something sensible for a single slot.
+        const int slots = std::min(1, totalTables);
+        const int cols = 1;
+        const int rows = 1;
+        gridBaselineSlots_ = slots;
+        gridBaselineCols_ = cols;
+        gridBaselineRows_ = rows;
+        gridBaselineCellW_ = compW;
+        gridBaselineCellH_ = compH;
+        gridBaselineRowMin_.assign(1, 1.f);
+        gridBaselineValid_ = true;
+        return;
     }
 
-    // Save as baseline
-    gridBaselineSlots_ = slots;
-    gridBaselineCols_ = cols;
-    gridBaselineRows_ = rows;
-    gridBaselineCellW_ = cellW;
-    gridBaselineCellH_ = cellH;
-    gridBaselineRowMin_ = std::move(rowMin);
+    gridBaselineSlots_ = best.slots;
+    gridBaselineCols_ = best.cols;
+    gridBaselineRows_ = best.rows;
+    gridBaselineCellW_ = best.cellW;
+    gridBaselineCellH_ = best.cellH;
+    gridBaselineRowMin_ = std::move(best.rowMin);
     gridBaselineValid_ = true;
 }
+
 
 // ============================================================================
 // Texture Reload (Main Rendering)
@@ -1009,8 +1158,10 @@ void ReloadableGlobalHiscores::reloadTexture() {
     const float spacingH = cellSpacingH_ * compW;
     const float spacingV = cellSpacingV_ * compH;
 
+    const int pageSize = std::max(1, gridBaselineValid_ ? gridBaselineSlots_ : gridPageSize_);
+
     const auto [startIdx, Nvisible] =
-        computeVisibleRange(totalTables, gridPageIndex_, std::max(1, gridPageSize_));
+        computeVisibleRange(totalTables, gridPageIndex_, pageSize);
     if (Nvisible <= 0) {
         needsRedraw_ = true;
         return;
@@ -1107,17 +1258,24 @@ void ReloadableGlobalHiscores::reloadTexture() {
     }
 
     // Shared column layout (measure exact widths at baseScale)
+    //
+    // IMPORTANT:
+    // We intentionally compute shared column widths across *all* tables for the
+    // current game (not just the visible page). Otherwise, the widest title/value
+    // might be on page 0, causing page 0 to scale down (leaving vertical slack),
+    // while page 1 scales up (appearing to "fix itself" when the page flips).
+    // This keeps the layout stable across page rotation.
     size_t maxCols = 0;
-    for (int t = 0; t < Nvisible; ++t)
-        maxCols = std::max(maxCols, highScoreTable_->tables[startIdx + t].columns.size());
+    for (int gi = 0; gi < totalTables; ++gi)
+        maxCols = std::max(maxCols, highScoreTable_->tables[gi].columns.size());
     if (maxCols == 0) { needsRedraw_ = true; return; }
 
     std::vector<float> maxColW0(maxCols, 0.f);
     float maxTitleW0 = 0.f;
-    std::vector<float> height0(Nvisible, lineH0 * (1 + kRowsPerPage));
+    float height0Max = 0.f; // use worst-case height so scale doesn't vary per-page
 
-    for (int t = 0; t < Nvisible; ++t) {
-        const auto& table = highScoreTable_->tables[startIdx + t];
+    for (int gi = 0; gi < totalTables; ++gi) {
+        const auto& table = highScoreTable_->tables[gi];
 
         for (size_t c = 0; c < maxCols; ++c) {
             float w = 0.f;
@@ -1137,6 +1295,17 @@ void ReloadableGlobalHiscores::reloadTexture() {
         float h = lineH0;              // header
         if (!table.id.empty()) h += lineH0;  // title
         h += lineH0 * kRowsPerPage;    // rows
+        height0Max = std::max(height0Max, h);
+    }
+
+    // Per-table heights for the visible set (used for panel sizing). We still
+    // keep a max for fit-scale stability.
+    std::vector<float> height0(Nvisible, std::max(height0Max, lineH0 * (1 + kRowsPerPage)));
+    for (int t = 0; t < Nvisible; ++t) {
+        const auto& table = highScoreTable_->tables[startIdx + t];
+        float h = lineH0;
+        if (!table.id.empty()) h += lineH0;
+        h += lineH0 * kRowsPerPage;
         height0[t] = h;
     }
 
@@ -1163,7 +1332,9 @@ void ReloadableGlobalHiscores::reloadTexture() {
         const float availH = std::max(0.0f, cellH - qrExtraH[t] - fitEps);
 
         float sW = sharedW0_exact > 0 ? (availW / sharedW0_exact) : 1.0f;
-        float sH = height0[t] > 0 ? (availH / height0[t]) : 1.0f;
+        // Use worst-case height for fitting so scale doesn't change per-page
+        const float h0 = std::max(height0Max, height0[t]);
+        float sH = h0 > 0 ? (availH / h0) : 1.0f;
         needScale[t] = std::min(std::min(1.0f, std::max(0.0f, sW)),
             std::min(1.0f, std::max(0.0f, sH)));
     }
@@ -1247,7 +1418,9 @@ void ReloadableGlobalHiscores::reloadTexture() {
             float anchorH = panelH + (float)(extraT + extraB);
 
             float anchorX = xCell + (cellW - anchorW) * 0.5f;
-            float anchorY = yCell;
+            // Center vertically too. If scale is width-limited, this prevents the
+            // table from looking "stuck to the top" with a big empty area below.
+            float anchorY = yCell + (cellH - anchorH) * 0.5f;
             anchorX = std::round(clampf(anchorX, xCell, xCell + cellW - anchorW));
             anchorY = std::round(clampf(anchorY, yCell, yCell + cellH - anchorH));
 
