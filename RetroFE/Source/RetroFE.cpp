@@ -572,8 +572,12 @@ bool RetroFE::run() {
 		exit(EXIT_FAILURE);
 	}
 
+	//globalhiscores enabled?
+	bool globalHiscoresEnabled = false;
+	config_.getProperty(OPTION_GLOBALHISCORESENABLED, globalHiscoresEnabled);
+
 	PayloadSync::Config psCfg = PayloadSync::Config::LoadFrom(config_);
-	if (psCfg.enabled) {
+	if (psCfg.enabled && globalHiscoresEnabled) {
 		LOG_INFO("Payload", std::string("Startup sync: file=\"") + psCfg.ResolvePayloadPath() + "\"");
 
 		const bool ok = PayloadSync::RunWithConfig(psCfg, /*dryRun=*/false);
@@ -716,10 +720,6 @@ bool RetroFE::run() {
 	l.LEDBlinky(1);
 	l.startScript();
 	config_.getProperty(OPTION_KIOSK, kioskLock_);
-
-	//globalhiscores enabled?
-	bool globalHiscoresEnabled = false;
-	config_.getProperty(OPTION_GLOBALHISCORESENABLED, globalHiscoresEnabled);
 
 	// settings button
 	std::string settingsCollection = "";
