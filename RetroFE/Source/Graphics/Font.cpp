@@ -766,52 +766,68 @@ int FontManager::getKerning(Uint32 prevChar, Uint32 curChar) const {  // ? was U
 
 // MODIFIED: Calculates width based on the metrics of the highest-resolution font
 int FontManager::getWidth(const std::string& text) {
-    if (mipLevels_.empty() || !max_font_) {
-        return 0;
-    }
+    if (mipLevels_.empty() || !max_font_) return 0;
 
     const MipLevel* maxMip = mipLevels_.rbegin()->second;
 
     int width = 0;
-    Uint32 prev = 0;  // ? was Uint16
+    Uint32 prev = 0;
     bool haveGlyph = false;
 
     const char* ptr = text.c_str();
     const char* end = ptr + text.size();
 
     while (ptr < end) {
-        uint32_t codepoint = 0;
-        unsigned char c = *ptr++;
+        // --- safer UTF-8 decode (see next section) ---
+        uint32_t ch = 0;
+        unsigned char c = static_cast<unsigned char>(*ptr++);
 
         if (c < 0x80) {
-            codepoint = c;
+            ch = c;
         }
         else if ((c & 0xE0) == 0xC0) {
-            codepoint = ((c & 0x1F) << 6) | (*ptr++ & 0x3F);
+            if (ptr >= end) break;
+            unsigned char c1 = static_cast<unsigned char>(*ptr++);
+            if ((c1 & 0xC0) != 0x80) { prev = 0; continue; }
+            ch = ((c & 0x1F) << 6) | (c1 & 0x3F);
         }
         else if ((c & 0xF0) == 0xE0) {
-            codepoint = ((c & 0x0F) << 12) | ((*ptr++ & 0x3F) << 6) | (*ptr++ & 0x3F);
+            if (ptr + 1 >= end) break;
+            unsigned char c1 = static_cast<unsigned char>(*ptr++);
+            unsigned char c2 = static_cast<unsigned char>(*ptr++);
+            if ((c1 & 0xC0) != 0x80 || (c2 & 0xC0) != 0x80) { prev = 0; continue; }
+            ch = ((c & 0x0F) << 12) | ((c1 & 0x3F) << 6) | (c2 & 0x3F);
         }
         else if ((c & 0xF8) == 0xF0) {
-            codepoint = ((c & 0x07) << 18) | ((*ptr++ & 0x3F) << 12) |
-                ((*ptr++ & 0x3F) << 6) | (*ptr++ & 0x3F);
+            if (ptr + 2 >= end) break;
+            unsigned char c1 = static_cast<unsigned char>(*ptr++);
+            unsigned char c2 = static_cast<unsigned char>(*ptr++);
+            unsigned char c3 = static_cast<unsigned char>(*ptr++);
+            if ((c1 & 0xC0) != 0x80 || (c2 & 0xC0) != 0x80 || (c3 & 0xC0) != 0x80) { prev = 0; continue; }
+            ch = ((c & 0x07) << 18) | ((c1 & 0x3F) << 12) | ((c2 & 0x3F) << 6) | (c3 & 0x3F);
         }
         else {
             prev = 0;
             continue;
         }
 
-        Uint32 ch = codepoint;  // ? Full Uint32, no truncation
-        auto it = maxMip->glyphs.find(ch);
-        if (it == maxMip->glyphs.end()) {
-            it = maxMip->dynamicGlyphs.find(ch);  // ? Check dynamic too
+        const GlyphInfo* g = nullptr;
+
+        auto itStatic = maxMip->glyphs.find(ch);
+        if (itStatic != maxMip->glyphs.end()) {
+            g = &itStatic->second;
+        }
+        else {
+            auto itDyn = maxMip->dynamicGlyphs.find(ch);
+            if (itDyn != maxMip->dynamicGlyphs.end()) {
+                g = &itDyn->second;
+            }
         }
 
-        if (it != maxMip->glyphs.end()) {
-            const GlyphInfo& g = it->second;
+        if (g) {
             haveGlyph = true;
             width += getKerning(prev, ch);
-            width += g.advance;
+            width += g->advance;
             prev = ch;
         }
         else {
@@ -819,11 +835,10 @@ int FontManager::getWidth(const std::string& text) {
         }
     }
 
-    if (haveGlyph && outlinePx_ > 0) {
-        width += 2 * outlinePx_;
-    }
+    if (haveGlyph && outlinePx_ > 0) width += 2 * outlinePx_;
     return width;
 }
+
 int FontManager::getOutlinePx() const {
     return outlinePx_;
 }
