@@ -56,6 +56,8 @@ private:
     std::string currentValue_;
     std::string location_;
     std::string filePath_;
+    size_t lastCollectionIdx_ = std::numeric_limits<size_t>::max();
+    size_t lastCollectionSize_ = std::numeric_limits<size_t>::max();
     std::filesystem::file_time_type lastWriteTime_;
     Uint32 lastFileReloadTime_ = 0;
     const Uint32 fileDebounceDuration_ = 1000; // 1 second debounce per instance
