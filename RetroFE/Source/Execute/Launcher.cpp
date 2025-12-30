@@ -212,6 +212,17 @@ bool Launcher::run(std::string collection, Item* collectionItem, Page* currentPa
     bool unloadSDL = false;
     config_.getProperty(OPTION_UNLOADSDL, unloadSDL);
 
+    // ---- Nested RetroFE detection (parent should NOT own quit) ----
+    auto toLower = [](std::string s) {
+        std::transform(s.begin(), s.end(), s.begin(),
+            [](unsigned char c) { return (unsigned char)std::tolower(c); });
+        return s;
+        };
+
+    const std::string launchedExeName = toLower(Utils::getFileName(executablePath));
+    const bool launchingNestedRetroFE =
+        (launchedExeName == "retrofe.exe" || launchedExeName == "retrofe");
+
     // Build onFrameTick once (reused for pre wait, main wait, and optionally post wait)
     FrameTickCallback onFrameTick;
     if (unloadSDL) {
@@ -232,6 +243,8 @@ bool Launcher::run(std::string collection, Item* collectionItem, Page* currentPa
             float  dt = static_cast<float>((now - last) / f);
             last = now;
             if (dt > 0.1f) dt = 0.0167f;
+            auto* mp = MusicPlayer::getInstance();
+            if (mp) mp->pump();
 
             if (!currentPage) return;
             currentPage->update(dt);
@@ -468,7 +481,10 @@ bool Launcher::run(std::string collection, Item* collectionItem, Page* currentPa
         }
         else { // Normal mode
             LOG_INFO("Launcher", "Waiting for launched process to complete. Press quit combo to force quit.");
-            auto quitCheck = [&inputMonitor]() { return inputMonitor.checkInputEvents() == InputDetectionResult::QuitInput; };
+            auto quitCheck = [&inputMonitor, launchingNestedRetroFE]() {
+                if (launchingNestedRetroFE) return false; // child RetroFE owns quit
+                return inputMonitor.checkInputEvents() == InputDetectionResult::QuitInput;
+                };
             WaitResult result = processManager->wait(0, quitCheck, onFrameTick);
 
             if (result == WaitResult::UserInput) {
