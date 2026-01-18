@@ -164,6 +164,25 @@ AudioBus::SourceId AudioBus::addSource(const char* name, size_t ring_kb) {
     return id;
 }
 
+void AudioBus::triggerFadeIn(SourceId id, int durationSamples) {
+    std::shared_ptr<Source> sp;
+    {
+        std::lock_guard<std::mutex> lk(mtx_);
+        auto it = sources_.find(id);
+        if (it == sources_.end() || !it->second) return;
+        sp = it->second;
+    }
+    // Only set if not already fading or if requested longer
+    int current = sp->fadeSamplesLeft.load(std::memory_order_relaxed);
+    int desired = durationSamples;
+    while (current < desired &&
+        !sp->fadeSamplesLeft.compare_exchange_weak(current, desired,
+            std::memory_order_release,
+            std::memory_order_relaxed)) {
+        // retry if changed
+    }
+}
+
 void AudioBus::removeSource(SourceId id) {
     std::lock_guard<std::mutex> lock(mtx_);
     sources_.erase(id);
@@ -189,6 +208,7 @@ bool AudioBus::isEnabled(SourceId id) const {
 
 void AudioBus::push(SourceId id, const void* data, int bytes) {
     if (!data || bytes <= 0) return;
+
     std::shared_ptr<Source> sp;
     {
         std::lock_guard<std::mutex> lk(mtx_);
@@ -196,11 +216,72 @@ void AudioBus::push(SourceId id, const void* data, int bytes) {
         if (it == sources_.end()) return;
         sp = it->second;
     }
+
     if (!sp->enabled.load(std::memory_order_acquire)) return;
 
-    // Write; if ring is full, we drop tail (oldest) by clearing a bit or just accept truncation.
-    // Simple approach: write what fits (write returns actual bytes written).
-    (void)sp->ring.write(reinterpret_cast<const uint8_t*>(data), bytes);
+    const uint8_t* src = reinterpret_cast<const uint8_t*>(data);
+    int remaining = bytes;
+
+    // Only apply fade if we're in S16 format (most common) and fading is active
+    int fadeLeft = sp->fadeSamplesLeft.load(std::memory_order_acquire);
+    if (fadeLeft > 0 && devFmt_ == AUDIO_S16SYS) {
+        // We'll modify a copy only if needed
+        static thread_local std::vector<uint8_t> temp_buffer;
+        if (temp_buffer.size() < static_cast<size_t>(bytes))
+            temp_buffer.resize(bytes);
+
+        std::memcpy(temp_buffer.data(), data, bytes);
+        int16_t* samples = reinterpret_cast<int16_t*>(temp_buffer.data());
+        int total_samples = bytes / sizeof(int16_t);
+
+        int samples_to_fade = std::min(fadeLeft, total_samples);
+
+        for (int i = 0; i < samples_to_fade; ++i) {
+            float gain = static_cast<float>(fadeLeft - i) / fadeLeft;  // 1.0 ? 0.0
+            samples[i] = static_cast<int16_t>(samples[i] * gain);
+        }
+
+        // Reduce remaining fade count
+        int newFade = fadeLeft - samples_to_fade;
+        sp->fadeSamplesLeft.store(newFade > 0 ? newFade : 0, std::memory_order_release);
+
+        src = temp_buffer.data();
+        remaining = bytes;
+    }
+
+    // --- NEW: Real-time de-clicker tuned for your narrow spikes ---
+    if (devFmt_ == AUDIO_S16SYS && bytes >= 4) {  // Need at least 2 samples
+        // Work on a copy only if we modify
+        static thread_local std::vector<uint8_t> temp;
+        if (temp.size() < static_cast<size_t>(bytes)) temp.resize(bytes);
+        std::memcpy(temp.data(), data, bytes);
+
+        int16_t* samples = reinterpret_cast<int16_t*>(temp.data());
+        int num_samples = bytes / sizeof(int16_t);
+
+        constexpr int16_t threshold = 12000;     // Lowered — catches smaller spikes
+        constexpr int max_width = 5;             // Max click width in samples (your spikes are 1–3)
+
+        for (int i = 1; i < num_samples - 1; ++i) {  // Avoid edges
+            int16_t curr = std::abs(samples[i]);
+
+            if (curr > threshold) {
+                // Check if this is an isolated spike (neighbors quiet)
+                int16_t prev = std::abs(samples[i - 1]);
+                int16_t next = std::abs(samples[i + 1]);
+
+                if (prev < threshold / 3 && next < threshold / 3) {
+                    // Isolated spike ? interpolate from neighbors (like Audacity Repair)
+                    samples[i] = static_cast<int16_t>((static_cast<int>(samples[i - 1]) + samples[i + 1]) / 2);
+                }
+            }
+        }
+
+        src = temp.data();
+        remaining = bytes;
+    }
+    // Write to ring buffer (possibly modified)
+    sp->ring.write(src, remaining);
 }
 
 void AudioBus::clear(SourceId id) {

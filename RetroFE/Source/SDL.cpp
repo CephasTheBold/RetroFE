@@ -49,12 +49,13 @@ bool SDL::initialize(Configuration& config) {
 	int audioRate = 48000;
 	Uint16 audioFormat = MIX_DEFAULT_FORMAT; // 16-bit stereo
 	int audioChannels = 2;
-	int audioBuffers = 2048;
+	int audioBuffers = 4096;
 	bool hideMouse;
 
 	SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI, "1");
 	SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
 	SDL_SetHint(SDL_HINT_JOYSTICK_THREAD, "1");
+	SDL_SetHint(SDL_HINT_TIMER_RESOLUTION, "1");
 
 #ifdef WIN32
 	if (!SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_SYSTEM_AWARE))

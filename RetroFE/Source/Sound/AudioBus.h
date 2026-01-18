@@ -10,36 +10,33 @@
 #include <memory>
 
 class AudioBus {
+    struct Source;
 public:
     using SourceId = uint32_t;
-
     static AudioBus& instance();
+    void configureFromMixer();
 
-    void configureFromMixer(); // queries Mix_QuerySpec()
-
-    // Source management (no Source type leaked):
+    // Source management
     SourceId addSource(const char* name, size_t ring_buffer_size_kb = 256);
-    void     removeSource(SourceId id);
-    void     setEnabled(SourceId id, bool on);
-    bool     isEnabled(SourceId id) const;
+    void removeSource(SourceId id);
+    void setEnabled(SourceId id, bool on);
+    bool isEnabled(SourceId id) const;
+    void clear(SourceId id);
 
-    // Producer:
+    // <<< MOVE triggerFadeIn BELOW Source definition >>>
+    void triggerFadeIn(SourceId id, int durationSamples = Source::kMaxFadeSamples);
+
+    // Producer/Consumer
     void push(SourceId id, const void* data, int bytes);
-
-    // Consumer (post-mix):
     void mixInto(Uint8* dst, int len);
     void mixInto_s16(Uint8* dst, int lenBytes);
     void mixInto_f32(Uint8* dst, int lenBytes);
     void mixInto_s32(Uint8* dst, int lenBytes);
 
-    // Optional:
-    void clear(SourceId id);
-
-    // Device spec (read-only)
+    // Device spec
     SDL_AudioFormat dev_fmt() const { return devFmt_; }
-    int             dev_rate() const { return devRate_; }
-    int             dev_channels() const { return devChans_; }
-
+    int dev_rate() const { return devRate_; }
+    int dev_channels() const { return devChans_; }
 private:
     class SpscRing {
     public:
@@ -62,9 +59,14 @@ private:
     };
 
     struct Source {
-        std::string       name;
-        SpscRing          ring;                 // device-format bytes
+        std::string name;
+        SpscRing ring; // device-format bytes
         std::atomic<bool> enabled{ true };
+
+        // NEW: Fade-in state for handling DISCONT
+        std::atomic<int> fadeSamplesLeft{ 0 };
+        static constexpr int kMaxFadeSamples = 256;  // ~5.3ms at 48kHz — adjustable
+
         explicit Source(size_t cap, size_t align) : ring(cap, align) {}
     };
 

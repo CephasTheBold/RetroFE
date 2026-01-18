@@ -693,21 +693,26 @@ bool MusicPlayerComponent::update(float dt) {
 	}
 
 	if (isVolumeBar_) {
-		int volumeRaw = std::clamp(musicPlayer_->getLogicalVolume(), 0, 128);
-		bool buttonPressed = musicPlayer_->getButtonPressed();
-		bool volumeChanged = (volumeRaw != lastVolumeValue_);
+		const int volumeRaw = std::clamp(musicPlayer_->getLogicalVolume(), 0, 128);
+		const bool buttonPressed = musicPlayer_->getButtonPressed();
+		const bool volumeChanged = (volumeRaw != lastVolumeValue_);
 
+		// Always keep lastVolumeValue_ synced, but don't auto-show the bar on passive changes.
 		if (volumeChanged) {
 			lastVolumeValue_ = volumeRaw;
-			volumeBarNeedsUpdate_ = true;
+
+			// Only redraw if the bar is already showing (or user pressed)
+			if (volumeChanging_ || buttonPressed) {
+				volumeBarNeedsUpdate_ = true;
+			}
 		}
 
-		if (volumeChanged || buttonPressed) {
+		// Only USER input should cause the bar to appear
+		if (buttonPressed) {
 			volumeChanging_ = true;
 			volumeStableTimer_ = 0.0f;
-			if (buttonPressed) {
-				musicPlayer_->setButtonPressed(false);
-			}
+			volumeBarNeedsUpdate_ = true;   // ensure the texture updates immediately
+			musicPlayer_->setButtonPressed(false);
 		}
 		else if (volumeChanging_) {
 			volumeStableTimer_ += dt;
@@ -716,6 +721,7 @@ bool MusicPlayerComponent::update(float dt) {
 			}
 		}
 
+		// Alpha logic unchanged
 		if (baseViewInfo.Alpha <= 0.0f) {
 			targetAlpha_ = 0.0f;
 			currentDisplayAlpha_ = 0.0f;
@@ -732,8 +738,10 @@ bool MusicPlayerComponent::update(float dt) {
 				}
 			}
 		}
+
 		return Component::update(dt);
 	}
+
 
 	if (isProgressBar_) {
 		if (refreshTimer_ >= refreshInterval_) {

@@ -23,6 +23,7 @@
 #include <gst/gst.h>
 #include <string>
 #include <vector>
+#include <deque>
 
 class Configuration;
 class Image;
