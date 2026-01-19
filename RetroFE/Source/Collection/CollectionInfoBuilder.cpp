@@ -307,116 +307,194 @@ bool CollectionInfoBuilder::ImportBasicList(CollectionInfo *info, const std::str
     return true;
 }
 
-bool CollectionInfoBuilder::ImportDirectory(CollectionInfo *info, const std::string& mergedCollectionName)
-{
+bool CollectionInfoBuilder::ImportDirectory(CollectionInfo* info,
+    const std::string& mergedCollectionName) {
     std::string path = info->listpath;
-    std::vector<Item *> includeFilterUnsorted;
-    std::map<std::string, Item *> includeFilter;
-    std::map<std::string, Item *> excludeFilter;
-    std::string includeFile    = Utils::combinePath(Configuration::absolutePath, "collections", info->name, "include.txt");
-    std::string excludeFile    = Utils::combinePath(Configuration::absolutePath, "collections", info->name, "exclude.txt");
+    std::vector<Item*> includeFilterUnsorted;
+    std::map<std::string, Item*> includeFilter;
+    std::map<std::string, Item*> excludeFilter;
 
-    std::string launcher;
-    bool showMissing  = false; 
+    std::string includeFile = Utils::combinePath(
+        Configuration::absolutePath, "collections", info->name, "include.txt");
+    std::string excludeFile = Utils::combinePath(
+        Configuration::absolutePath, "collections", info->name, "exclude.txt");
+
+    bool showMissing = false;
     bool romHierarchy = false;
-    bool emuarc       = false;
- 
-    if (mergedCollectionName != "") {
-        std::string mergedFile = Utils::combinePath(Configuration::absolutePath, "collections", mergedCollectionName, info->name + ".sub");
-        LOG_INFO("CollectionInfoBuilder", "Checking for \"" + mergedFile + "\"");
-        (void)conf_.getProperty("collections." + mergedCollectionName + ".list.includeMissingItems", showMissing);
-        ImportBasicList(info, mergedFile, includeFilterUnsorted);
-        ImportBasicList(info, mergedFile, includeFilter);
+    bool emuarc = false;
+
+    bool mergedFileUsed = false;
+    bool mergedFileHadEntries = false;
+
+    // --- Sub / merged-collection handling ---
+    if (!mergedCollectionName.empty())
+    {
+        // Legacy-style: collections/<Master>/<Sub>.sub
+        std::string legacyFile = Utils::combinePath(
+            Configuration::absolutePath, "collections",
+            mergedCollectionName,            // master (e.g. Arcade)
+            info->name + ".sub"              // sub    (e.g. RetroPC)
+        );
+
+        // Doc-style: collections/<Sub>/<Master>.sub
+        std::string docStyleFile = Utils::combinePath(
+            Configuration::absolutePath, "collections",
+            info->name,                      // sub    (e.g. Cave)
+            mergedCollectionName + ".sub"    // master (e.g. Arcade)
+        );
+
+        std::string mergedFile;
+
+        // Prefer legacy if present, else doc-style
+        if (fs::exists(legacyFile)) {
+            LOG_INFO("CollectionInfoBuilder",
+                "Using legacy sub file \"" + legacyFile +
+                "\" for merged collection \"" + info->name +
+                "\" (master: \"" + mergedCollectionName + "\")");
+            mergedFile = legacyFile;
+        }
+        else if (fs::exists(docStyleFile)) {
+            LOG_INFO("CollectionInfoBuilder",
+                "Using doc-style sub file \"" + docStyleFile +
+                "\" for merged collection \"" + info->name +
+                "\" (master: \"" + mergedCollectionName + "\")");
+            mergedFile = docStyleFile;
+        }
+
+        if (!mergedFile.empty())
+        {
+            mergedFileUsed = true;
+
+            // inherit includeMissingItems from the MASTER first
+            conf_.getProperty(
+                "collections." + mergedCollectionName + ".list.includeMissingItems",
+                showMissing);
+
+            // Track how many entries we had before reading the .sub
+            const auto before = includeFilterUnsorted.size();
+
+            ImportBasicList(info, mergedFile, includeFilterUnsorted);
+            ImportBasicList(info, mergedFile, includeFilter);
+
+            if (includeFilterUnsorted.size() > before) {
+                mergedFileHadEntries = true; // non-empty .sub
+            }
+        }
     }
-    (void)conf_.getProperty("collections." + info->name + ".list.includeMissingItems", showMissing);
-    (void)conf_.getProperty("collections." + info->name + ".list.romHierarchy", romHierarchy);
-    (void)conf_.getProperty("collections." + info->name + ".list.emuarc", emuarc);
+
+    // Sub/own collection can still override includeMissingItems, romHierarchy, emuarc
+    conf_.getProperty("collections." + info->name + ".list.includeMissingItems",
+        showMissing);
+    conf_.getProperty("collections." + info->name + ".list.romHierarchy",
+        romHierarchy);
+    conf_.getProperty("collections." + info->name + ".list.emuarc",
+        emuarc);
     if (emuarc)
         romHierarchy = true;
 
     LOG_INFO("CollectionInfoBuilder", "Checking for \"" + includeFile + "\"");
-    ImportBasicList(info, includeFile, includeFilterUnsorted);
-    ImportBasicList(info, includeFile, includeFilter);
+
+    // IMPORTANT:
+    // Only import include.txt from THIS collection if:
+    //  - we are not in merged/sub mode, OR
+    //  - we are in merged/sub mode but the .sub was empty (full merge)
+    if (!mergedFileUsed || !mergedFileHadEntries)
+    {
+        ImportBasicList(info, includeFile, includeFilterUnsorted);
+        ImportBasicList(info, includeFile, includeFilter);
+    }
+
     ImportBasicList(info, excludeFile, excludeFilter);
 
-    for(auto it = includeFilterUnsorted.begin(); it != includeFilterUnsorted.end(); ++it) {
-        if (showMissing && excludeFilter.find((*it)->name) == excludeFilter.end()) {
-            info->items.push_back(*it);
+    // If showMissing==true, names in includeFilterUnsorted become items directly
+    for (auto* it : includeFilterUnsorted) {
+        if (showMissing && excludeFilter.find(it->name) == excludeFilter.end()) {
+            info->items.push_back(it);
         }
         else {
-            delete *it;
+            delete it;
         }
     }
-    includeFilterUnsorted.clear( );
+    includeFilterUnsorted.clear();
 
-    // Read ROM directory if showMissing is false
+    // Read ROM directory if:
+    //  - showMissing is false (normal rom-dir driven), OR
+    //  - includeFilter is empty (no include.txt/sub filter)
     if (!showMissing || includeFilter.empty()) {
         do {
-             std::string rompath;
-             if(size_t position = path.find( ";" ); position != std::string::npos) {
-                 rompath = path.substr(0, position);
-                 path    = path.substr(position+1);
-             }
-             else {
-                 rompath = path;
-                 path    = "";
-             }
-             ImportRomDirectory(rompath, info, includeFilter, excludeFilter, romHierarchy, emuarc);
-        } while (path != "");
+            std::string rompath;
+            if (size_t position = path.find(';');
+                position != std::string::npos) {
+                rompath = path.substr(0, position);
+                path = path.substr(position + 1);
+            }
+            else {
+                rompath = path;
+                path.clear();
+            }
+
+            ImportRomDirectory(rompath, info,
+                includeFilter, excludeFilter,
+                romHierarchy, emuarc);
+        } while (!path.empty());
     }
 
-    // Apply time spent data
-    std::string timeSpentFile = Utils::combinePath(Configuration::absolutePath, "collections", "timeSpent.txt");
-    std::map<std::string, double> currentTimeSpentList = ImportTimeSpent(timeSpentFile);
+    // --- Time spent + play count handling (unchanged from your newer version) ---
 
-    for (auto it = info->items.begin(); it != info->items.end(); ++it) {
-        std::string key = getKey(*it);
-        if (currentTimeSpentList.find(key) != currentTimeSpentList.end()) {
-            (*it)->timeSpent = currentTimeSpentList[key];
+    std::string timeSpentFile = Utils::combinePath(
+        Configuration::absolutePath, "collections", "timeSpent.txt");
+    std::map<std::string, double> currentTimeSpentList =
+        ImportTimeSpent(timeSpentFile);
+
+    for (auto* item : info->items) {
+        std::string key = getKey(item);
+        auto it = currentTimeSpentList.find(key);
+        if (it != currentTimeSpentList.end()) {
+            item->timeSpent = it->second;
         }
     }
 
-    // apply playCount data
-    std::string playCountFile = Utils::combinePath(Configuration::absolutePath, "collections", "playCount.txt");
-    std::map<std::string, Item*> curretPlayCountList = ImportPlayCount(playCountFile);
-    std::string lookup;
-    Item* i = nullptr;
+    std::string playCountFile = Utils::combinePath(
+        Configuration::absolutePath, "collections", "playCount.txt");
+    std::map<std::string, Item*> currentPlayCountList =
+        ImportPlayCount(playCountFile);
 
-    if (!curretPlayCountList.empty()) {
-        for (auto it = info->items.begin(); it != info->items.end(); ++it) {
-            lookup = "_" + info->name + ":" + (*it)->name;
-            if (curretPlayCountList[lookup]) {
-                i = curretPlayCountList[lookup];
+    if (!currentPlayCountList.empty()) {
+        for (auto* item : info->items) {
+            std::string key = "_" + info->name + ":" + item->name;
+            Item* src = nullptr;
+
+            if (currentPlayCountList[key]) {
+                src = currentPlayCountList[key];
             }
-            else if (curretPlayCountList[(*it)->name]) {
-                i = curretPlayCountList[(*it)->name];
+            else if (currentPlayCountList[item->name]) {
+                src = currentPlayCountList[item->name];
             }
-            if (i != nullptr) {
-                (*it)->playCount = i->playCount;
-                (*it)->lastPlayed = i->lastPlayed;
+
+            if (src) {
+                item->playCount = src->playCount;
+                item->lastPlayed = src->lastPlayed;
             }
-            i = nullptr;
         }
     }
 
     // cleanup lists
-    while(!includeFilter.empty()) {
+    while (!includeFilter.empty()) {
         auto it = includeFilter.begin();
-        // delete the unused items if they were never pushed to the main collection
         if (!showMissing) {
             delete it->second;
         }
         includeFilter.erase(it);
     }
-    while(!excludeFilter.empty()) {
+    while (!excludeFilter.empty()) {
         auto it = excludeFilter.begin();
         delete it->second;
         excludeFilter.erase(it);
     }
-    while (!curretPlayCountList.empty()) {
-        auto it = curretPlayCountList.begin();
+    while (!currentPlayCountList.empty()) {
+        auto it = currentPlayCountList.begin();
         delete it->second;
-        curretPlayCountList.erase(it);
+        currentPlayCountList.erase(it);
     }
 
     return true;
