@@ -253,6 +253,8 @@ bool Component::animate() {
         if (!tweens) return true; // Additional check for safety
 
         const auto& compiledTweens = tweens->compiledTweens();
+        const bool hasCurrentPlaylist = !playlistName.empty();
+        const uint32_t currentPlaylistId = hasCurrentPlaylist ? Tween::playlistTokenId(playlistName) : 0;
 
         tweenEvaluations_.clear();
         tweenEvaluations_.reserve(compiledTweens.size());
@@ -290,7 +292,7 @@ bool Component::animate() {
         };
 
         for (const auto& compiledTween : compiledTweens) {
-            if (!Tween::matchesPlaylistTokens(compiledTween.playlistTokens, playlistName)) {
+            if (!Tween::matchesPlaylistTokenIds(compiledTween.playlistTokenIds, currentPlaylistId, hasCurrentPlaylist)) {
                 continue;
             }
 

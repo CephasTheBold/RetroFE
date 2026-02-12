@@ -25,7 +25,7 @@ TweenSet::CompiledTweenEntry TweenSet::compileTween(const Tween& tween) {
         tween.startDefined,
         tween.startValue(),
         tween.endValue(),
-        tween.playlistTokens()
+        tween.playlistTokenIds()
     };
 }
 

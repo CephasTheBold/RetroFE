@@ -21,6 +21,7 @@
 #include <optional>
 #include <vector>
 #include <cstddef>
+#include <cstdint>
 
 class ViewInfo;
 
@@ -41,6 +42,8 @@ public:
     static std::optional<TweenProperty> getTweenProperty(const std::string& name);
     bool matchesPlaylist(const std::string& currentPlaylist) const;
     static bool matchesPlaylistTokens(const std::vector<std::string>& tokens, const std::string& currentPlaylist);
+    static uint32_t playlistTokenId(const std::string& token);
+    static bool matchesPlaylistTokenIds(const std::vector<uint32_t>& tokenIds, uint32_t currentPlaylistId, bool hasCurrentPlaylist);
     TweenAlgorithm algorithm() const { return type; }
     float startValue() const { return start; }
     float endValue() const { return end; }
@@ -52,7 +55,9 @@ public:
     bool   startDefined{ true };
     std::string playlistFilter;
     const std::vector<std::string>& playlistTokens() const { return playlistFilterTokens; }
+    const std::vector<uint32_t>& playlistTokenIds() const { return playlistFilterTokenIds; }
     std::vector<std::string> playlistFilterTokens;
+    std::vector<uint32_t> playlistFilterTokenIds;
 
 private:
     // Easing functions use a normalized progress value for calculation.
@@ -82,6 +87,8 @@ private:
 
     static std::unordered_map<std::string, TweenAlgorithm> tweenTypeMap_;
     static std::unordered_map<std::string, TweenProperty> tweenPropertyMap_;
+    static std::unordered_map<std::string, uint32_t> playlistTokenIdMap_;
+    static uint32_t nextPlaylistTokenId_;
 
     TweenAlgorithm type;
     float start;

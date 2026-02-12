@@ -21,6 +21,7 @@
 #include <string>
 #include <optional>
 #include <sstream>
+#include <mutex>
 
 namespace {
 std::string trimPlaylistToken(const std::string& token) {
@@ -84,6 +85,10 @@ std::unordered_map<std::string, TweenProperty> Tween::tweenPropertyMap_ = {
     {"restart", TWEEN_PROPERTY_RESTART}
 };
 
+std::unordered_map<std::string, uint32_t> Tween::playlistTokenIdMap_ = {};
+uint32_t Tween::nextPlaylistTokenId_ = 1;
+
+
 Tween::Tween(TweenProperty property, TweenAlgorithm type, float start, float end, float duration, const std::string& playlistFilter)
     : property(property)
     , duration(duration)
@@ -97,7 +102,8 @@ Tween::Tween(TweenProperty property, TweenAlgorithm type, float start, float end
         while (std::getline(ss, playlist, ',')) {
             playlist = trimPlaylistToken(playlist);
             if (!playlist.empty()) {
-                playlistFilterTokens.push_back(std::move(playlist));
+                playlistFilterTokens.push_back(playlist);
+                playlistFilterTokenIds.push_back(playlistTokenId(playlist));
             }
         }
     }
@@ -111,8 +117,34 @@ bool Tween::matchesPlaylistTokens(const std::vector<std::string>& tokens, const 
     return std::find(tokens.begin(), tokens.end(), currentPlaylist) != tokens.end();
 }
 
+uint32_t Tween::playlistTokenId(const std::string& token) {
+    static std::mutex playlistTokenIdMapMutex;
+    std::lock_guard<std::mutex> lock(playlistTokenIdMapMutex);
+
+    auto it = playlistTokenIdMap_.find(token);
+    if (it != playlistTokenIdMap_.end()) {
+        return it->second;
+    }
+
+    const uint32_t assignedId = nextPlaylistTokenId_++;
+    playlistTokenIdMap_[token] = assignedId;
+    return assignedId;
+}
+
+bool Tween::matchesPlaylistTokenIds(const std::vector<uint32_t>& tokenIds, uint32_t currentPlaylistId, bool hasCurrentPlaylist) {
+    if (tokenIds.empty() || !hasCurrentPlaylist) {
+        return true;
+    }
+
+    return std::find(tokenIds.begin(), tokenIds.end(), currentPlaylistId) != tokenIds.end();
+}
+
 bool Tween::matchesPlaylist(const std::string& currentPlaylist) const {
-    return matchesPlaylistTokens(playlistFilterTokens, currentPlaylist);
+    if (playlistFilterTokenIds.empty() || currentPlaylist.empty()) {
+        return true;
+    }
+
+    return matchesPlaylistTokenIds(playlistFilterTokenIds, playlistTokenId(currentPlaylist), true);
 }
 
 std::optional<TweenProperty> Tween::getTweenProperty(const std::string& name) {

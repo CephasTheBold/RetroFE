@@ -18,6 +18,7 @@
 #include "Tween.h"
 #include <vector>
 #include <memory>
+#include <cstdint>
 
 class TweenSet
 {
@@ -29,7 +30,7 @@ public:
         bool startDefined;
         float startValue;
         float endValue;
-        std::vector<std::string> playlistTokens;
+        std::vector<uint32_t> playlistTokenIds;
     };
 
     TweenSet();
