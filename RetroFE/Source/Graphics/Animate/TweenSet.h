@@ -38,6 +38,7 @@ public:
     TweenSet& operator=(const TweenSet& other);
     ~TweenSet();
     void push(std::unique_ptr<Tween> tween);
+    void pushCompiled(CompiledTweenEntry tween);
     void clear();
     const std::vector<CompiledTweenEntry>& compiledTweens() const;
 

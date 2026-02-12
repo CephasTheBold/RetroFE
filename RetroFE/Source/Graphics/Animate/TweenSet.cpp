@@ -51,6 +51,11 @@ void TweenSet::push(std::unique_ptr<Tween> tween) {
     }
 }
 
+
+void TweenSet::pushCompiled(CompiledTweenEntry tween) {
+    compiledSet_.push_back(std::move(tween));
+}
+
 void TweenSet::clear() {
     compiledSet_.clear();
 }
