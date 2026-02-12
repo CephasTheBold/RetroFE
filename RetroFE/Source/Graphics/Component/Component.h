@@ -84,10 +84,11 @@ protected:
 private:
 
     struct TweenEvaluation {
-        const Tween* tween;
         TweenProperty property;
         double elapsedTime;
+        float duration;
         float startValue;
+        float endValue;
         float value;
     };
 

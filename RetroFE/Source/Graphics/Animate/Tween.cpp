@@ -103,12 +103,16 @@ Tween::Tween(TweenProperty property, TweenAlgorithm type, float start, float end
     }
 }
 
-bool Tween::matchesPlaylist(const std::string& currentPlaylist) const {
-    if (playlistFilterTokens.empty() || currentPlaylist.empty()) {
+bool Tween::matchesPlaylistTokens(const std::vector<std::string>& tokens, const std::string& currentPlaylist) {
+    if (tokens.empty() || currentPlaylist.empty()) {
         return true;
     }
 
-    return std::find(playlistFilterTokens.begin(), playlistFilterTokens.end(), currentPlaylist) != playlistFilterTokens.end();
+    return std::find(tokens.begin(), tokens.end(), currentPlaylist) != tokens.end();
+}
+
+bool Tween::matchesPlaylist(const std::string& currentPlaylist) const {
+    return matchesPlaylistTokens(playlistFilterTokens, currentPlaylist);
 }
 
 std::optional<TweenProperty> Tween::getTweenProperty(const std::string& name) {

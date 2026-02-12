@@ -40,6 +40,7 @@ public:
     static TweenAlgorithm getTweenType(const std::string& name);
     static std::optional<TweenProperty> getTweenProperty(const std::string& name);
     bool matchesPlaylist(const std::string& currentPlaylist) const;
+    static bool matchesPlaylistTokens(const std::vector<std::string>& tokens, const std::string& currentPlaylist);
     TweenAlgorithm algorithm() const { return type; }
     float startValue() const { return start; }
     float endValue() const { return end; }
@@ -50,6 +51,7 @@ public:
     float  duration;
     bool   startDefined{ true };
     std::string playlistFilter;
+    const std::vector<std::string>& playlistTokens() const { return playlistFilterTokens; }
     std::vector<std::string> playlistFilterTokens;
 
 private:

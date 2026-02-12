@@ -252,8 +252,10 @@ bool Component::animate() {
         auto tweens = sharedTweens->tweenSet(currentTweenIndex_);
         if (!tweens) return true; // Additional check for safety
 
+        const auto& compiledTweens = tweens->compiledTweens();
+
         tweenEvaluations_.clear();
-        tweenEvaluations_.reserve(tweens->size());
+        tweenEvaluations_.reserve(compiledTweens.size());
         for (auto& bucket : tweenAlgorithmBuckets_) {
             bucket.clear();
         }
@@ -287,34 +289,34 @@ bool Component::animate() {
             }
         };
 
-        for (unsigned int i = 0; i < tweens->size(); i++) {
-            const Tween* tween = tweens->getTween(i); // Ensure const correctness
-            if (!tween || !tween->matchesPlaylist(playlistName)) {
+        for (const auto& compiledTween : compiledTweens) {
+            if (!Tween::matchesPlaylistTokens(compiledTween.playlistTokens, playlistName)) {
                 continue;
             }
 
             double elapsedTime = elapsedTweenTime_;
-            if (elapsedTime < tween->duration) {
+            if (elapsedTime < compiledTween.duration) {
                 currentDone = false;
             }
             else {
-                elapsedTime = tween->duration;
+                elapsedTime = compiledTween.duration;
             }
 
-            const auto algorithmIndex = static_cast<size_t>(tween->algorithm());
+            const auto algorithmIndex = static_cast<size_t>(compiledTween.algorithm);
             if (algorithmIndex >= kTweenAlgorithmCount) {
                 continue;
             }
 
-            const float resolvedStartValue = tween->startDefined
-                ? tween->startValue()
-                : getStoreValueForProperty(tween->property);
+            const float resolvedStartValue = compiledTween.startDefined
+                ? compiledTween.startValue
+                : getStoreValueForProperty(compiledTween.property);
 
             TweenEvaluation evaluation {
-                tween,
-                tween->property,
+                compiledTween.property,
                 elapsedTime,
+                compiledTween.duration,
                 resolvedStartValue,
+                compiledTween.endValue,
                 0.0f
             };
 
@@ -343,8 +345,8 @@ bool Component::animate() {
 
             for (const size_t evaluationIndex : bucket) {
                 auto& evaluation = tweenEvaluations_[evaluationIndex];
-                const float endValue = evaluation.tween->endValue();
-                const float duration = evaluation.tween->duration;
+                const float endValue = evaluation.endValue;
+                const float duration = evaluation.duration;
 
                 if (duration <= 0.0f) {
                     evaluation.value = endValue;
@@ -465,7 +467,7 @@ bool Component::animate() {
                     break;
 
                 case TWEEN_PROPERTY_RESTART:
-                    baseViewInfo.Restart = (evaluation.tween->duration != 0.0f) && (evaluation.elapsedTime == 0.0);
+                    baseViewInfo.Restart = (evaluation.duration != 0.0f) && (evaluation.elapsedTime == 0.0);
                     break;
             }
         }
