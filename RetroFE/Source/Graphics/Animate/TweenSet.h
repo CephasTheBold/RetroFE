@@ -39,7 +39,6 @@ public:
     ~TweenSet();
     void push(std::unique_ptr<Tween> tween);
     void clear();
-    Tween* getTween(unsigned int index) const;
     const std::vector<CompiledTweenEntry>& compiledTweens() const;
 
     size_t size() const;
@@ -47,6 +46,5 @@ public:
 private:
     static CompiledTweenEntry compileTween(const Tween& tween);
 
-    std::vector<std::unique_ptr<Tween>> set_;
     std::vector<CompiledTweenEntry> compiledSet_;
 };

@@ -29,29 +29,16 @@ TweenSet::CompiledTweenEntry TweenSet::compileTween(const Tween& tween) {
     };
 }
 
-TweenSet::TweenSet(const TweenSet& copy) {
-    set_.reserve(copy.set_.size());
-    compiledSet_.reserve(copy.compiledSet_.size());
-    for (const auto& tween : copy.set_) {
-        set_.push_back(std::make_unique<Tween>(*tween));
-    }
-    compiledSet_ = copy.compiledSet_;
+TweenSet::TweenSet(const TweenSet& copy)
+    : compiledSet_(copy.compiledSet_) {
 }
 
 TweenSet& TweenSet::operator=(const TweenSet& other) {
     if (this != &other) {
-        set_.clear(); // Clear existing tweens
-        compiledSet_.clear();
-        set_.reserve(other.set_.size());
-        compiledSet_.reserve(other.compiledSet_.size());
-        for (const auto& tween : other.set_) {
-            set_.push_back(std::make_unique<Tween>(*tween));
-        }
         compiledSet_ = other.compiledSet_;
     }
     return *this;
 }
-
 
 TweenSet::~TweenSet()
 {
@@ -62,19 +49,10 @@ void TweenSet::push(std::unique_ptr<Tween> tween) {
     if (tween) {
         compiledSet_.push_back(compileTween(*tween));
     }
-    set_.push_back(std::move(tween));
 }
 
 void TweenSet::clear() {
-    set_.clear();
     compiledSet_.clear();
-}
-
-Tween* TweenSet::getTween(unsigned int index) const {
-    if (index < set_.size()) {
-        return set_[index].get();
-    }
-    return nullptr;
 }
 
 const std::vector<TweenSet::CompiledTweenEntry>& TweenSet::compiledTweens() const {
