@@ -241,22 +241,11 @@ bool Component::animate() {
         auto tweens = sharedTweens->tweenSet(currentTweenIndex_);
         if (!tweens) return true; // Additional check for safety
 
-        std::string playlist;
-        bool foundFiltered;
-
         for (unsigned int i = 0; i < tweens->size(); i++) {
             const Tween* tween = tweens->getTween(i); // Ensure const correctness
 
-            if (!tween->playlistFilter.empty() && !playlistName.empty()) {
-                foundFiltered = false;
-                std::stringstream ss(tween->playlistFilter);
-                while (getline(ss, playlist, ',')) {
-                    if (playlistName == playlist) {
-                        foundFiltered = true;
-                        break;
-                    }
-                }
-                if (!foundFiltered) continue;
+            if (!tween->matchesPlaylist(playlistName)) {
+                continue;
             }
 
             double elapsedTime = elapsedTweenTime_;

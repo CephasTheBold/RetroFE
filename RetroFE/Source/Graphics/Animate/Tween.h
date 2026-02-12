@@ -19,6 +19,7 @@
 #include <string>
 #include <unordered_map>
 #include <optional>
+#include <vector>
 
 class ViewInfo;
 
@@ -36,11 +37,13 @@ public:
 
     static TweenAlgorithm getTweenType(const std::string& name);
     static std::optional<TweenProperty> getTweenProperty(const std::string& name);
+    bool matchesPlaylist(const std::string& currentPlaylist) const;
 
     TweenProperty property;
     float  duration;
     bool   startDefined{ true };
     std::string playlistFilter;
+    std::vector<std::string> playlistFilterTokens;
 
 private:
     // Easing functions use a normalized progress value for calculation.

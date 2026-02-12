@@ -20,6 +20,20 @@
 #include <math.h>
 #include <string>
 #include <optional>
+#include <sstream>
+
+namespace {
+    std::string trimPlaylistToken(const std::string& token) {
+        const size_t first = token.find_first_not_of(" \t\n\r");
+        if (first == std::string::npos) {
+            return "";
+        }
+
+        const size_t last = token.find_last_not_of(" \t\n\r");
+        return token.substr(first, last - first + 1);
+    }
+}
+
 
 std::unordered_map<std::string, TweenAlgorithm> Tween::tweenTypeMap_ = {
     {"easeinquadratic", EASE_IN_QUADRATIC},
@@ -78,6 +92,25 @@ Tween::Tween(TweenProperty property, TweenAlgorithm type, float start, float end
     , type(type)
     , start(start)
     , end(end) {
+    if (!playlistFilter.empty()) {
+        std::stringstream ss(playlistFilter);
+        std::string playlist;
+        while (std::getline(ss, playlist, ',')) {
+            playlist = trimPlaylistToken(playlist);
+            if (!playlist.empty()) {
+                playlistFilterTokens.push_back(std::move(playlist));
+            }
+        }
+    }
+}
+
+bool Tween::matchesPlaylist(const std::string& currentPlaylist) const {
+    if (playlistFilterTokens.empty() || currentPlaylist.empty()) {
+        return true;
+    }
+
+    return std::find(playlistFilterTokens.begin(), playlistFilterTokens.end(), currentPlaylist) != playlistFilterTokens.end();
+
 }
 
 std::optional<TweenProperty> Tween::getTweenProperty(const std::string& name) {
