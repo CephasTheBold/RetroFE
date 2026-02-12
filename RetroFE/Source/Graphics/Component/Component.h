@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <array>
 #include <vector>
 
 #include "../../SDL.h"
@@ -82,6 +83,16 @@ protected:
 
 private:
 
+    struct TweenEvaluation {
+        const Tween* tween;
+        TweenProperty property;
+        double elapsedTime;
+        float startValue;
+        float value;
+    };
+
+    static constexpr size_t kTweenAlgorithmCount = static_cast<size_t>(EASE_INOUT_CIRCULAR) + 1;
+
     bool animate();
 
     std::shared_ptr<AnimationEvents> tweens_; // Use shared_ptr for tweens_
@@ -99,5 +110,13 @@ private:
     bool         animationDoneRemove_;
     int          menuIndex_;
     int          id_;
+
+    std::vector<TweenEvaluation> tweenEvaluations_;
+    std::array<std::vector<size_t>, kTweenAlgorithmCount> tweenAlgorithmBuckets_;
+    std::vector<float> tweenProgressBatch_;
+    std::vector<float> tweenStartBatch_;
+    std::vector<float> tweenChangeBatch_;
+    std::vector<float> tweenValueBatch_;
+    std::vector<size_t> tweenOutputIndices_;
 
 };

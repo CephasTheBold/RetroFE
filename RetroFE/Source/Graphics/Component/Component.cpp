@@ -19,7 +19,6 @@
 #include "../../Utility/Log.h"
 #include "../../SDL.h"
 #include "../PageBuilder.h"
-#include <array>
 #include <vector>
 
 Component::Component(Page &p)
@@ -59,6 +58,16 @@ void Component::freeGraphicsMemory() {
     currentTweenIndex_ = 0;
     currentTweenComplete_ = true;
     elapsedTweenTime_ = 0;
+
+    tweenEvaluations_.clear();
+    for (auto& bucket : tweenAlgorithmBuckets_) {
+        bucket.clear();
+    }
+    tweenProgressBatch_.clear();
+    tweenStartBatch_.clear();
+    tweenChangeBatch_.clear();
+    tweenValueBatch_.clear();
+    tweenOutputIndices_.clear();
 
     if (backgroundTexture_) {
         SDL_DestroyTexture(backgroundTexture_);
@@ -243,18 +252,11 @@ bool Component::animate() {
         auto tweens = sharedTweens->tweenSet(currentTweenIndex_);
         if (!tweens) return true; // Additional check for safety
 
-        struct TweenEvaluation {
-            const Tween* tween;
-            TweenProperty property;
-            double elapsedTime;
-            float startValue;
-            float value;
-        };
-
-        constexpr size_t tweenAlgorithmCount = static_cast<size_t>(EASE_INOUT_CIRCULAR) + 1;
-        std::array<std::vector<size_t>, tweenAlgorithmCount> algorithmBuckets;
-        std::vector<TweenEvaluation> evaluations;
-        evaluations.reserve(tweens->size());
+        tweenEvaluations_.clear();
+        tweenEvaluations_.reserve(tweens->size());
+        for (auto& bucket : tweenAlgorithmBuckets_) {
+            bucket.clear();
+        }
 
         auto getStoreValueForProperty = [this](TweenProperty property) -> float {
             switch (property) {
@@ -300,7 +302,7 @@ bool Component::animate() {
             }
 
             const auto algorithmIndex = static_cast<size_t>(tween->algorithm());
-            if (algorithmIndex >= tweenAlgorithmCount) {
+            if (algorithmIndex >= kTweenAlgorithmCount) {
                 continue;
             }
 
@@ -316,31 +318,31 @@ bool Component::animate() {
                 0.0f
             };
 
-            const size_t evaluationIndex = evaluations.size();
-            evaluations.push_back(evaluation);
-            algorithmBuckets[algorithmIndex].push_back(evaluationIndex);
+            const size_t evaluationIndex = tweenEvaluations_.size();
+            tweenEvaluations_.push_back(evaluation);
+            tweenAlgorithmBuckets_[algorithmIndex].push_back(evaluationIndex);
         }
 
-        for (size_t algorithmIndex = 0; algorithmIndex < tweenAlgorithmCount; ++algorithmIndex) {
+        for (size_t algorithmIndex = 0; algorithmIndex < kTweenAlgorithmCount; ++algorithmIndex) {
             const auto algorithm = static_cast<TweenAlgorithm>(algorithmIndex);
-            const auto& bucket = algorithmBuckets[algorithmIndex];
+            const auto& bucket = tweenAlgorithmBuckets_[algorithmIndex];
             if (bucket.empty()) {
                 continue;
             }
 
-            std::vector<float> progress;
-            std::vector<float> start;
-            std::vector<float> change;
-            std::vector<float> values;
-            std::vector<size_t> outputIndices;
-            progress.reserve(bucket.size());
-            start.reserve(bucket.size());
-            change.reserve(bucket.size());
-            values.reserve(bucket.size());
-            outputIndices.reserve(bucket.size());
+            tweenProgressBatch_.clear();
+            tweenStartBatch_.clear();
+            tweenChangeBatch_.clear();
+            tweenValueBatch_.clear();
+            tweenOutputIndices_.clear();
+            tweenProgressBatch_.reserve(bucket.size());
+            tweenStartBatch_.reserve(bucket.size());
+            tweenChangeBatch_.reserve(bucket.size());
+            tweenValueBatch_.reserve(bucket.size());
+            tweenOutputIndices_.reserve(bucket.size());
 
             for (const size_t evaluationIndex : bucket) {
-                auto& evaluation = evaluations[evaluationIndex];
+                auto& evaluation = tweenEvaluations_[evaluationIndex];
                 const float endValue = evaluation.tween->endValue();
                 const float duration = evaluation.tween->duration;
 
@@ -349,30 +351,30 @@ bool Component::animate() {
                     continue;
                 }
 
-                progress.push_back(static_cast<float>(evaluation.elapsedTime) / duration);
-                start.push_back(evaluation.startValue);
-                change.push_back(endValue - evaluation.startValue);
-                outputIndices.push_back(evaluationIndex);
+                tweenProgressBatch_.push_back(static_cast<float>(evaluation.elapsedTime) / duration);
+                tweenStartBatch_.push_back(evaluation.startValue);
+                tweenChangeBatch_.push_back(endValue - evaluation.startValue);
+                tweenOutputIndices_.push_back(evaluationIndex);
             }
 
-            if (outputIndices.empty()) {
+            if (tweenOutputIndices_.empty()) {
                 continue;
             }
 
-            values.resize(outputIndices.size());
+            tweenValueBatch_.resize(tweenOutputIndices_.size());
             Tween::evaluateBatch(algorithm,
-                progress.data(),
-                start.data(),
-                change.data(),
-                values.data(),
-                values.size());
+                tweenProgressBatch_.data(),
+                tweenStartBatch_.data(),
+                tweenChangeBatch_.data(),
+                tweenValueBatch_.data(),
+                tweenValueBatch_.size());
 
-            for (size_t i = 0; i < outputIndices.size(); ++i) {
-                evaluations[outputIndices[i]].value = values[i];
+            for (size_t i = 0; i < tweenOutputIndices_.size(); ++i) {
+                tweenEvaluations_[tweenOutputIndices_[i]].value = tweenValueBatch_[i];
             }
         }
 
-        for (const auto& evaluation : evaluations) {
+        for (const auto& evaluation : tweenEvaluations_) {
             const float value = evaluation.value;
             switch (evaluation.property) {
                 case TWEEN_PROPERTY_X:
