@@ -20,6 +20,19 @@
 #include <math.h>
 #include <string>
 #include <optional>
+#include <sstream>
+
+namespace {
+std::string trimPlaylistToken(const std::string& token) {
+    const size_t first = token.find_first_not_of(" \t\n\r");
+    if (first == std::string::npos) {
+        return "";
+    }
+
+    const size_t last = token.find_last_not_of(" \t\n\r");
+    return token.substr(first, last - first + 1);
+}
+}
 
 std::unordered_map<std::string, TweenAlgorithm> Tween::tweenTypeMap_ = {
     {"easeinquadratic", EASE_IN_QUADRATIC},
@@ -78,6 +91,24 @@ Tween::Tween(TweenProperty property, TweenAlgorithm type, float start, float end
     , type(type)
     , start(start)
     , end(end) {
+    if (!playlistFilter.empty()) {
+        std::stringstream ss(playlistFilter);
+        std::string playlist;
+        while (std::getline(ss, playlist, ',')) {
+            playlist = trimPlaylistToken(playlist);
+            if (!playlist.empty()) {
+                playlistFilterTokens.push_back(std::move(playlist));
+            }
+        }
+    }
+}
+
+bool Tween::matchesPlaylist(const std::string& currentPlaylist) const {
+    if (playlistFilterTokens.empty() || currentPlaylist.empty()) {
+        return true;
+    }
+
+    return std::find(playlistFilterTokens.begin(), playlistFilterTokens.end(), currentPlaylist) != playlistFilterTokens.end();
 }
 
 std::optional<TweenProperty> Tween::getTweenProperty(const std::string& name) {
@@ -101,6 +132,107 @@ TweenAlgorithm Tween::getTweenType(const std::string& name) {
         return it->second;
 
     return LINEAR;
+}
+
+
+Tween::EasingKernel Tween::getKernel(TweenAlgorithm type) {
+    switch (type) {
+        case EASE_IN_QUADRATIC:      return &Tween::easeInQuadratic;
+        case EASE_OUT_QUADRATIC:     return &Tween::easeOutQuadratic;
+        case EASE_INOUT_QUADRATIC:   return &Tween::easeInOutQuadratic;
+        case EASE_IN_CUBIC:          return &Tween::easeInCubic;
+        case EASE_OUT_CUBIC:         return &Tween::easeOutCubic;
+        case EASE_INOUT_CUBIC:       return &Tween::easeInOutCubic;
+        case EASE_IN_QUARTIC:        return &Tween::easeInQuartic;
+        case EASE_OUT_QUARTIC:       return &Tween::easeOutQuartic;
+        case EASE_INOUT_QUARTIC:     return &Tween::easeInOutQuartic;
+        case EASE_IN_QUINTIC:        return &Tween::easeInQuintic;
+        case EASE_OUT_QUINTIC:       return &Tween::easeOutQuintic;
+        case EASE_INOUT_QUINTIC:     return &Tween::easeInOutQuintic;
+        case EASE_IN_SINE:           return &Tween::easeInSine;
+        case EASE_OUT_SINE:          return &Tween::easeOutSine;
+        case EASE_INOUT_SINE:        return &Tween::easeInOutSine;
+        case EASE_IN_EXPONENTIAL:    return &Tween::easeInExponential;
+        case EASE_OUT_EXPONENTIAL:   return &Tween::easeOutExponential;
+        case EASE_INOUT_EXPONENTIAL: return &Tween::easeInOutExponential;
+        case EASE_IN_CIRCULAR:       return &Tween::easeInCircular;
+        case EASE_OUT_CIRCULAR:      return &Tween::easeOutCircular;
+        case EASE_INOUT_CIRCULAR:    return &Tween::easeInOutCircular;
+        case LINEAR:
+        default:                     return &Tween::linear;
+    }
+}
+
+void Tween::evaluateBatch(TweenAlgorithm type, const float* progress, const float* start, const float* change, float* out, size_t count) {
+    switch (type) {
+        case EASE_IN_QUADRATIC:
+            for (size_t i = 0; i < count; ++i) out[i] = easeInQuadratic(progress[i], start[i], change[i]);
+            break;
+        case EASE_OUT_QUADRATIC:
+            for (size_t i = 0; i < count; ++i) out[i] = easeOutQuadratic(progress[i], start[i], change[i]);
+            break;
+        case EASE_INOUT_QUADRATIC:
+            for (size_t i = 0; i < count; ++i) out[i] = easeInOutQuadratic(progress[i], start[i], change[i]);
+            break;
+        case EASE_IN_CUBIC:
+            for (size_t i = 0; i < count; ++i) out[i] = easeInCubic(progress[i], start[i], change[i]);
+            break;
+        case EASE_OUT_CUBIC:
+            for (size_t i = 0; i < count; ++i) out[i] = easeOutCubic(progress[i], start[i], change[i]);
+            break;
+        case EASE_INOUT_CUBIC:
+            for (size_t i = 0; i < count; ++i) out[i] = easeInOutCubic(progress[i], start[i], change[i]);
+            break;
+        case EASE_IN_QUARTIC:
+            for (size_t i = 0; i < count; ++i) out[i] = easeInQuartic(progress[i], start[i], change[i]);
+            break;
+        case EASE_OUT_QUARTIC:
+            for (size_t i = 0; i < count; ++i) out[i] = easeOutQuartic(progress[i], start[i], change[i]);
+            break;
+        case EASE_INOUT_QUARTIC:
+            for (size_t i = 0; i < count; ++i) out[i] = easeInOutQuartic(progress[i], start[i], change[i]);
+            break;
+        case EASE_IN_QUINTIC:
+            for (size_t i = 0; i < count; ++i) out[i] = easeInQuintic(progress[i], start[i], change[i]);
+            break;
+        case EASE_OUT_QUINTIC:
+            for (size_t i = 0; i < count; ++i) out[i] = easeOutQuintic(progress[i], start[i], change[i]);
+            break;
+        case EASE_INOUT_QUINTIC:
+            for (size_t i = 0; i < count; ++i) out[i] = easeInOutQuintic(progress[i], start[i], change[i]);
+            break;
+        case EASE_IN_SINE:
+            for (size_t i = 0; i < count; ++i) out[i] = easeInSine(progress[i], start[i], change[i]);
+            break;
+        case EASE_OUT_SINE:
+            for (size_t i = 0; i < count; ++i) out[i] = easeOutSine(progress[i], start[i], change[i]);
+            break;
+        case EASE_INOUT_SINE:
+            for (size_t i = 0; i < count; ++i) out[i] = easeInOutSine(progress[i], start[i], change[i]);
+            break;
+        case EASE_IN_EXPONENTIAL:
+            for (size_t i = 0; i < count; ++i) out[i] = easeInExponential(progress[i], start[i], change[i]);
+            break;
+        case EASE_OUT_EXPONENTIAL:
+            for (size_t i = 0; i < count; ++i) out[i] = easeOutExponential(progress[i], start[i], change[i]);
+            break;
+        case EASE_INOUT_EXPONENTIAL:
+            for (size_t i = 0; i < count; ++i) out[i] = easeInOutExponential(progress[i], start[i], change[i]);
+            break;
+        case EASE_IN_CIRCULAR:
+            for (size_t i = 0; i < count; ++i) out[i] = easeInCircular(progress[i], start[i], change[i]);
+            break;
+        case EASE_OUT_CIRCULAR:
+            for (size_t i = 0; i < count; ++i) out[i] = easeOutCircular(progress[i], start[i], change[i]);
+            break;
+        case EASE_INOUT_CIRCULAR:
+            for (size_t i = 0; i < count; ++i) out[i] = easeInOutCircular(progress[i], start[i], change[i]);
+            break;
+        case LINEAR:
+        default:
+            for (size_t i = 0; i < count; ++i) out[i] = linear(progress[i], start[i], change[i]);
+            break;
+    }
 }
 
 float Tween::animate(double elapsedTime) const {

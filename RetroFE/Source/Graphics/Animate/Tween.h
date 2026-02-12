@@ -19,11 +19,14 @@
 #include <string>
 #include <unordered_map>
 #include <optional>
+#include <vector>
+#include <cstddef>
 
 class ViewInfo;
 
 class Tween {
 public:
+    using EasingKernel = float (*)(float, float, float);
 
     Tween(TweenProperty property, TweenAlgorithm type, float start, float end, float duration, const std::string& playlistFilter = "");
 
@@ -36,11 +39,18 @@ public:
 
     static TweenAlgorithm getTweenType(const std::string& name);
     static std::optional<TweenProperty> getTweenProperty(const std::string& name);
+    bool matchesPlaylist(const std::string& currentPlaylist) const;
+    TweenAlgorithm algorithm() const { return type; }
+    float startValue() const { return start; }
+    float endValue() const { return end; }
+    static EasingKernel getKernel(TweenAlgorithm type);
+    static void evaluateBatch(TweenAlgorithm type, const float* progress, const float* start, const float* change, float* out, size_t count);
 
     TweenProperty property;
     float  duration;
     bool   startDefined{ true };
     std::string playlistFilter;
+    std::vector<std::string> playlistFilterTokens;
 
 private:
     // Easing functions use a normalized progress value for calculation.
