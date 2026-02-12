@@ -41,6 +41,21 @@
 #include <gst/video/video.h>
 #include "../../Video/VideoPool.h"
 
+static bool is_audio_only_path(std::string_view p) {
+	auto dot = p.find_last_of('.');
+	if (dot == std::string_view::npos) return false;
+	auto ext = p.substr(dot);
+
+	auto lower = [](char c) { return (c >= 'A' && c <= 'Z') ? char(c + ('a' - 'A')) : c; };
+
+	// ".mp3"
+	if (ext.size() == 4 &&
+		lower(ext[0]) == '.' && lower(ext[1]) == 'm' && lower(ext[2]) == 'p' && lower(ext[3]) == '3')
+		return true;
+
+	return false;
+}
+
 VideoComponent::VideoComponent(Page& p, const std::string& videoFile, int monitor, int numLoops, bool softOverlay, int listId, const int* perspectiveCorners)
 	: Component(p), videoFile_(videoFile), softOverlay_(softOverlay), numLoops_(numLoops), monitor_(monitor), listId_(listId), currentPage_(&p) {
 	if (perspectiveCorners) {
@@ -55,6 +70,7 @@ VideoComponent::~VideoComponent() {
 }
 
 bool VideoComponent::update(float dt) {
+	
 	// --- complete pending retarget on the main thread ---
 	if (videoInst_ && pendingRetarget_) {
 		if (auto* gst = dynamic_cast<GStreamerVideo*>(videoInst_.get())) {
@@ -84,7 +100,8 @@ bool VideoComponent::update(float dt) {
 	}
 
 	// Dimensions once available
-	if (!dimensionsUpdated_) {
+	const bool audioOnly = !hasVideoStream();
+	if (!audioOnly && !dimensionsUpdated_) {
 		const int w = videoInst_->getWidth();
 		const int h = videoInst_->getHeight();
 		if (w <= 0 || h <= 0) {
@@ -96,6 +113,9 @@ bool VideoComponent::update(float dt) {
 		LOG_DEBUG("VideoComponent",
 			"Video dimensions ready: " + std::to_string(w) + "x" + std::to_string(h) +
 			" for " + videoFile_);
+	}
+	else if (audioOnly && !dimensionsUpdated_) {
+		dimensionsUpdated_ = true; // never wait on w/h for music
 	}
 
 	// Volume
@@ -128,7 +148,7 @@ bool VideoComponent::update(float dt) {
 	IVideo::VideoState desired = IVideo::VideoState::None;
 
 	// Auto-play when visible (original behavior)
-	if (visibleNow) {
+	if (visibleNow && !hasFinishedLoops()) {
 		desired = IVideo::VideoState::Playing;
 	}
 
@@ -368,4 +388,21 @@ bool VideoComponent::isPlaying() {
 		return false;
 	}
 	return videoInst_->isPlaying();
+}
+
+bool VideoComponent::hasFinishedLoops(){
+	if (!videoInst_) {
+		return true;
+	}
+	return videoInst_->hasFinishedLoops();
+}
+
+bool VideoComponent::hasVideoStream() {
+	if (!videoInst_) {
+		return false;
+	}
+	if (auto* gst = dynamic_cast<GStreamerVideo*>(videoInst_.get())) {
+		return gst->hasVideoStream();
+	}
+	return true; // assume non-Gst videos have video stream
 }

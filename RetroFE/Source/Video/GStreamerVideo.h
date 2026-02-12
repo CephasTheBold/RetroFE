@@ -1,5 +1,5 @@
 /* This file is part of RetroFE.
-*
+
 * RetroFE is free software: you can redistribute it and/or modify
 * it under the terms of the GNU General Public License as published by
 * the Free Software Foundation, either version 3 of the License, or
@@ -84,6 +84,12 @@ public:
 	bool isPaused() override;
 	void setSoftOverlay(bool value);
 	void setPerspectiveCorners(const int* corners);
+	bool hasVideoStream() const { return hasVideoStream_; }
+
+
+	bool hasFinishedLoops() const;
+
+	void detectStreamTypes();
 
 	bool hasError() const override {
 		return hasError_.load(std::memory_order_acquire);
@@ -197,9 +203,11 @@ private:
 
 	std::atomic<bool> notifyOnNone_{ false };
 	std::atomic<bool> unloading_{ false };
+	std::atomic<bool> loopsFinished_{ false }; // Indicates when all loops have finished	
+	std::atomic<bool> hasVideoStream_{ true };  // Assume true until proven otherwise
 
 	// Audio bus integration
-	AudioBus::SourceId videoSourceId_{ 0 };   // ID of this video’s source in AudioBus
+	AudioBus::SourceId videoSourceId_{ 0 };   // ID of this videoâ€™s source in AudioBus
 	GstElement* audioSink_{ nullptr };        // GStreamer appsink for audio
 	std::atomic<bool> audioRun_{ false };     // Control flag for the feeder loop
 };

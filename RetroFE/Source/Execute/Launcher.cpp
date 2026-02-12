@@ -208,6 +208,12 @@ bool Launcher::run(std::string collection, Item* collectionItem, Page* currentPa
     // Flags
     bool reboot = false;
     getPropChainBool("reboot", reboot);
+    bool quitComboEnabled = true;
+    getPropChainBool("quitCombo", quitComboEnabled);
+
+    LOG_INFO("Launcher",
+        std::string("quitCombo for launcher \"") + launcherName +
+        "\": " + (quitComboEnabled ? "enabled" : "disabled"));
 
     bool unloadSDL = false;
     config_.getProperty(OPTION_UNLOADSDL, unloadSDL);
@@ -253,7 +259,7 @@ bool Launcher::run(std::string collection, Item* collectionItem, Page* currentPa
             bool animateDuringGame = true;
             config_.getProperty(OPTION_ANIMATEDURINGGAME, animateDuringGame);
             if (animateDuringGame && multiple_display) {
-                for (int i = 1; i < SDL::getScreenCount(); ++i) {
+                for (int i = 0; i < SDL::getScreenCount(); ++i) {
                     SDL_Renderer* r = SDL::getRenderer(i);
                     SDL_Texture* t = SDL::getRenderTarget(i);
                     if (!r || !t) continue;
@@ -481,8 +487,13 @@ bool Launcher::run(std::string collection, Item* collectionItem, Page* currentPa
         }
         else { // Normal mode
             LOG_INFO("Launcher", "Waiting for launched process to complete. Press quit combo to force quit.");
-            auto quitCheck = [&inputMonitor, launchingNestedRetroFE]() {
-                if (launchingNestedRetroFE) return false; // child RetroFE owns quit
+            auto quitCheck = [&inputMonitor, launchingNestedRetroFE, quitComboEnabled]() {
+                // Nested RetroFE always owns quit regardless of config
+                if (launchingNestedRetroFE) return false;
+
+                // If quitCombo is disabled for this launcher, never treat quit as a kill signal
+                if (!quitComboEnabled) return false;
+
                 return inputMonitor.checkInputEvents() == InputDetectionResult::QuitInput;
                 };
             WaitResult result = processManager->wait(0, quitCheck, onFrameTick);

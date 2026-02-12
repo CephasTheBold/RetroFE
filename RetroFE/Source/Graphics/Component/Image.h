@@ -17,8 +17,15 @@
 #pragma once
 
 #include <string>
+#include <vector>
+#include <unordered_map>
+#include <unordered_set>
+#include <string_view>
+#include <cstdint>
+
 #include "Component.h"
 #include <SDL2/SDL.h>
+
 #if __has_include(<SDL2/SDL_image.h>)
 #include <SDL2/SDL_image.h>
 #elif __has_include(<SDL2_image/SDL_image.h>)
@@ -26,137 +33,131 @@
 #else
 #error "Cannot find SDL_image header"
 #endif
+
 #ifdef __APPLE__
 #include <webp/decode.h>
 #include <webp/demux.h>
-#elif defined(_WIN32) 
+#elif defined(_WIN32)
 #include <SDL_image.h>
 #include <decode.h>
 #include <demux.h>
-#else  // Assume Linux
+#else
 #include <webp/decode.h>
 #include <webp/demux.h>
 #endif
-#include <unordered_map>
-#include <unordered_set>
-#include <shared_mutex>
-#include <vector>
 
 class Image : public Component {
 public:
-    //-------------------------------------------------------------------------
-    // Public Interface
-    //-------------------------------------------------------------------------
     Image(const std::string& file, const std::string& altFile, Page& p,
         int monitor, bool additive, bool useTextureCaching = false);
     ~Image() override;
+
     Image(const Image&) = delete;
     Image& operator=(const Image&) = delete;
-    // Core Component Operations
+
     void allocateGraphicsMemory() override;
     void freeGraphicsMemory() override;
     void draw() override;
     std::string_view filePath() override;
 
-    // Static Cache Management
     static void cleanupTextureCache();
 
 private:
-    //-------------------------------------------------------------------------
-    // Cache Infrastructure
-    //-------------------------------------------------------------------------
+    // Interning cache for file paths so CacheKey can store string_view without allocating per lookup.
     class PathCache {
     public:
         struct CacheKey {
-            std::string_view directory;  // Reference to pooled directory path
-            std::string_view filename;   // Reference to pooled filename
-            int monitor;
+            std::string_view fullPath;
+            int monitor = 0;
 
-            bool operator==(const CacheKey& other) const {
-                return monitor == other.monitor &&
-                    directory == other.directory &&
-                    filename == other.filename;
+            // Hidden friend (clang-tidy friendly), C++17-compatible.
+            friend bool operator==(const CacheKey& a, const CacheKey& b) noexcept {
+                return a.monitor == b.monitor && a.fullPath == b.fullPath;
             }
         };
 
         struct CacheKeyHash {
-            size_t operator()(const CacheKey& key) const {
-                size_t h1 = std::hash<std::string_view>{}(key.directory);
-                size_t h2 = std::hash<std::string_view>{}(key.filename);
-                return h1 ^ (h2 << 1) ^ (std::hash<int>{}(key.monitor) << 2);
+            size_t operator()(const CacheKey& key) const noexcept {
+                size_t h1 = std::hash<std::string_view>{}(key.fullPath);
+                size_t h2 = std::hash<int>{}(key.monitor);
+
+                // hash combine
+                size_t h = h1;
+                h ^= (h2 + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2));
+                return h;
             }
         };
 
         CacheKey getKey(const std::string& filePath, int monitor);
 
+        void reserve(size_t n) {
+            fullPaths_.reserve(n);
+        }
+
     private:
-        std::unordered_set<std::string> directories_;  // Pool of unique directory paths
-        std::unordered_set<std::string> filenames_;    // Pool of unique filenames
-        std::mutex cacheMutex_;
+        std::unordered_set<std::string> fullPaths_;
     };
 
     struct CachedImage {
+        // Static: cached GPU texture (shared across instances).
         SDL_Texture* texture = nullptr;
-        SDL_Texture* animatedTexture = nullptr;     // For animated images.
+
+        // Animated: cached CPU frames + delay (shared across instances).
         int frameDelay = 0;
         std::vector<SDL_Surface*> animatedSurfaces;
     };
 
-    //-------------------------------------------------------------------------
-    // Loading Context
-    //-------------------------------------------------------------------------
     struct LoadContext {
         const std::string& filePath;
         PathCache::CacheKey cacheKey;
         CachedImage& newCachedImage;
         ViewInfo& baseViewInfo;
-        std::vector<SDL_Surface*>& animatedSurfaces;
-        int& frameDelay;
-        Uint32& lastFrameTime;
         bool useCache;
     };
 
-    //-------------------------------------------------------------------------
-    // Private Loading Functions
-    //-------------------------------------------------------------------------
-
+private:
+    // Core loading helpers
     bool loadFromCache(const LoadContext& ctx);
-    bool validateSurfaces(const std::vector<SDL_Surface*>& surfaces) const;
-    bool loadStaticImage(const std::vector<uint8_t>& buffer, LoadContext& ctx);
+    bool loadStaticImage(SDL_RWops* rw, LoadContext& ctx);
+    bool loadAnimatedGIF(SDL_RWops* rw, LoadContext& ctx);
     bool loadAnimatedWebP(const std::vector<uint8_t>& buffer, LoadContext& ctx);
-    bool loadNextWebPFrame(LoadContext& ctx);
-    bool loadAnimatedGIF(const std::vector<uint8_t>& buffer, LoadContext& ctx);
+
+    // WebP helpers
+    static bool isAnimatedWebP(const std::vector<uint8_t>& buffer);
     static bool loadFileToBuffer(const std::string& filePath, std::vector<uint8_t>& outBuffer);
 
-    // Format Detection
-    static bool isAnimatedGIF(const std::vector<uint8_t>& buffer);
-    static bool isAnimatedWebP(const std::vector<uint8_t>& buffer);
+    // Animation helpers
+    void resetAnimationState();
+    void clearInstanceResourcesForRetry();
+    bool createAnimatedStreamingTexture(int width, int height);
+    void primeAnimatedTextureIfNeeded();
 
-    //-------------------------------------------------------------------------
-    // Member Variables
-    //-------------------------------------------------------------------------
-    // Resource paths
+    // Cache init
+    static void ensureCacheReserved();
+
+private:
     std::string file_;
     std::string altFile_;
 
-    // Texture management
+    // Static GPU resource (may be cached/shared)
     SDL_Texture* texture_ = nullptr;
+    bool isUsingCachedStaticTexture_ = false;
+
+    // Animated GPU resource is ALWAYS per-instance
     SDL_Texture* animatedTexture_ = nullptr;
+
+    // Animated CPU frames may be cached/shared
     std::vector<SDL_Surface*> animatedSurfaces_;
+    bool isUsingCachedSurfaces_ = false;
 
-
-    // Animation state
+    // Animation playback state
     size_t currentFrame_ = 0;
     Uint32 lastFrameTime_ = 0;
     int frameDelay_ = 0;
 
-    // Caching control
-    bool textureIsUncached_ = false;
     bool useTextureCaching_ = false;
-    bool isUsingCachedSurfaces_ = false;
 
-    // Static cache storage
+    // Cache storage
     static PathCache pathCache_;
     static std::unordered_map<PathCache::CacheKey, CachedImage, PathCache::CacheKeyHash> textureCache_;
-    static std::shared_mutex textureCacheMutex_;
 };

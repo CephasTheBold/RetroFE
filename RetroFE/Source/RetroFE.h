@@ -80,6 +80,9 @@ private:
 	double lastFrameTimeMs_ = 0.0;
 	double lastFrameTimePointMs_ = 0.0;
 
+    double lastWorkMs_ = 0.0;
+    double lastLateUs_ = 0.0;
+
     void initializeMusicPlayer();
 
     //fps counter resources

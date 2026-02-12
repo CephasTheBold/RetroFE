@@ -70,13 +70,6 @@ void Text::draw() {
         return;
     }
 
-    if (mip) {
-        LOG_INFO("Text", "Text: '" + textData_ + "' targetSize=" +
-            std::to_string(targetFontSize) +
-            " selectedMip=" + std::to_string(mip->fontSize) +
-            " scale=" + std::to_string((mip->fontSize > 0) ? (baseViewInfo.FontSize / (float)mip->fontSize) : 1.f));  // ? Use same formula
-    }
-
     // Get textures from the selected mip level
     SDL_Texture* fillTex = mip->fillTexture;
     SDL_Texture* outlineTex = mip->outlineTexture;
@@ -243,21 +236,14 @@ void Text::draw() {
             dst.w = g.fillW * scale;
             dst.h = g.fillH * scale;
 
-            if (ch >= 65 && ch <= 90) {  // A-Z
-                LOG_INFO("Text", "Rendering '" + std::string(1, (char)ch) +
-                    "' dst.x=" + std::to_string(dst.x) +
-                    " dst.w=" + std::to_string(dst.w) +
-                    " src.w=" + std::to_string(srcFill.w));
-            }
-
             // Use correct texture (pre-loaded or dynamic)
             SDL_Texture* texToUse = isDynamic ? mip->dynamicFillTexture : fillTex;
 
-            if (ch >= 65 && ch <= 90) {
-                LOG_INFO("Text", "Char '" + std::string(1, (char)ch) +
-                    "' isDynamic=" + std::to_string(isDynamic) +
-                    " texture=" + (texToUse == fillTex ? "PRELOADED" : "DYNAMIC"));
-            }
+            //if (ch >= 65 && ch <= 90) {
+            //    LOG_INFO("Text", "Char '" + std::string(1, (char)ch) +
+            //        "' isDynamic=" + std::to_string(isDynamic) +
+            //        " texture=" + (texToUse == fillTex ? "PRELOADED" : "DYNAMIC"));
+            //}
 
             if (texToUse) {
                 SDL::renderCopyF(

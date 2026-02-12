@@ -188,7 +188,7 @@ int AttractMode::update(float dt, Page& page) {
         if (page.isJukebox())
         {
             // Jukebox-specific logic
-            if (!isActive_ && !page.isJukeboxPlaying() && elapsedTime_ > 10)
+            if (!isActive_ && !page.isJukeboxPlaying() && elapsedTime_ > 1)
             {
                 isActive_ = true;
                 isSet_ = true;

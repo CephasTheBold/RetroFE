@@ -28,6 +28,7 @@ public:
 
     // Producer/Consumer
     void push(SourceId id, const void* data, int bytes);
+    void setGain(SourceId id, float gain);
     void mixInto(Uint8* dst, int len);
     void mixInto_s16(Uint8* dst, int lenBytes);
     void mixInto_f32(Uint8* dst, int lenBytes);
@@ -62,7 +63,7 @@ private:
         std::string name;
         SpscRing ring; // device-format bytes
         std::atomic<bool> enabled{ true };
-
+        std::atomic<float> gain{ 1.0f };
         // NEW: Fade-in state for handling DISCONT
         std::atomic<int> fadeSamplesLeft{ 0 };
         static constexpr int kMaxFadeSamples = 256;  // ~5.3ms at 48kHz — adjustable

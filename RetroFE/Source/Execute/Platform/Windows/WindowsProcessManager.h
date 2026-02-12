@@ -20,6 +20,7 @@
 #include <string>
 #include <set>
 #include <functional>
+#include <chrono>
 
 #include "../IProcessManager.h"
 
@@ -71,6 +72,8 @@ private:
     std::string executableName_;
     std::string workingDirectory_;
     DWORD       processId_ = 0;
+    bool pendingForeground_ = false;
+    std::chrono::steady_clock::time_point foregroundDeadline_;
 };
 
 #endif

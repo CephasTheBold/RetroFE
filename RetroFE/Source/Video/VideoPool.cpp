@@ -182,24 +182,67 @@ VideoPool::VideoPtr VideoPool::acquireVideo(int monitor, int listId, bool softOv
 }
 
 void VideoPool::releaseVideo(VideoPtr vid, int monitor, int listId) {
-	if (!vid || listId == -1 || shuttingDown_) return;
+	if (!vid) {
+		LOG_DEBUG("VideoPool",
+			"Release (ignored: null VideoPtr) Mon:" + std::to_string(monitor) +
+			" List:" + std::to_string(listId));
+		return;
+	}
+
+	if (listId == -1 || shuttingDown_) {
+		LOG_DEBUG("VideoPool",
+			"Release (ignored: non-pooled or shutting down) Mon:" + std::to_string(monitor) +
+			" List:" + std::to_string(listId));
+		return;
+	}
 
 	std::unique_lock<std::mutex> lk(s_mutex);
 	auto mit = pools_.find(monitor);
-	if (mit == pools_.end()) return;
+	if (mit == pools_.end()) {
+		LOG_DEBUG("VideoPool",
+			"Release (no pool for monitor) Mon:" + std::to_string(monitor) +
+			" List:" + std::to_string(listId));
+		return;
+	}
 	auto lit = mit->second.find(listId);
-	if (lit == mit->second.end()) return;
+	if (lit == mit->second.end()) {
+		LOG_DEBUG("VideoPool",
+			"Release (no pool for listId) Mon:" + std::to_string(monitor) +
+			" List:" + std::to_string(listId));
+		return;
+	}
+
 	PoolInfo& pool = lit->second;
 
-	if (pool.currentActive > 0) pool.currentActive--;
+	if (pool.currentActive > 0) {
+		pool.currentActive--;
+	}
+	else {
+		LOG_WARNING("VideoPool",
+			"Release (currentActive already 0) " + poolStateStr(monitor, listId, pool));
+	}
 
 	IVideo* key = vid.get();
 	auto it = pool.available.insert(pool.available.end(), std::move(vid));
 	pool.index[key] = it;
 
 	if (!pool.initialCountLatched) {
-		pool.requiredInstanceCount = pool.observedMaxActive + POOL_BUFFER_INSTANCES;
+		const size_t candidate = pool.observedMaxActive + POOL_BUFFER_INSTANCES;
+
+		// If we've already reserved a bigger cap (e.g. from ScrollingList), don't shrink it.
+		if (candidate > pool.requiredInstanceCount) {
+			pool.requiredInstanceCount = candidate;
+		}
+
 		pool.initialCountLatched = true;
+
+		LOG_DEBUG("VideoPool",
+			"Release (latch required=" + std::to_string(pool.requiredInstanceCount) + ") " +
+			poolStateStr(monitor, listId, pool));
+	}
+	else {
+		LOG_DEBUG("VideoPool",
+			"Release (reuse) " + poolStateStr(monitor, listId, pool));
 	}
 
 	// Arm one-shot "became NONE" flag (no callback)
@@ -208,30 +251,41 @@ void VideoPool::releaseVideo(VideoPtr vid, int monitor, int listId) {
 	}
 
 	const bool tryErase = pool.markedForCleanup && pool.currentActive == 0;
+
 	lk.unlock();
 
+	// Do the heavier work without holding the pool mutex.
 	if (auto* gsv = dynamic_cast<GStreamerVideo*>(key)) {
 		gsv->unload();
 	}
+
 	if (tryErase) {
 		std::scoped_lock<std::mutex> relk(s_mutex);
 		auto mit2 = pools_.find(monitor);
 		if (mit2 != pools_.end()) {
 			auto lit2 = mit2->second.find(listId);
 			if (lit2 != mit2->second.end()) {
-				for (auto& up : lit2->second.available)
-					if (auto* gsv2 = dynamic_cast<GStreamerVideo*>(up.get()))
+				for (auto& up : lit2->second.available) {
+					if (auto* gsv2 = dynamic_cast<GStreamerVideo*>(up.get())) {
 						gsv2->disarmOnBecameNone();
+					}
+				}
 				lit2->second.available.clear();
 				lit2->second.index.clear();
 				lit2->second.hinted.clear();
 				lit2->second.readyHints.clear();
+
+				LOG_DEBUG("VideoPool",
+					"Release (cleanup erase) Mon:" + std::to_string(monitor) +
+					" List:" + std::to_string(listId));
+
 				mit2->second.erase(lit2);
-				if (mit2->second.empty()) pools_.erase(mit2);
+				if (mit2->second.empty()) {
+					pools_.erase(mit2);
+				}
 			}
 		}
 	}
-
 
 	s_cv.notify_all(); // wake any acquirers that were blocked
 }
@@ -336,4 +390,16 @@ inline std::string VideoPool::poolStateStr(int monitor, int listId, const VideoP
 		" Req=" + std::to_string(p.requiredInstanceCount) +
 		(p.initialCountLatched ? " LATCHED" : " PRELATCH") +
 		(p.markedForCleanup ? " CLEANUP" : "");
+}
+
+void VideoPool::reserveCapacity(int monitor, int listId, size_t desiredTotal) {
+	if (listId == -1 || shuttingDown_) return;
+
+	std::scoped_lock<std::mutex> lk(s_mutex);
+	PoolInfo& pool = pools_[monitor][listId];
+
+	// Never let the pool cap go *below* what the caller says it might need.
+	if (desiredTotal > pool.requiredInstanceCount) {
+		pool.requiredInstanceCount = desiredTotal;
+	}
 }

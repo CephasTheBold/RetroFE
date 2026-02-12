@@ -48,6 +48,7 @@
 #include <tuple>
 #include <vector>
 #include <cmath>
+#include <cstdint>
 #include <curl/curl.h>
 #if __has_include(<SDL2/SDL_ttf.h>)
 #include <SDL2/SDL_ttf.h>
@@ -116,6 +117,48 @@ bool InitializeServoStik() {
 }
 #endif
 
+
+static inline void sleepUntilTicks(uint64_t targetTicks, uint64_t freq, double frameInterval_s) {
+	if (freq == 0) return;
+
+	// How much of the tail do we reserve for spinning?
+	// - For long frames (idle 60Hz), spin a little more.
+	// - For short frames (143Hz), spin a little less.
+	// Values are seconds.
+	const double spinTail_s = std::clamp(frameInterval_s * 0.10, 0.00015, 0.00150); // 0.15ms .. 1.5ms
+
+	while (true)
+	{
+		const uint64_t nowTicks = SDL_GetPerformanceCounter();
+		if (nowTicks >= targetTicks) return;
+
+		const uint64_t remainingTicks = targetTicks - nowTicks;
+		const double remaining_s = (double)remainingTicks / (double)freq;
+
+		// If we have "enough" time, sleep most of it, leaving a tail for spin
+		if (remaining_s > spinTail_s)
+		{
+			const double sleep_s = remaining_s - spinTail_s;
+
+			// Avoid micro-sleeps that can overshoot on some systems
+			if (sleep_s > 0.0002) { // > 0.2ms
+				Utils::preciseSleep(sleep_s);
+			}
+			else {
+				// fall through to spin
+				while (SDL_GetPerformanceCounter() < targetTicks) { /* spin */ }
+				return;
+			}
+		}
+		else
+		{
+			// Final tail: spin until target
+			while (SDL_GetPerformanceCounter() < targetTicks) { /* spin */ }
+			return;
+		}
+	}
+}
+
 RetroFE::~RetroFE() {
 	deInitialize();
 }
@@ -129,12 +172,25 @@ void RetroFE::render() {
 	static bool prevShowFps = false; // Detect transition
 	static bool waitingForFpsData = false;
 
-	uint64_t r_startTicks = SDL_GetPerformanceCounter(); // 'r_' prefix for render-specific
+	// --- Live Work (kept; Late single-frame removed from display) ---
+	static double displayedWorkMsLive = 0.0;
+	static uint64_t lastWorkLateUpdatePerfTicks = 0;
+
+	// --- 1s window stats for Work/Late (stable + meaningful granularity) ---
+	static double workSumMsInWindow = 0.0;
+	static double lateSumUsInWindow = 0.0;
+	static double lateMaxUsInWindow = 0.0;
+
+	static double displayedWorkAvgMs = 0.0;
+	static double displayedLateAvgUs = 0.0;
+	static double displayedLateMaxUs = 0.0;
+
+	const uint64_t r_startTicks = SDL_GetPerformanceCounter(); // render timing start
 
 	// --- 1. Clear render targets & draw ---
 	for (int i = 0; i < SDL::getScreenCount(); ++i) {
 		SDL_Renderer* rr = SDL::getRenderer(i);
-		SDL_Texture* rt = SDL::getRenderTarget(i);    // now returns ring[writeIdx]
+		SDL_Texture* rt = SDL::getRenderTarget(i);    // ring[writeIdx]
 		if (!rr || !rt) continue;
 
 		SDL_SetRenderTarget(rr, rt);
@@ -143,8 +199,9 @@ void RetroFE::render() {
 
 		if (currentPage_) currentPage_->draw(i);
 
+		// Draw overlay into the render target (screen 0 only)
 		if (showFps_ && i == 0 && fpsOverlayTexture_) {
-			SDL_Rect dst = { 20, 20, fpsOverlayW_, fpsOverlayH_ };
+			SDL_Rect dst{ 20, 20, fpsOverlayW_, fpsOverlayH_ };
 			SDL_RenderCopy(rr, fpsOverlayTexture_, nullptr, &dst);
 		}
 	}
@@ -152,24 +209,22 @@ void RetroFE::render() {
 	// --- 2. Blit to backbuffer & present ---
 	for (int i = 0; i < SDL::getScreenCount(); ++i) {
 		SDL_Renderer* rr = SDL::getRenderer(i);
-		SDL_Texture* rt = SDL::getRenderTarget(i); // same index we just rendered into
+		SDL_Texture* rt = SDL::getRenderTarget(i);
 		if (!rr || !rt) continue;
 
 		SDL_SetRenderTarget(rr, nullptr);
 		SDL_RenderCopy(rr, rt, nullptr, nullptr);
 		SDL_RenderPresent(rr);
 
-		// flip AFTER present so the just-used texture gets a whole frame to “cool down”
 		SDL::advanceRenderTarget(i);
 	}
 
-	// --- 4. Timing for THIS render() call ---
-	uint64_t r_endTicks = SDL_GetPerformanceCounter();
-	uint64_t r_deltaTicks = r_endTicks - r_startTicks;
-	double currentRenderDurationMs = (r_deltaTicks * 1000.0) / freq_;
+	// --- 3. Timing for THIS render() call ---
+	const uint64_t r_endTicks = SDL_GetPerformanceCounter();
+	const double currentRenderDurationMs = (double)(r_endTicks - r_startTicks) * 1000.0 / (double)freq_;
 
-	// --- 5. FPS display logic ---
-	bool showFpsJustEnabled = (!prevShowFps && showFps_);
+	// --- 4. FPS display logic ---
+	const bool showFpsJustEnabled = (!prevShowFps && showFps_);
 	prevShowFps = showFps_;
 
 	if (showFpsJustEnabled) {
@@ -177,26 +232,78 @@ void RetroFE::render() {
 		framesSinceFpsUpdate = 0;
 		accumulatedRenderMs = 0.0;
 		waitingForFpsData = true;
+
+		// reset live work stabilizer
+		displayedWorkMsLive = 0.0;
+		lastWorkLateUpdatePerfTicks = 0;
+
+		// reset 1s window stats
+		workSumMsInWindow = 0.0;
+		lateSumUsInWindow = 0.0;
+		lateMaxUsInWindow = 0.0;
+
+		displayedWorkAvgMs = 0.0;
+		displayedLateAvgUs = 0.0;
+		displayedLateMaxUs = 0.0;
 	}
 
 	if (showFps_) {
 		framesSinceFpsUpdate++;
 		accumulatedRenderMs += currentRenderDurationMs;
 
-		uint64_t now_ticks64 = SDL_GetTicks64();
-		if (now_ticks64 - lastFpsUpdateTimestamp >= 1000) {
-			displayedFps = framesSinceFpsUpdate * 1000.0 / (now_ticks64 - lastFpsUpdateTimestamp);
-			displayedRenderMs = accumulatedRenderMs / std::max(1, framesSinceFpsUpdate);
-
-			lastFpsUpdateTimestamp = now_ticks64 - (now_ticks64 - lastFpsUpdateTimestamp) % 1000;
-			framesSinceFpsUpdate = 0;
-			accumulatedRenderMs = 0.0;
-			waitingForFpsData = false;  // Got real data now
+		// --- Accumulate 1s window stats for Work/Late (every frame) ---
+		{
+			const double w = this->lastWorkMs_;
+			const double l = this->lastLateUs_;
+			workSumMsInWindow += w;
+			lateSumUsInWindow += l;
+			lateMaxUsInWindow = std::max(lateMaxUsInWindow, l);
 		}
 
+		const uint64_t now_ticks64 = SDL_GetTicks64();
+		if (now_ticks64 - lastFpsUpdateTimestamp >= 1000) {
+			const uint64_t windowMs = now_ticks64 - lastFpsUpdateTimestamp;
+
+			displayedFps = (windowMs > 0) ? (framesSinceFpsUpdate * 1000.0 / (double)windowMs) : 0.0;
+			displayedRenderMs = accumulatedRenderMs / std::max(1, framesSinceFpsUpdate);
+
+			// --- Compute displayed 1s window stats ---
+			const int denom = std::max(1, framesSinceFpsUpdate);
+			displayedWorkAvgMs = workSumMsInWindow / (double)denom;
+			displayedLateAvgUs = lateSumUsInWindow / (double)denom;
+			displayedLateMaxUs = lateMaxUsInWindow;
+
+			// snap to 1s boundary
+			lastFpsUpdateTimestamp = now_ticks64 - (windowMs % 1000);
+			framesSinceFpsUpdate = 0;
+			accumulatedRenderMs = 0.0;
+			waitingForFpsData = false;
+
+			// reset window accumulators for next window
+			workSumMsInWindow = 0.0;
+			lateSumUsInWindow = 0.0;
+			lateMaxUsInWindow = 0.0;
+		}
+
+		// --- Optional live Work update (10Hz) ---
+		{
+			const uint64_t nowPerfTicks = SDL_GetPerformanceCounter();
+			const uint64_t updateIntervalTicks = (uint64_t)((double)freq_ * 0.1); // 0.1s = 10Hz
+
+			if (lastWorkLateUpdatePerfTicks == 0 ||
+				(nowPerfTicks - lastWorkLateUpdatePerfTicks) >= updateIntervalTicks)
+			{
+				lastWorkLateUpdatePerfTicks = nowPerfTicks;
+
+				double workMs = this->lastWorkMs_;
+				workMs = std::round(workMs * 100.0) / 100.0; // 0.01ms
+
+				displayedWorkMsLive = workMs;
+			}
+		}
 
 		// --- Compose overlay text ---
-		char overlayText[192]; // Increased for more info
+		char overlayText[420];
 		int outW = 0, outH = 0;
 		SDL_Renderer* renderer0 = SDL::getRenderer(0);
 		if (renderer0) {
@@ -205,16 +312,23 @@ void RetroFE::render() {
 
 		if (waitingForFpsData) {
 			snprintf(overlayText, sizeof(overlayText),
-				"FPS: -- | Frame: -- ms | Draw: -- ms | Mem: -- MB | Res: %dx%d",
+				"FPS: -- | Frame: -- ms | Work: -- ms | Late(avg/max): --/-- us | Draw: -- ms | Mem: -- MB | Res: %dx%d",
 				outW, outH);
 		}
 		else {
 			snprintf(overlayText, sizeof(overlayText),
-				"FPS: %.1f | Frame: %.2f ms | Draw: %.2f ms | Mem: %zu MB | Res: %dx%d",
-				displayedFps, this->lastFrameTimeMs_, displayedRenderMs,
-				Utils::getMemoryUsage() / 1024, outW, outH);
+				"FPS: %.1f | Frame: %.2f ms | Work: %.2f ms | Late(avg/max): %.1f/%.0f us | Draw: %.2f ms | Mem: %zu MB | Res: %dx%d",
+				displayedFps,
+				this->lastFrameTimeMs_,
+				displayedWorkMsLive,
+				displayedLateAvgUs,
+				displayedLateMaxUs,
+				displayedRenderMs,
+				Utils::getMemoryUsage() / 1024,
+				outW, outH);
 		}
 
+		// Update the overlay texture only when the text changes
 		if (lastOverlayText_ != overlayText) {
 			lastOverlayText_ = overlayText;
 
@@ -224,12 +338,12 @@ void RetroFE::render() {
 			}
 
 			if (debugFont_) {
-				SDL_Color color = { 255, 255, 0, 255 };
+				SDL_Color color{ 255, 255, 0, 255 };
 				SDL_Surface* surf = TTF_RenderText_Blended(debugFont_, overlayText, color);
 				if (surf) {
-					SDL_Renderer* renderer0 = SDL::getRenderer(0);
-					if (renderer0) {
-						fpsOverlayTexture_ = SDL_CreateTextureFromSurface(renderer0, surf);
+					SDL_Renderer* r0 = SDL::getRenderer(0);
+					if (r0) {
+						fpsOverlayTexture_ = SDL_CreateTextureFromSurface(r0, surf);
 						fpsOverlayW_ = surf->w;
 						fpsOverlayH_ = surf->h;
 					}
@@ -238,18 +352,35 @@ void RetroFE::render() {
 			}
 		}
 	}
-
 	else {
+		// Overlay disabled: release texture and reset state
 		if (fpsOverlayTexture_) {
 			SDL_DestroyTexture(fpsOverlayTexture_);
 			fpsOverlayTexture_ = nullptr;
-			fpsOverlayW_ = 0;
-			fpsOverlayH_ = 0;
-			lastOverlayText_ = "";
 		}
+		fpsOverlayW_ = 0;
+		fpsOverlayH_ = 0;
+		lastOverlayText_.clear();
+
 		accumulatedRenderMs = 0.0;
 		framesSinceFpsUpdate = 0;
+		displayedFps = 0.0;
+		displayedRenderMs = 0.0;
+		lastFpsUpdateTimestamp = 0;
 		waitingForFpsData = false;
+
+		// reset live work stabilizer
+		displayedWorkMsLive = 0.0;
+		lastWorkLateUpdatePerfTicks = 0;
+
+		// reset 1s window stats
+		workSumMsInWindow = 0.0;
+		lateSumUsInWindow = 0.0;
+		lateMaxUsInWindow = 0.0;
+
+		displayedWorkAvgMs = 0.0;
+		displayedLateAvgUs = 0.0;
+		displayedLateMaxUs = 0.0;
 	}
 }
 
@@ -535,14 +666,10 @@ bool RetroFE::deInitialize() {
 
 	if (musicPlayer_) {
 		musicPlayer_->shutdown();
+		musicPlayer_ = nullptr;
 	}
 
-	if (reboot_) {
-		LOG_INFO("RetroFE", "Rebooting");
-	}
-	else {
-		LOG_INFO("RetroFE", "Exiting");
-	}
+	LOG_INFO("RetroFE", reboot_ ? "Rebooting" : "Exiting");
 
 	return retVal;
 }
@@ -593,6 +720,8 @@ bool RetroFE::run() {
 		return false;
 	if (!fontcache_.initialize())
 		return false;
+
+	auto* mp = MusicPlayer::getInstance();
 
 	g_restrictorManager.startInitialization();
 
@@ -776,8 +905,8 @@ bool RetroFE::run() {
 
 	while (running)
 	{
-		uint64_t loopStart = SDL_GetPerformanceCounter();
-		double nowMs_loopStart = loopStart * 1000.0 / freq_; // freq is SDL_GetPerformanceFrequency()
+		const uint64_t loopStart = SDL_GetPerformanceCounter();
+		const double nowMs_loopStart = (double)loopStart * 1000.0 / (double)freq_;
 
 		if (psCfg.enabled && nowMs_loopStart >= nextPayloadSyncMs) {
 			// avoid drift
@@ -804,6 +933,9 @@ bool RetroFE::run() {
 		SDL_Event e;
 		while (SDL_PollEvent(&e)) input_.update(e);
 		input_.updateKeystate(); // once per frame, AFTER consuming events, BEFORE processUserInput()
+
+		if (mp) mp->pump();
+
 		bool activelyAnimating = isUserActive(currentTime_)
 			|| (currentPage_ && (
 				currentPage_->isMenuScrolling()
@@ -830,11 +962,10 @@ bool RetroFE::run() {
 		float targetDt = static_cast<float>((activelyAnimating ? fpsTime : fpsIdleTime) / 1000.0f);
 
 		// Clamp extremes
-		if (rawDt < MIN_DT) rawDt = MIN_DT;
-		if (rawDt > MAX_DT) rawDt = MAX_DT;
+		rawDt = std::clamp(rawDt, MIN_DT, MAX_DT);
 
 		// If our target frame pacing changes drastically, reset smoothing immediately
-		float ratio = smoothedDt / targetDt;
+		float ratio = smoothedDt / std::max(0.000001f, targetDt);
 		if (ratio < 0.5f || ratio > 2.0f)
 			smoothedDt = targetDt;
 
@@ -2306,17 +2437,19 @@ bool RetroFE::run() {
 					// --- Normal Exit Path ---
 					attract_.reset();
 					l.LEDBlinky(4);
-					currentPage_->exitGame();
 
+					// If we're in "lastplayed", adjust position and reallocate BEFORE exit animation.
 					if (currentPage_->getPlaylistName() == "lastplayed")
 					{
 						currentPage_->setScrollOffsetIndex(0);
 						currentPage_->reallocateMenuSpritePoints(false);
 					}
 
-					// Call launchExit and tell it a reboot IS NOT happening.
-					// This will perform all cleanup, including SDL re-initialization if needed.
+					// Do all SDL / graphics / menu re-init first
 					launchExit(true);
+
+					// NOW fire onGameExit so the animation lives on the final, post-launch menu state
+					currentPage_->exitGame();
 
 					setState(RETROFE_LAUNCH_EXIT);
 				}
@@ -2571,10 +2704,9 @@ bool RetroFE::run() {
 				if (!splashMode && !paused_)
 				{
 					float attract_dt = deltaTime;
-					const float MAX_REASONABLE_DELTA_TIME = 0.1f; // 100ms, or 1/10th of a second
-					if (attract_dt > MAX_REASONABLE_DELTA_TIME) {
-						attract_dt = MAX_REASONABLE_DELTA_TIME;
-					}
+					const float MAX_REASONABLE_DELTA_TIME = 0.1f;
+					if (attract_dt > MAX_REASONABLE_DELTA_TIME) attract_dt = MAX_REASONABLE_DELTA_TIME;
+
 					int attractReturn = attract_.update(attract_dt, *currentPage_);
 					if (!kioskLock_ && attractReturn == 1) // Change playlist
 					{
@@ -2636,27 +2768,43 @@ bool RetroFE::run() {
 
 
 			// Only do custom frame pacing if vsync is OFF
-			if (!vSync) {
+			if (!vSync)
+			{
+				const double currentFrameIntervalMs = activelyAnimating ? fpsTime : fpsIdleTime;
+				const double frameInterval_s = currentFrameIntervalMs / 1000.0;
 
-				double currentFrameIntervalMs = activelyAnimating ? fpsTime : fpsIdleTime;
-
-				// Advance nextFrameTime by one interval FROM ITS CURRENT VALUE
+				// schedule next frame
 				nextFrameTime += currentFrameIntervalMs;
 
-				double timeBeforeSleepMs = SDL_GetPerformanceCounter() * 1000.0 / freq_;
-				double sleepTimeMs = nextFrameTime - timeBeforeSleepMs;
-
-				if (sleepTimeMs > 0.0) {
-					Utils::preciseSleep(sleepTimeMs / 1000.0);
-					uint64_t ultimateTargetTicks = (uint64_t)(nextFrameTime * freq_ / 1000.0);
-					while (SDL_GetPerformanceCounter() < ultimateTargetTicks);
+				// re-anchor if we fell behind (prevents “late spiral”)
+				const double nowMs = SDL_GetPerformanceCounter() * 1000.0 / (double)freq_;
+				if (nextFrameTime < nowMs) {
+					nextFrameTime = nowMs;
 				}
+
+				const uint64_t targetTicks =
+					(uint64_t)llround(nextFrameTime * (double)freq_ / 1000.0);
+
+				const uint64_t workEndTicks = SDL_GetPerformanceCounter();
+				lastWorkMs_ = (double)(workEndTicks - loopStart) * 1000.0 / (double)freq_;
+
+				sleepUntilTicks(targetTicks, (uint64_t)freq_, frameInterval_s);
+
+				const uint64_t afterSleepTicks = SDL_GetPerformanceCounter();
+				lastLateUs_ = (afterSleepTicks > targetTicks)
+					? (double)(afterSleepTicks - targetTicks) * 1e6 / (double)freq_
+					: 0.0;
+
+				lastFrameTimeMs_ = (double)(afterSleepTicks - loopStart) * 1000.0 / (double)freq_;
+			}
+			else
+			{
+				const uint64_t loopEnd = SDL_GetPerformanceCounter();
+				lastWorkMs_ = (double)(loopEnd - loopStart) * 1000.0 / (double)freq_;
+				lastLateUs_ = 0.0;
+				lastFrameTimeMs_ = lastWorkMs_;
 			}
 
-			// Measure how long the full frame took (update + render + sleep)
-			uint64_t loopEnd = SDL_GetPerformanceCounter();
-			double actualTotalFrameDurationMs = (loopEnd - loopStart) * 1000.0 / freq_;
-			lastFrameTimeMs_ = actualTotalFrameDurationMs;
 		}
 	}
 
@@ -3867,30 +4015,23 @@ Page* RetroFE::loadSplashPage() {
 
 // Load a collection
 CollectionInfo* RetroFE::getCollection(const std::string& collectionName) {
-
-	// Check if subcollections should be merged or split
 	bool subsSplit = false;
 	config_.getProperty(OPTION_SUBSSPLIT, subsSplit);
 
-	// Build the collection
 	CollectionInfoBuilder cib(config_, *metadb_);
 	CollectionInfo* collection = cib.buildCollection(collectionName);
 	collection->subsSplit = subsSplit;
 	cib.injectMetadata(collection);
 
-	// Check collection folder exists
 	fs::path path = Utils::combinePath(Configuration::absolutePath, "collections", collectionName);
-	if (!fs::exists(path) || !fs::is_directory(path))
-	{
+	if (!fs::exists(path) || !fs::is_directory(path)) {
 		LOG_ERROR("RetroFE", "Failed to load collection " + collectionName);
 		return nullptr;
 	}
 
 	// Loading sub collection files
-	for (const auto& entry : fs::directory_iterator(path))
-	{
-		if (entry.is_regular_file() && entry.path().extension() == ".sub")
-		{
+	for (const auto& entry : fs::directory_iterator(path)) {
+		if (entry.is_regular_file() && entry.path().extension() == ".sub") {
 			std::string basename = entry.path().stem().string();
 
 			LOG_INFO("RetroFE", "Loading subcollection into menu: " + basename);

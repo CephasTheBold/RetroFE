@@ -36,6 +36,7 @@ public:
 	static void cleanup(int monitor, int listId);
 	static void shutdown();
 	static std::atomic<bool> shuttingDown_;
+    static void reserveCapacity(int monitor, int listId, size_t desiredTotal);
 
 private:
 

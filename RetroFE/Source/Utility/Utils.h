@@ -22,6 +22,8 @@
 #include <filesystem>
 #include <unordered_map>
 #include <unordered_set>
+#include <shared_mutex>
+#include <memory>
 
 #ifdef WIN32
 #define NOMINMAX
@@ -39,6 +41,7 @@ struct PathHash {
 class Utils
 {
 public:
+    using FileSet = std::unordered_set<std::string>;
     static std::string replace(std::string subject, const std::string_view& search,
         const std::string_view& replace);
 
@@ -56,6 +59,7 @@ public:
     static std::string getFileName(const std::string& filePath);
     static bool findMatchingFile(const std::string& prefix, const std::vector<std::string>& extensions, std::string& file);
     static bool findMatchingFile(std::string_view prefixNoExt, const std::string_view* extsBegin, const std::string_view* extsEnd, std::string& outPath);
+    static void coarseSleep(double seconds_to_sleep);
     static void preciseSleep(double seconds_to_sleep);
     static std::string toLower(const std::string& inputStr);
     static std::string uppercaseFirst(std::string str);
@@ -94,15 +98,22 @@ public:
 
 private:
 #ifdef __APPLE__
-    static std::unordered_map<std::filesystem::path, std::unordered_set<std::string>, PathHash> fileCache;
+    static std::unordered_map<std::filesystem::path, std::shared_ptr<const FileSet>, PathHash> fileCache;
     static std::unordered_set<std::filesystem::path, PathHash> nonExistingDirectories;
 #else
-    static std::unordered_map<std::filesystem::path, std::unordered_set<std::string>> fileCache;
+    static std::unordered_map<std::filesystem::path, std::shared_ptr<const FileSet>> fileCache;
     static std::unordered_set<std::filesystem::path> nonExistingDirectories;
 #endif
+
+    // NEW: guard cache structures (safe even if you currently run single-threaded)
+    static std::shared_mutex fileCacheMutex;
+
+    // NEW: normalize directory keys (fixes "ghost cache" on Windows)
+    static std::filesystem::path normalizeCacheKey(const std::filesystem::path& p);
+
+    // NEW: ensure cache entry exists (or negative cached), then return file-set pointer
+    static std::shared_ptr<const FileSet> getOrPopulateFileSet(const std::filesystem::path& directory);
     static void populateCache(const std::filesystem::path& directory);
-    static bool isFileInCache(const std::filesystem::path& directory, const std::string& filename);
-    static bool isFileCachePopulated(const std::filesystem::path& directory);
     static const std::string obfuscationKey; // Key for XOR obfuscation
     static std::string xorOperation(const std::string& data, const std::string& key);
 

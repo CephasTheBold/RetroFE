@@ -57,4 +57,5 @@ public:
 	virtual bool isPipelineReady() const = 0;
 	virtual bool hasError() const = 0;
 	virtual bool unload() = 0;
+	virtual bool hasFinishedLoops() const = 0;
 };

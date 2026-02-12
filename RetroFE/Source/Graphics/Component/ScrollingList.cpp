@@ -370,6 +370,12 @@ void ScrollingList::setPoints(std::vector<ViewInfo*>* scrollPoints,
         backwardTween_.clear();
     }
 
+    if (listId_ != -1 && N > 0) {
+        // N visible cells, plus buffer (you can use 1 or reuse POOL_BUFFER_INSTANCES)
+        const size_t desiredTotal = N + 1;  // or N + POOL_BUFFER_INSTANCES
+        VideoPool::reserveCapacity(baseViewInfo.Monitor, listId_, desiredTotal);
+    }
+
     // Allocate and initialize components (your existing behavior)
     allocateSpritePoints();
 }
@@ -518,7 +524,7 @@ void ScrollingList::letterChange(bool increment) {
             // We didn't actually move, so no need to adjust.
         }
         // This complex condition checks if we need to do the "find the start of the previous group" logic.
-        else if (!prevLetterSubToCurrent || loopIncrement(itemIndex_, 1, itemSize) == newIndex) {
+        else if (!prevLetterSubToCurrent || loopDecrement(itemIndex_, 1, itemSize) == newIndex) {
 
             // We've jumped into a new group. Now, find the beginning of that group by searching backwards again.
             // The character we are looking for is the one at the `newIndex` we just found.
@@ -970,10 +976,12 @@ bool ScrollingList::allocateTexture(size_t index, const Item* item) {
     config_.getProperty(OPTION_LAYOUT, layoutName);
     std::string typeLC = Utils::toLower(imageType_);
     std::string selectedItemName = getSelectedItemName();
+    const bool isSelectedItem = (selectedImage_ && item->name == selectedItemName);
 
     // Compose name candidates once
     std::vector<std::string> names = {
-        item->name, item->fullTitle
+        item->name,
+        item->fullTitle
     };
     if (!item->cloneof.empty())        names.push_back(item->cloneof);
     if (typeLC == "numberbuttons")     names.push_back(item->numberButtons);
@@ -994,11 +1002,72 @@ bool ScrollingList::allocateTexture(size_t index, const Item* item) {
     ImageBuilder imageBuild;
     VideoBuilder videoBuild;
 
+    auto tryVideo = [&](const std::string& videoPath, const std::string& logicalName) -> Component* {
+        if (videoType_ == "null") return nullptr;
+        return videoBuild.createVideo(
+            videoPath,
+            page,
+            logicalName,
+            baseViewInfo.Monitor,
+            -1,
+            false,
+            listId_,
+            perspectiveCornersInitialized_ ? perspectiveCorners_ : nullptr
+        );
+        };
+
+    auto tryImageWithName = [&](const std::string& imagePath, const std::string& baseName) -> Component* {
+        if (imageType_.empty()) return nullptr;
+
+        std::string imageName = baseName;
+        if (isSelectedItem) {
+            imageName += "-selected";
+        }
+
+        return imageBuild.CreateImage(
+            imagePath,
+            page,
+            imageName,
+            baseViewInfo.Monitor,
+            baseViewInfo.Additive,
+            useTextureCaching_
+        );
+        };
+
+    // For system/ROM fallback we keep the old "try -selected then plain" behavior.
+    auto tryImageWithFallbackType = [&](const std::string& imagePath) -> Component* {
+        if (imageType_.empty()) return nullptr;
+
+        const std::string fallbackName = imageType_;
+
+        if (isSelectedItem) {
+            if (Component* c = imageBuild.CreateImage(
+                imagePath,
+                page,
+                fallbackName + "-selected",
+                baseViewInfo.Monitor,
+                baseViewInfo.Additive,
+                useTextureCaching_)) {
+                return c;
+            }
+        }
+
+        return imageBuild.CreateImage(
+            imagePath,
+            page,
+            fallbackName,
+            baseViewInfo.Monitor,
+            baseViewInfo.Additive,
+            useTextureCaching_
+        );
+        };
+
     // -------- Main media search loop --------
     for (const auto& name : names) {
-        std::string imagePath, videoPath;
+        std::string imagePath;
+        std::string videoPath;
 
-        // Precompute base/subPath for this iteration
+        // 1) Collection or _common (layout / non-layout)
         if (layoutMode_) {
             std::string base = Utils::combinePath(Configuration::absolutePath, "layouts", layoutName, "collections");
             std::string subPath = commonMode_ ? "_common" : collectionName;
@@ -1006,7 +1075,10 @@ bool ScrollingList::allocateTexture(size_t index, const Item* item) {
         }
         else {
             if (commonMode_) {
-                buildPaths(imagePath, videoPath, Configuration::absolutePath, "collections/_common", imageType_, videoType_);
+                buildPaths(imagePath, videoPath,
+                    Configuration::absolutePath,
+                    "collections/_common",
+                    imageType_, videoType_);
             }
             else {
                 config_.getMediaPropertyAbsolutePath(collectionName, imageType_, false, imagePath);
@@ -1015,47 +1087,49 @@ bool ScrollingList::allocateTexture(size_t index, const Item* item) {
         }
 
         if (!t) {
-            if (videoType_ != "null") {
-                t = videoBuild.createVideo(videoPath, page, name, baseViewInfo.Monitor, -1, false, listId_, perspectiveCornersInitialized_ ? perspectiveCorners_ : nullptr);
-            }
-            else {
-                std::string imageName = (selectedImage_ && item->name == selectedItemName) ? name + "-selected" : name;
-                t = imageBuild.CreateImage(imagePath, page, imageName, baseViewInfo.Monitor, baseViewInfo.Additive, useTextureCaching_);
-            }
+            // Try video at this location
+            t = tryVideo(videoPath, name);
+        }
+        if (!t) {
+            // Immediately fall back to image at the same location
+            t = tryImageWithName(imagePath, name);
         }
         if (t) break;
 
-        // --------- Per-item collection fallback (ALWAYS allowed) ---------
-        if (!t) {
-            std::string imagePath, videoPath;
+        // 2) Per-item collection fallback (ALWAYS allowed)
+        {
+            std::string itemImagePath;
+            std::string itemVideoPath;
 
             if (layoutMode_) {
-                // Keep base stable; pass collection as subPath (matches your other layoutMode_ code)
                 std::string base = Utils::combinePath(Configuration::absolutePath, "layouts", layoutName, "collections");
-                buildPaths(imagePath, videoPath, base, item->collectionInfo->name, imageType_, videoType_);
+                buildPaths(itemImagePath, itemVideoPath, base, item->collectionInfo->name, imageType_, videoType_);
             }
             else {
-                config_.getMediaPropertyAbsolutePath(item->collectionInfo->name, imageType_, false, imagePath);
-                config_.getMediaPropertyAbsolutePath(item->collectionInfo->name, videoType_, false, videoPath);
+                config_.getMediaPropertyAbsolutePath(item->collectionInfo->name, imageType_, false, itemImagePath);
+                config_.getMediaPropertyAbsolutePath(item->collectionInfo->name, videoType_, false, itemVideoPath);
             }
 
-            if (videoType_ != "null") {
-                t = videoBuild.createVideo(videoPath, page, name, baseViewInfo.Monitor, -1, false, listId_,
-                    perspectiveCornersInitialized_ ? perspectiveCorners_ : nullptr);
+            if (!t) {
+                t = tryVideo(itemVideoPath, name);
             }
-            else {
-                std::string imageName = (selectedImage_ && item->name == selectedItemName) ? name + "-selected" : name;
-                t = imageBuild.CreateImage(imagePath, page, imageName, baseViewInfo.Monitor, baseViewInfo.Additive, useTextureCaching_);
+            if (!t) {
+                t = tryImageWithName(itemImagePath, name);
             }
         }
+
         if (t) break;
     }
 
     // -------- System collection fallback --------
     if (!t) {
-        std::string imagePath, videoPath;
+        std::string imagePath;
+        std::string videoPath;
+
         if (layoutMode_) {
-            imagePath = Utils::combinePath(Configuration::absolutePath, "layouts", layoutName, "collections", commonMode_ ? "_common" : item->name);
+            imagePath = Utils::combinePath(Configuration::absolutePath,
+                "layouts", layoutName, "collections",
+                commonMode_ ? "_common" : item->name);
             imagePath = Utils::combinePath(imagePath, "system_artwork");
             videoPath = imagePath;
         }
@@ -1070,119 +1144,26 @@ bool ScrollingList::allocateTexture(size_t index, const Item* item) {
                 config_.getMediaPropertyAbsolutePath(item->name, videoType_, true, videoPath);
             }
         }
-        if (videoType_ != "null") {
-            t = videoBuild.createVideo(videoPath, page, videoType_, baseViewInfo.Monitor, -1, false, listId_, perspectiveCornersInitialized_ ? perspectiveCorners_ : nullptr);
+
+        if (!t) {
+            // system: historically used videoType_ as logical name
+            t = tryVideo(videoPath, videoType_);
         }
-        else {
-            std::string fallbackName = imageType_;
-            if (selectedImage_ && item->name == selectedItemName) {
-                t = imageBuild.CreateImage(imagePath, page, fallbackName + "-selected", baseViewInfo.Monitor, baseViewInfo.Additive, useTextureCaching_);
-            }
-            if (!t) {
-                t = imageBuild.CreateImage(imagePath, page, fallbackName, baseViewInfo.Monitor, baseViewInfo.Additive, useTextureCaching_);
-            }
+        if (!t) {
+            t = tryImageWithFallbackType(imagePath);
         }
     }
 
     // -------- ROM directory fallback --------
     if (!t) {
-        if (videoType_ != "null") {
-            t = videoBuild.createVideo(item->filepath, page, videoType_, baseViewInfo.Monitor, -1, false, listId_, perspectiveCornersInitialized_ ? perspectiveCorners_ : nullptr);
-        }
-        else {
-            std::string fallbackName = imageType_;
-            if (selectedImage_ && item->name == selectedItemName) {
-                t = imageBuild.CreateImage(item->filepath, page, fallbackName + "-selected", baseViewInfo.Monitor, baseViewInfo.Additive, useTextureCaching_);
-            }
-            if (!t) {
-                t = imageBuild.CreateImage(item->filepath, page, fallbackName, baseViewInfo.Monitor, baseViewInfo.Additive, useTextureCaching_);
-            }
-        }
-    }
+        const std::string romPath = item->filepath;
 
-    // -------- Video fallback: fallback to image for each name --------
-    if (videoType_ != "null" && !t) {
-        for (const auto& name : names) {
-            if (t) break;
-            std::string imagePath, videoPath;
-
-            if (layoutMode_) {
-                std::string base = Utils::combinePath(Configuration::absolutePath, "layouts", layoutName, "collections");
-                std::string subPath = commonMode_ ? "_common" : collectionName;
-                buildPaths(imagePath, videoPath, base, subPath, imageType_, videoType_);
-            }
-            else {
-                if (commonMode_) {
-                    buildPaths(imagePath, videoPath, Configuration::absolutePath, "collections/_common", imageType_, videoType_);
-                }
-                else {
-                    config_.getMediaPropertyAbsolutePath(collectionName, imageType_, false, imagePath);
-                    config_.getMediaPropertyAbsolutePath(collectionName, videoType_, false, videoPath);
-                }
-            }
-            std::string imageName = (selectedImage_ && item->name == selectedItemName) ? name + "-selected" : name;
-            t = imageBuild.CreateImage(imagePath, page, imageName, baseViewInfo.Monitor, baseViewInfo.Additive, useTextureCaching_);
-
-            if (!t && !commonMode_) {
-                if (layoutMode_) {
-                    std::string base = Utils::combinePath(Configuration::absolutePath, "layouts", layoutName, "collections", item->collectionInfo->name);
-                    buildPaths(imagePath, videoPath, base, "", imageType_, videoType_);
-                }
-                else {
-                    config_.getMediaPropertyAbsolutePath(item->collectionInfo->name, imageType_, false, imagePath);
-                    config_.getMediaPropertyAbsolutePath(item->collectionInfo->name, videoType_, false, videoPath);
-                }
-                imageName = (selectedImage_ && item->name == selectedItemName) ? name + "-selected" : name;
-                t = imageBuild.CreateImage(imagePath, page, imageName, baseViewInfo.Monitor, baseViewInfo.Additive, useTextureCaching_);
-            }
-        }
-        // -------- System collection fallback --------
         if (!t) {
-            std::string imagePath, videoPath;
-            if (layoutMode_) {
-                imagePath = Utils::combinePath(Configuration::absolutePath, "layouts", layoutName, "collections", commonMode_ ? "_common" : item->name);
-                imagePath = Utils::combinePath(imagePath, "system_artwork");
-                videoPath = imagePath;
-            }
-            else {
-                if (commonMode_) {
-                    imagePath = Utils::combinePath(Configuration::absolutePath, "collections", "_common");
-                    imagePath = Utils::combinePath(imagePath, "system_artwork");
-                    videoPath = imagePath;
-                }
-                else {
-                    config_.getMediaPropertyAbsolutePath(item->name, imageType_, true, imagePath);
-                    config_.getMediaPropertyAbsolutePath(item->name, videoType_, true, videoPath);
-                }
-            }
-            if (videoType_ != "null") {
-                t = videoBuild.createVideo(videoPath, page, videoType_, baseViewInfo.Monitor, -1, false, listId_, perspectiveCornersInitialized_ ? perspectiveCorners_ : nullptr);
-            }
-            else {
-                std::string fallbackName = imageType_;
-                if (selectedImage_ && item->name == selectedItemName) {
-                    t = imageBuild.CreateImage(imagePath, page, fallbackName + "-selected", baseViewInfo.Monitor, baseViewInfo.Additive, useTextureCaching_);
-                }
-                if (!t) {
-                    t = imageBuild.CreateImage(imagePath, page, fallbackName, baseViewInfo.Monitor, baseViewInfo.Additive, useTextureCaching_);
-                }
-            }
+            // ROM video: use videoType_ as logical name (matches previous behavior)
+            t = tryVideo(romPath, videoType_);
         }
-
-        // -------- ROM directory fallback --------
         if (!t) {
-            if (videoType_ != "null") {
-                t = videoBuild.createVideo(item->filepath, page, videoType_, baseViewInfo.Monitor, -1, false, listId_, perspectiveCornersInitialized_ ? perspectiveCorners_ : nullptr);
-            }
-            else {
-                std::string fallbackName = imageType_;
-                if (selectedImage_ && item->name == selectedItemName) {
-                    t = imageBuild.CreateImage(item->filepath, page, fallbackName + "-selected", baseViewInfo.Monitor, baseViewInfo.Additive, useTextureCaching_);
-                }
-                if (!t) {
-                    t = imageBuild.CreateImage(item->filepath, page, fallbackName, baseViewInfo.Monitor, baseViewInfo.Additive, useTextureCaching_);
-                }
-            }
+            t = tryImageWithFallbackType(romPath);
         }
     }
 
@@ -1289,6 +1270,7 @@ void ScrollingList::scroll(bool forward) {
     // Rebuild only the exiting slot (consider switching to recycle/retarget later)
     deallocateTexture(exitIndex);
     allocateTexture(exitIndex, itemToScroll);
+
 
     // --- Use precomputed tuples ---
     const auto& T = forward ? forwardTween_ : backwardTween_;

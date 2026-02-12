@@ -19,10 +19,10 @@
 #include <string_view>
 
 #ifdef WIN32
-static constexpr std::string_view kImgExts[] = { "gif","webp","png","jpg","jpeg" };
+static constexpr std::string_view kImgExts[] = { "qoi", "png", "gif", "webp", "jpg","jpeg" };
 #else
 static constexpr std::string_view kImgExts[] =
-{ "gif","GIF","webp","WEBP","png","PNG","jpg","JPG","jpeg","JPEG" };
+{ "qoi", "QOI", "gif","GIF","webp","WEBP","png","PNG","jpg","JPG","jpeg","JPEG" };
 #endif
 
 static inline std::string makePrefix(const std::string& path, const std::string& name) {

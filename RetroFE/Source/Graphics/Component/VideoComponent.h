@@ -39,6 +39,8 @@ public:
     void allocateGraphicsMemory() override;
     std::unique_ptr<IVideo> extractVideo();
     bool isPlaying() override;
+    bool hasFinishedLoops();
+    bool hasVideoStream();
     void skipForward( ) override;
     void skipBackward( ) override;
     void skipForwardp( ) override;

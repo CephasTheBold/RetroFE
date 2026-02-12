@@ -132,7 +132,7 @@ static const char* sdl_to_gst_fmt(Uint16 fmt) {
 		case AUDIO_S16MSB: return "S16BE";
 #endif
 
-			// 24-bit (packed 3 bytes) — if your SDL build exposes these
+			// 24-bit (packed 3 bytes) Â— if your SDL build exposes these
 #if defined(AUDIO_S24LSB)
 		case AUDIO_S24LSB: return "S24LE";
 #endif
@@ -247,38 +247,72 @@ gboolean GStreamerVideo::busCallback(GstBus* bus, GstMessage* msg, gpointer user
 						bool expected = false;
 						(void)video->pipeLineReady_.compare_exchange_strong(expected, true,
 							std::memory_order_release, std::memory_order_relaxed);
+						// Detect stream types now that pipeline is ready
+						video->detectStreamTypes();
 					}
 				}
 			}
 			break;
 		}
 		case GST_MESSAGE_EOS: {
-			// Check if the EOS is from our main playbin element
 			if (GST_MESSAGE_SRC(msg) == GST_OBJECT(video->pipeline_)) {
 				uint64_t session = video->currentPlaySessionId_.load();
 				LOG_DEBUG("GStreamerVideo", "BusCallback: Received EOS for " + video->currentFile_ +
 					" (Session: " + std::to_string(session) + ")");
+
+				// Ignore EOS if we're already unloaded/stopping
 				if (video->targetState_.load(std::memory_order_acquire) == IVideo::VideoState::None) {
 					LOG_DEBUG("GStreamerVideo", "EOS ignored (unloaded) for session " + std::to_string(session));
 					break;
 				}
-				if (video->pipeline_ && video->getCurrent() > GST_SECOND / 2) { // Check if it played for a meaningful duration
+
+				// Check if the video actually played for a meaningful duration
+				if (video->pipeline_ && video->getCurrent() > GST_SECOND / 2) {
 					video->playCount_++;
+
+					// Check if we need to loop more
 					if (!video->numLoops_ || video->numLoops_ > video->playCount_) {
-						LOG_DEBUG("GStreamerVideo", "BusCallback: Looping " + video->currentFile_);
+						LOG_DEBUG("GStreamerVideo", "BusCallback: Looping " + video->currentFile_ +
+							" (play " + std::to_string(video->playCount_ + 1) +
+							"/" + std::to_string(video->numLoops_) + ")");
 						video->loop();
 					}
 					else {
-						LOG_DEBUG("GStreamerVideo", "BusCallback: Finished loops for " + video->currentFile_ + ". Pausing.");
-						video->pause(); // Or perhaps a full stop/unload depending on desired behavior
-						video->pipeLineReady_.store(false, std::memory_order_release);
+						// All loops finished - prevent auto-resume
+						LOG_DEBUG("GStreamerVideo", "BusCallback: Finished all " +
+							std::to_string(video->numLoops_) + " loops for " + video->currentFile_);
+
+						// Mark loops as finished to block auto-resume in VideoComponent
+						video->loopsFinished_.store(true, std::memory_order_release);
+
+						// Update states to None
+						video->targetState_.store(IVideo::VideoState::None, std::memory_order_release);
+						video->actualState_.store(IVideo::VideoState::None, std::memory_order_release);
+
+						// Set pipeline to READY (stops playback without full teardown)
+						gst_element_set_state(video->pipeline_, GST_STATE_READY);
+
+						// Trigger becameNone notification if armed
+						if (video->notifyOnNone_.exchange(false, std::memory_order_acq_rel)) {
+							video->becameNone_.store(true, std::memory_order_release);
+						}
+
+						// Reset play counter for next play() call
+						video->playCount_ = 0;
 					}
 				}
 				else if (video->pipeline_) {
-					LOG_DEBUG("GStreamerVideo", "BusCallback: EOS received very early for " + video->currentFile_ + ". Not looping.");
-					// Potentially an issue if EOS comes too fast, could indicate a problem loading the file.
-					// video->hasError_.store(true, std::memory_order_release);
-					// video->isPlaying_ = false;
+					// EOS received very early - file might be corrupted or too short
+					LOG_WARNING("GStreamerVideo", "BusCallback: EOS received very early for " +
+						video->currentFile_ + " (position: " +
+						std::to_string(video->getCurrent() / GST_MSECOND) + "ms). Not looping.");
+
+					// Treat as finished to prevent looping broken files
+					video->loopsFinished_.store(true, std::memory_order_release);
+					video->targetState_.store(IVideo::VideoState::None, std::memory_order_release);
+					video->actualState_.store(IVideo::VideoState::None, std::memory_order_release);
+					gst_element_set_state(video->pipeline_, GST_STATE_READY);
+					video->playCount_ = 0;
 				}
 			}
 			break;
@@ -518,6 +552,8 @@ bool GStreamerVideo::stop() {
 	width_ = height_ = -1;
 	currentFile_.clear();
 	playCount_ = 0; numLoops_ = 0;
+	loopsFinished_.store(false, std::memory_order_release);
+	hasVideoStream_.store(true, std::memory_order_release);
 	volume_ = currentVolume_ = 0.0f;
 	lastSetVolume_ = -1.0f; lastSetMuteState_ = true;
 
@@ -640,7 +676,7 @@ static inline std::array<double, 9> computePerspectiveMatrixFromCorners(
 	double f = A.y;
 
 	// Construct the forward homography Hf:
-	// Hf maps (u,v) in [0,1]² to the quadrilateral.
+	// Hf maps (u,v) in [0,1]Â² to the quadrilateral.
 	std::array<double, 9> Hf = { a, b, c,
 								 d, e, f,
 								 g, h, 1.0 };
@@ -701,11 +737,13 @@ bool GStreamerVideo::createPipelineIfNeeded() {
 	}
 	g_object_set(audioSink_,
 		"emit-signals", FALSE,
-		"max-buffers", 128,
-		"drop", FALSE,
-		"sync", TRUE,        // we pace via SDL device, not GST
+		"max-buffers", 16,          // Increased from 8 - more buffering
+		"qos", FALSE,               // Disable QoS - we want all audio
+		"drop", FALSE,              // Don't drop audio samples!
+		"sync", TRUE,               // Keep sync on for A/V timing
 		"enable-last-sample", FALSE,
-		"wait-on-eos", FALSE,           // nicer shutdown
+		"wait-on-eos", FALSE,
+		"async", FALSE,             // Audio doesn't need async state changes
 		nullptr);
 
 	// Pull the actual device spec SDL_mixer opened
@@ -735,7 +773,7 @@ bool GStreamerVideo::createPipelineIfNeeded() {
 	gst_app_sink_set_caps(GST_APP_SINK(audioSink_), acaps);
 	gst_caps_unref(acaps);
 
-	// (Optional but recommended) Log what you set so it’s easy to debug:
+	// (Optional but recommended) Log what you set so itÂ’s easy to debug:
 	LOG_INFO("GStreamerVideo", "Audio caps -> " << ss.str());
 
 	// Force the system clock and disable auto reselection
@@ -858,10 +896,11 @@ bool GStreamerVideo::createPipelineIfNeeded() {
 	else {
 		// Simple pipeline: set appsink directly as video-sink.
 		g_object_set(playbin_, "video-sink", videoSink_, nullptr);
-		g_object_set(playbin_, "audio-sink", audioSink_, nullptr);
 	}
 
-	if (GstBus* bus = gst_element_get_bus(pipeline_ /* or playbin_ if that’s your top */)) {
+	g_object_set(playbin_, "audio-sink", audioSink_, nullptr);
+
+	if (GstBus* bus = gst_element_get_bus(pipeline_)) {
 		busWatchId_ = GlibLoop::instance().addBusWatch(
 			bus,
 			+[](GstBus* b, GstMessage* m, gpointer self) -> gboolean {
@@ -910,11 +949,13 @@ bool GStreamerVideo::play(const std::string& file) {
 	// Atomically increment and assign session ID immediately (thread-safe)
 	const uint64_t newSessionId = nextUniquePlaySessionId_++;
 	currentPlaySessionId_.store(newSessionId, std::memory_order_release);
+	loopsFinished_.store(false, std::memory_order_release);
+	hasVideoStream_.store(false, std::memory_order_release);
 	currentFile_ = file;
 
 	LOG_DEBUG("GStreamerVideo", "Starting play for " + file + " (Session: " + std::to_string(newSessionId) + ")");
 
-	// App-side guards: we’re beginning an async load ? PAUSED (preroll)
+	// App-side guards: weÂ’re beginning an async load ? PAUSED (preroll)
 	pipeLineReady_.store(false, std::memory_order_release);
 	targetState_.store(IVideo::VideoState::Paused, std::memory_order_release);
 
@@ -954,8 +995,10 @@ bool GStreamerVideo::play(const std::string& file) {
 		g_free(uri);
 
 		setupCallbacksForSession(newSessionId);
-		if (videoSourceId_ == 0) videoSourceId_ = AudioBus::instance().addSource("video-preview");
-
+		if (videoSourceId_ == 0) {
+			videoSourceId_ = AudioBus::instance().addSource("video-preview");
+			AudioBus::instance().setGain(videoSourceId_, 0.8f);
+		}
 
 		// Request PAUSED (preroll)
 		GstStateChangeReturn scr = gst_element_set_state(pipeline_, GST_STATE_PAUSED);
@@ -1142,8 +1185,9 @@ GstFlowReturn GStreamerVideo::on_new_sample(GstAppSink* sink, gpointer user_data
 	if (!self->isCurrentSession(ctx->session)) return GST_FLOW_OK;
 
 	if (self->targetState_.load(std::memory_order_acquire) != IVideo::VideoState::Playing) {
-		GstSample* s = gst_app_sink_pull_sample(sink);
-		gst_sample_unref(s);
+		while (GstSample* s = gst_app_sink_try_pull_sample(sink, 0)) {
+			gst_sample_unref(s);
+		}
 		return GST_FLOW_OK;
 	}
 
@@ -1161,26 +1205,54 @@ GstFlowReturn GStreamerVideo::on_audio_new_sample(GstAppSink* sink, gpointer use
 	if (!ctx || !ctx->self) return GST_FLOW_OK;
 	auto* self = ctx->self;
 	if (!self->isCurrentSession(ctx->session)) return GST_FLOW_OK;
-
-	if (!self || self->targetState_.load(std::memory_order_acquire) == IVideo::VideoState::None)
+	if (self->targetState_.load(std::memory_order_acquire) == IVideo::VideoState::None)
 		return GST_FLOW_OK;
 
-	// Pull the sample inside the callback
-	GstSample* s = gst_app_sink_pull_sample(sink);
-	if (!s) return GST_FLOW_OK;
+	int drained_count = 0;
 
-	if (GstBuffer* b = gst_sample_get_buffer(s)) {
+	// Drain all available samples
+	while (GstSample* s = gst_app_sink_try_pull_sample(sink, 0)) {
+		drained_count++;
+
+		GstBuffer* b = gst_sample_get_buffer(s);
+		if (!b) {
+			gst_sample_unref(s);
+			continue;
+		}
+
+		// Handle corrupted buffers
+		if (GST_BUFFER_FLAG_IS_SET(b, GST_BUFFER_FLAG_CORRUPTED)) {
+			LOG_DEBUG("GStreamerAudio", "Dropping CORRUPTED audio buffer #" + std::to_string(drained_count) +
+				" for " + self->currentFile_);
+			gst_sample_unref(s);
+			continue;
+		}
+
+		// Handle discontinuity ? trigger fade-in
+		if (GST_BUFFER_FLAG_IS_SET(b, GST_BUFFER_FLAG_DISCONT)) {
+			AudioBus::instance().triggerFadeIn(self->videoSourceId_);
+			LOG_DEBUG("GStreamerAudio", "DISCONT detected on audio buffer #" + std::to_string(drained_count) +
+				" for " + self->currentFile_);
+		}
+
+		// Push audio data to AudioBus
 		GstMapInfo mi{};
 		if (gst_buffer_map(b, &mi, GST_MAP_READ)) {
-			// Fast path: push straight into AudioBus (thread-safe and quick)
 			AudioBus::instance().push(self->videoSourceId_, mi.data, (int)mi.size);
 			gst_buffer_unmap(b, &mi);
 		}
+
+		gst_sample_unref(s);
 	}
-	gst_sample_unref(s);
+
+	// Log only when we drained more than one buffer
+	if (drained_count > 1) {
+		LOG_DEBUG("GStreamerAudio", "Drained " + std::to_string(drained_count) +
+			" audio buffers in one callback for " + self->currentFile_);
+	}
+
 	return GST_FLOW_OK;
 }
-
 void GStreamerVideo::createSdlTexture() {
 	if (targetState_.load(std::memory_order_acquire) == IVideo::VideoState::None || !playbin_) {
 		return;
@@ -1440,66 +1512,218 @@ void GStreamerVideo::setVolume(float volume) {
 }
 
 void GStreamerVideo::skipForward() {
-	if (!pipeLineReady_.load(std::memory_order_acquire))
+	if (!pipeLineReady_.load(std::memory_order_acquire) || !pipeline_) {
+		LOG_DEBUG("GStreamerVideo", "skipForward: Pipeline not ready");
 		return;
-	gint64 current;
-	gint64 duration;
-	if (!gst_element_query_position(playbin_, GST_FORMAT_TIME, &current))
-		return;
-	if (!gst_element_query_duration(playbin_, GST_FORMAT_TIME, &duration))
-		return;
-	current += 60 * GST_SECOND;
-	if (current > duration)
-		current = duration - 1;
-	gst_element_seek_simple(playbin_, GST_FORMAT_TIME, GstSeekFlags(GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT),
-		current);
+	}
+
+	const std::string fileForLog = currentFile_;
+
+	GlibLoop::instance().invoke([this, fileForLog]() {
+		if (!pipeline_ || !pipeLineReady_.load(std::memory_order_acquire)) {
+			LOG_DEBUG("GStreamerVideo", "skipForward: Pipeline not ready during invoke for " + fileForLog);
+			return;
+		}
+
+		// Check if we're in a seekable state
+		GstState current, pending;
+		if (gst_element_get_state(pipeline_, &current, &pending, 0) != GST_STATE_CHANGE_SUCCESS) {
+			LOG_WARNING("GStreamerVideo", "skipForward: Could not get state for " + fileForLog);
+			return;
+		}
+		if (current != GST_STATE_PLAYING && current != GST_STATE_PAUSED) {
+			LOG_DEBUG("GStreamerVideo", "skipForward: Not in seekable state for " + fileForLog);
+			return;
+		}
+
+		gint64 currentPos = 0;
+		gint64 duration = 0;
+
+		if (!gst_element_query_position(pipeline_, GST_FORMAT_TIME, &currentPos)) {
+			LOG_WARNING("GStreamerVideo", "skipForward: Could not query position for " + fileForLog);
+			return;
+		}
+		if (!gst_element_query_duration(pipeline_, GST_FORMAT_TIME, &duration)) {
+			LOG_WARNING("GStreamerVideo", "skipForward: Could not query duration for " + fileForLog);
+			return;
+		}
+
+		gint64 newPos = currentPos + (60 * GST_SECOND);
+		if (newPos > duration) {
+			newPos = duration - (GST_SECOND / 10);  // 100ms from end
+		}
+
+		gboolean result = gst_element_seek(pipeline_, 1.0, GST_FORMAT_TIME,
+			(GstSeekFlags)(GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT),
+			GST_SEEK_TYPE_SET, newPos,
+			GST_SEEK_TYPE_NONE, GST_CLOCK_TIME_NONE);
+
+		if (result) {
+			LOG_DEBUG("GStreamerVideo", "skipForward: Seeking +60s to " +
+				std::to_string(newPos / GST_SECOND) + "s for " + fileForLog);
+		}
+		else {
+			LOG_ERROR("GStreamerVideo", "skipForward: Seek failed for " + fileForLog);
+		}
+		}, G_PRIORITY_HIGH);
 }
 
 void GStreamerVideo::skipBackward() {
-	if (!pipeLineReady_.load(std::memory_order_acquire))
+	if (!pipeLineReady_.load(std::memory_order_acquire) || !pipeline_) {
+		LOG_DEBUG("GStreamerVideo", "skipBackward: Pipeline not ready");
 		return;
-	gint64 current;
-	if (!gst_element_query_position(playbin_, GST_FORMAT_TIME, &current))
-		return;
-	if (current > 60 * GST_SECOND)
-		current -= 60 * GST_SECOND;
-	else
-		current = 0;
-	gst_element_seek_simple(playbin_, GST_FORMAT_TIME, GstSeekFlags(GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT),
-		current);
+	}
+
+	const std::string fileForLog = currentFile_;
+
+	GlibLoop::instance().invoke([this, fileForLog]() {
+		if (!pipeline_ || !pipeLineReady_.load(std::memory_order_acquire)) {
+			LOG_DEBUG("GStreamerVideo", "skipBackward: Pipeline not ready during invoke for " + fileForLog);
+			return;
+		}
+
+		GstState current, pending;
+		if (gst_element_get_state(pipeline_, &current, &pending, 0) != GST_STATE_CHANGE_SUCCESS) {
+			LOG_WARNING("GStreamerVideo", "skipBackward: Could not get state for " + fileForLog);
+			return;
+		}
+		if (current != GST_STATE_PLAYING && current != GST_STATE_PAUSED) {
+			LOG_DEBUG("GStreamerVideo", "skipBackward: Not in seekable state for " + fileForLog);
+			return;
+		}
+
+		gint64 currentPos = 0;
+		if (!gst_element_query_position(pipeline_, GST_FORMAT_TIME, &currentPos)) {
+			LOG_WARNING("GStreamerVideo", "skipBackward: Could not query position for " + fileForLog);
+			return;
+		}
+
+		gint64 newPos = (currentPos > 60 * GST_SECOND) ? (currentPos - 60 * GST_SECOND) : 0;
+
+		gboolean result = gst_element_seek(pipeline_, 1.0, GST_FORMAT_TIME,
+			(GstSeekFlags)(GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT),
+			GST_SEEK_TYPE_SET, newPos,
+			GST_SEEK_TYPE_NONE, GST_CLOCK_TIME_NONE);
+
+		if (result) {
+			LOG_DEBUG("GStreamerVideo", "skipBackward: Seeking -60s to " +
+				std::to_string(newPos / GST_SECOND) + "s for " + fileForLog);
+		}
+		else {
+			LOG_ERROR("GStreamerVideo", "skipBackward: Seek failed for " + fileForLog);
+		}
+		}, G_PRIORITY_HIGH);
 }
 
 void GStreamerVideo::skipForwardp() {
-	if (!pipeLineReady_.load(std::memory_order_acquire))
+	if (!pipeLineReady_.load(std::memory_order_acquire) || !pipeline_) {
+		LOG_DEBUG("GStreamerVideo", "skipForwardp: Pipeline not ready");
 		return;
-	gint64 current;
-	gint64 duration;
-	if (!gst_element_query_position(playbin_, GST_FORMAT_TIME, &current))
-		return;
-	if (!gst_element_query_duration(playbin_, GST_FORMAT_TIME, &duration))
-		return;
-	current += duration / 20;
-	if (current > duration)
-		current = duration - 1;
-	gst_element_seek_simple(playbin_, GST_FORMAT_TIME, GstSeekFlags(GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT),
-		current);
+	}
+
+	const std::string fileForLog = currentFile_;
+
+	GlibLoop::instance().invoke([this, fileForLog]() {
+		if (!pipeline_ || !pipeLineReady_.load(std::memory_order_acquire)) {
+			LOG_DEBUG("GStreamerVideo", "skipForwardp: Pipeline not ready during invoke for " + fileForLog);
+			return;
+		}
+
+		GstState current, pending;
+		if (gst_element_get_state(pipeline_, &current, &pending, 0) != GST_STATE_CHANGE_SUCCESS) {
+			LOG_WARNING("GStreamerVideo", "skipForwardp: Could not get state for " + fileForLog);
+			return;
+		}
+		if (current != GST_STATE_PLAYING && current != GST_STATE_PAUSED) {
+			LOG_DEBUG("GStreamerVideo", "skipForwardp: Not in seekable state for " + fileForLog);
+			return;
+		}
+
+		gint64 currentPos = 0;
+		gint64 duration = 0;
+
+		if (!gst_element_query_position(pipeline_, GST_FORMAT_TIME, &currentPos)) {
+			LOG_WARNING("GStreamerVideo", "skipForwardp: Could not query position for " + fileForLog);
+			return;
+		}
+		if (!gst_element_query_duration(pipeline_, GST_FORMAT_TIME, &duration)) {
+			LOG_WARNING("GStreamerVideo", "skipForwardp: Could not query duration for " + fileForLog);
+			return;
+		}
+
+		gint64 skipAmount = duration / 20;  // 5% of duration
+		gint64 newPos = currentPos + skipAmount;
+		if (newPos > duration) {
+			newPos = duration - (GST_SECOND / 10);
+		}
+
+		gboolean result = gst_element_seek(pipeline_, 1.0, GST_FORMAT_TIME,
+			(GstSeekFlags)(GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT),
+			GST_SEEK_TYPE_SET, newPos,
+			GST_SEEK_TYPE_NONE, GST_CLOCK_TIME_NONE);
+
+		if (result) {
+			LOG_DEBUG("GStreamerVideo", "skipForwardp: Seeking +5% to " +
+				std::to_string(newPos / GST_SECOND) + "s for " + fileForLog);
+		}
+		else {
+			LOG_ERROR("GStreamerVideo", "skipForwardp: Seek failed for " + fileForLog);
+		}
+		}, G_PRIORITY_HIGH);
 }
 
 void GStreamerVideo::skipBackwardp() {
-	if (!pipeLineReady_.load(std::memory_order_acquire))
+	if (!pipeLineReady_.load(std::memory_order_acquire) || !pipeline_) {
+		LOG_DEBUG("GStreamerVideo", "skipBackwardp: Pipeline not ready");
 		return;
-	gint64 current;
-	gint64 duration;
-	if (!gst_element_query_position(playbin_, GST_FORMAT_TIME, &current))
-		return;
-	if (!gst_element_query_duration(playbin_, GST_FORMAT_TIME, &duration))
-		return;
-	if (current > duration / 20)
-		current -= duration / 20;
-	else
-		current = 0;
-	gst_element_seek_simple(playbin_, GST_FORMAT_TIME, GstSeekFlags(GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT),
-		current);
+	}
+
+	const std::string fileForLog = currentFile_;
+
+	GlibLoop::instance().invoke([this, fileForLog]() {
+		if (!pipeline_ || !pipeLineReady_.load(std::memory_order_acquire)) {
+			LOG_DEBUG("GStreamerVideo", "skipBackwardp: Pipeline not ready during invoke for " + fileForLog);
+			return;
+		}
+
+		GstState current, pending;
+		if (gst_element_get_state(pipeline_, &current, &pending, 0) != GST_STATE_CHANGE_SUCCESS) {
+			LOG_WARNING("GStreamerVideo", "skipBackwardp: Could not get state for " + fileForLog);
+			return;
+		}
+		if (current != GST_STATE_PLAYING && current != GST_STATE_PAUSED) {
+			LOG_DEBUG("GStreamerVideo", "skipBackwardp: Not in seekable state for " + fileForLog);
+			return;
+		}
+
+		gint64 currentPos = 0;
+		gint64 duration = 0;
+
+		if (!gst_element_query_position(pipeline_, GST_FORMAT_TIME, &currentPos)) {
+			LOG_WARNING("GStreamerVideo", "skipBackwardp: Could not query position for " + fileForLog);
+			return;
+		}
+		if (!gst_element_query_duration(pipeline_, GST_FORMAT_TIME, &duration)) {
+			LOG_WARNING("GStreamerVideo", "skipBackwardp: Could not query duration for " + fileForLog);
+			return;
+		}
+
+		gint64 skipAmount = duration / 20;  // 5% of duration
+		gint64 newPos = (currentPos > skipAmount) ? (currentPos - skipAmount) : 0;
+
+		gboolean result = gst_element_seek(pipeline_, 1.0, GST_FORMAT_TIME,
+			(GstSeekFlags)(GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT),
+			GST_SEEK_TYPE_SET, newPos,
+			GST_SEEK_TYPE_NONE, GST_CLOCK_TIME_NONE);
+
+		if (result) {
+			LOG_DEBUG("GStreamerVideo", "skipBackwardp: Seeking -5% to " +
+				std::to_string(newPos / GST_SECOND) + "s for " + fileForLog);
+		}
+		else {
+			LOG_ERROR("GStreamerVideo", "skipBackwardp: Seek failed for " + fileForLog);
+		}
+		}, G_PRIORITY_HIGH);
 }
 
 void GStreamerVideo::pause() {
@@ -1727,4 +1951,20 @@ void GStreamerVideo::setPerspectiveCorners(const int* corners) {
 		std::fill(perspectiveCorners_, perspectiveCorners_ + 8, 0);
 		hasPerspective_ = false;  // Reset flag when corners are cleared
 	}
+}
+
+bool GStreamerVideo::hasFinishedLoops() const {
+	return loopsFinished_.load(std::memory_order_acquire);
+}
+
+void GStreamerVideo::detectStreamTypes() {
+	if (!playbin_) return;
+
+	gint n_video = 0;
+	g_object_get(playbin_, "n-video", &n_video, nullptr);
+
+	hasVideoStream_.store(n_video > 0, std::memory_order_release);
+
+	LOG_DEBUG("GStreamerVideo", "Stream detection for " + currentFile_ +
+		": video streams=" + std::to_string(n_video));
 }

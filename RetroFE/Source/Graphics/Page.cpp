@@ -194,16 +194,28 @@ void Page::onNewItemSelected() {
 void Page::returnToRememberSelectedItem() {
 	if (!getAnActiveMenu()) return;
 
-	if (std::string name = getPlaylistName(); name != "" && lastPlaylistOffsets_[name]) {
-		setScrollOffsetIndex(lastPlaylistOffsets_[name]);
+	if (std::string name = getPlaylistName();
+		!name.empty() && name != "themes") {
+
+		auto it = lastPlaylistOffsets_.find(name);
+		if (it != lastPlaylistOffsets_.end() && it->second) {
+			setScrollOffsetIndex(it->second);
+		}
 	}
 }
+
 
 void Page::rememberSelectedItem() {
 	ScrollingList const* amenu = getAnActiveMenu();
 	if (!amenu || !amenu->getItems().size()) return;
 
 	std::string name = getPlaylistName();
+
+	// Exclude "themes" from remember-last-selected behavior
+	if (name == "themes") {
+		return;
+	}
+
 	if (name == "lastplayed") {
 		// For the "last played" list, we only remember our position in "alpha" mode.
 		std::string lastPlayedSort = "time";
@@ -212,11 +224,10 @@ void Page::rememberSelectedItem() {
 		if (lastPlayedSort == "alpha") {
 			lastPlaylistOffsets_[name] = amenu->getScrollOffsetIndex();
 		}
-		// Implicitly, if the mode is "time", we do nothing, "forgetting" the position.
-
+		// If the mode is "time", we do nothing, "forgetting" the position.
 	}
-	else if (name != "" && selectedItem_) {
-		// For any other playlist, we always remember the position.
+	else if (!name.empty() && selectedItem_) {
+		// For any other playlist (except "themes"), we always remember the position.
 		lastPlaylistOffsets_[name] = amenu->getScrollOffsetIndex();
 	}
 }
@@ -607,8 +618,6 @@ void Page::jukeboxJump() {
 }
 
 void Page::triggerEventOnAllMenus(const std::string& event) {
-	if (!selectedItem_)
-		return;
 
 	unsigned int depth = menuDepth_ - 1;
 	for (size_t i = 0; i < menus_.size(); ++i) {
@@ -756,15 +765,15 @@ void Page::letterScroll(ScrollDirection direction) {
 		if (menu && !menu->isPlaylist()) {
 			if (direction == ScrollDirectionForward) {
 				menu->letterDown();
-				onNewScrollItemSelected();
-
 			}
-			if (direction == ScrollDirectionBack) {
+			else if (direction == ScrollDirectionBack) {
 				menu->letterUp();
-				onNewScrollItemSelected();
-
 			}
 		}
+	}
+	onNewScrollItemSelected();  // Call once after the loop
+	if (highlightSoundChunk_) {
+		highlightSoundChunk_->play();
 	}
 }
 
@@ -1102,8 +1111,8 @@ void Page::selectPlaylist(const std::string& playlist) {
 	size_t initialOffset = 0;
 	ScrollingList* amenu = getAnActiveMenu();
 
-	// Priority 1: Check for a remembered position.
-	if (lastPlaylistOffsets_.count(playlist) > 0) {
+	// Priority 1: Check for a remembered position (but not for "themes").
+	if (playlist != "themes" && lastPlaylistOffsets_.count(playlist) > 0) {
 		initialOffset = lastPlaylistOffsets_[playlist];
 	}
 	else {
@@ -1121,7 +1130,7 @@ void Page::selectPlaylist(const std::string& playlist) {
 				applyRandomStart = false;
 			}
 		}
-		else if (playlist == "settings") {
+		else if (playlist == "settings" || playlist == "themes") {
 			applyRandomStart = false;
 		}
 
@@ -1129,7 +1138,9 @@ void Page::selectPlaylist(const std::string& playlist) {
 			amenu->random();
 			initialOffset = amenu->getScrollOffsetIndex();
 
-			if (rememberMenu) {
+			bool rememberMenu = false;
+			config_.getProperty(OPTION_REMEMBERMENU, rememberMenu);
+			if (rememberMenu && playlist != "themes") {
 				lastPlaylistOffsets_[playlist] = initialOffset;
 			}
 		}

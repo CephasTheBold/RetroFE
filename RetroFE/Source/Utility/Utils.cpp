@@ -46,14 +46,16 @@
 // Initialize the static member variables
 #ifdef __APPLE__
 #include <mach/mach.h>
-std::unordered_map<std::filesystem::path, std::unordered_set<std::string>, PathHash> Utils::fileCache;
+std::unordered_map<std::filesystem::path, std::shared_ptr<const Utils::FileSet>, PathHash> Utils::fileCache;
 std::unordered_set<std::filesystem::path, PathHash> Utils::nonExistingDirectories;
 #else
-std::unordered_map<std::filesystem::path, std::unordered_set<std::string>> Utils::fileCache;
+std::unordered_map<std::filesystem::path, std::shared_ptr<const Utils::FileSet>> Utils::fileCache;
 std::unordered_set<std::filesystem::path> Utils::nonExistingDirectories;
 #endif
 
 namespace fs = std::filesystem;
+
+std::shared_mutex Utils::fileCacheMutex;
 
 Utils::Utils() = default;
 
@@ -67,6 +69,22 @@ void Utils::postMessage( LPCTSTR windowTitle, UINT Msg, WPARAM wParam, LPARAM lP
     }
 }
 #endif
+
+std::filesystem::path Utils::normalizeCacheKey(const std::filesystem::path& p) {
+    // Normalize path shape first (removes .., ., duplicate separators, etc.)
+    std::filesystem::path key = p.lexically_normal().make_preferred();
+
+#ifdef _WIN32
+    // Windows: make directory keys case-insensitive by lowercasing the whole key.
+    // Use wstring so we don't byte-lower UTF-8.
+    std::wstring ws = key.wstring();
+    std::transform(ws.begin(), ws.end(), ws.begin(),
+        [](wchar_t c) { return static_cast<wchar_t>(towlower(c)); });
+    return std::filesystem::path(ws).make_preferred();
+#else
+    return key;
+#endif
+}
 
 // Utility function to convert std::wstring to std::string
 std::string Utils::wstringToString(const std::wstring wstr) {
@@ -117,6 +135,17 @@ static inline bool is_file_or_link_to_file(const fs::directory_entry& de) {
     return false;
 }
 
+// Coarse sleep only: no steady_clock spin.
+void Utils::coarseSleep(double seconds_to_sleep) {
+    if (seconds_to_sleep <= 0.0) return;
+
+    // Leave a tiny margin so the caller can spin to exact SDL tick.
+    constexpr double margin_s = 0.0005; // 0.5ms (tune)
+    double s = seconds_to_sleep - margin_s;
+    if (s > 0.0)
+        std::this_thread::sleep_for(std::chrono::duration<double>(s));
+}
+
 void Utils::preciseSleep(double seconds_to_sleep) {
     using namespace std::chrono;
 
@@ -124,50 +153,26 @@ void Utils::preciseSleep(double seconds_to_sleep) {
         return;
     }
 
-    // Each thread gets its own adaptive parameters for preciseSleep
-    thread_local static double estimate_s = 0.010; // Initial estimate in seconds (e.g., 10ms)
-    thread_local static double mean_s = 0.010; // Initial mean in seconds
-    thread_local static double m2_s = 0.0;   // For variance calculation
-    thread_local static int64_t count = 1;
+    // How much time we want to reserve for the final spin.
+    // 0.5 ms is a decent compromise on Windows + SDL_HINT_TIMER_RESOLUTION=1.
+    constexpr double spin_tail_s = 0.0005; // 0.5 ms
 
-    double remaining_seconds = seconds_to_sleep;
-
-    // Note: This adaptive loop is based on the idea of repeatedly sleeping for 1ms
-    // and learning. If seconds_to_sleep is small (e.g., < estimate_s), it goes straight to spin.
-    // The effectiveness of this adaptive part vs. a simpler (sleep_for(total - fudge) then spin)
-    // depends on the OS and typical sleep durations.
-    while (remaining_seconds > estimate_s) {
-        auto start_chunk = steady_clock::now();
-        std::this_thread::sleep_for(milliseconds(1)); // Coarse sleep for 1ms
-        auto end_chunk = steady_clock::now();
-
-        double observed_s = duration<double>(end_chunk - start_chunk).count();
-        remaining_seconds -= observed_s;
-
-        // Update running statistics (Welford's algorithm)
-        ++count;
-        double delta_s = observed_s - mean_s;
-        mean_s += delta_s / count;
-        m2_s += delta_s * (observed_s - mean_s);
-
-        double stddev_s = 0.0;
-        if (count > 1) { // Need at least 2 samples for stddev
-            stddev_s = std::sqrt(m2_s / (count - 1));
-        }
-        estimate_s = mean_s + stddev_s; // Update estimate for next iteration
+    // Decide how much we ask the OS to sleep.
+    double coarse_s = seconds_to_sleep - spin_tail_s;
+    if (coarse_s < 0.0) {
+        coarse_s = 0.0;
     }
 
-    // Spin for the remainder (or if seconds_to_sleep was < estimate_s initially)
-    // Ensure remaining_seconds for spin isn't negative if coarse sleep overshot.
-    if (remaining_seconds > 0.0) {
-        auto spin_start_time = steady_clock::now();
-        // Create duration object once
-        auto spin_delay_duration = duration<double>(remaining_seconds);
-        while (steady_clock::now() - spin_start_time < spin_delay_duration) {
-            // Spin
-            // Consider adding _mm_pause() or std::this_thread::yield() for very long spins,
-            // but for typical sub-millisecond final spins, pure spin is often best.
-        }
+    const auto target_time = steady_clock::now() + duration<double>(seconds_to_sleep);
+
+    // Coarse sleep first, if it’s worth it.
+    if (coarse_s > 0.0002) { // avoid crazy tiny sleeps
+        std::this_thread::sleep_for(duration<double>(coarse_s));
+    }
+
+    // Spin for the remainder (or for the whole time if seconds_to_sleep was tiny).
+    while (steady_clock::now() < target_time) {
+        // very short spin; no yield/pause needed here
     }
 }
 
@@ -209,114 +214,126 @@ std::string Utils::filterComments(const std::string& line) {
     return result;
 }
 
-
-// Utils.cpp
 void Utils::populateCache(const std::filesystem::path& directory) {
-    LOG_FILECACHE("Populate", "Populating cache for directory: " + directory.string());
+    namespace fs = std::filesystem;
 
-    // Negative cache: if already marked missing, bail
-    if (nonExistingDirectories.find(directory) != nonExistingDirectories.end()) {
-        LOG_FILECACHE("Skip", "Directory previously marked missing: " + removeAbsolutePath(directory.string()));
-        return;
-    }
-    // Already populated?
-    if (fileCache.find(directory) != fileCache.end()) {
-        return;
+    const fs::path dirKey = normalizeCacheKey(directory);
+
+    {
+        std::shared_lock lock(fileCacheMutex);
+
+        if (nonExistingDirectories.find(dirKey) != nonExistingDirectories.end()) {
+            LOG_FILECACHE("Skip", "Directory previously marked missing: " + removeAbsolutePath(dirKey.string()));
+            return;
+        }
+
+        if (fileCache.find(dirKey) != fileCache.end()) {
+            return; // already populated
+        }
     }
 
-    // Verify dir validity (accept symlink/junction to directory)
+    LOG_FILECACHE("Populate", "Populating cache for directory: " + dirKey.string());
+
     if (!is_valid_directory(directory)) {
-        nonExistingDirectories.insert(directory);
-        LOG_FILECACHE("Skip", "Directory not present/not a directory: " + removeAbsolutePath(directory.string()));
+        std::unique_lock lock(fileCacheMutex);
+        nonExistingDirectories.insert(dirKey);
+        LOG_FILECACHE("Skip", "Directory not present/not a directory: " + removeAbsolutePath(dirKey.string()));
         return;
     }
 
-    std::unordered_set<std::string> files;
+    FileSet files;
+
     std::error_code ec;
     fs::directory_options opts = fs::directory_options::skip_permission_denied;
     fs::directory_iterator it(directory, opts, ec), end;
+
     if (ec) {
-        // Treat as missing-ish this run to avoid repeated faults
-        nonExistingDirectories.insert(directory);
-        LOG_FILECACHE("Skip", "Failed to open directory (ec): " + removeAbsolutePath(directory.string()));
+        std::unique_lock lock(fileCacheMutex);
+        nonExistingDirectories.insert(dirKey);
+        LOG_FILECACHE("Skip", "Failed to open directory (ec): " + removeAbsolutePath(dirKey.string()));
         return;
     }
 
     for (; it != end; it.increment(ec)) {
-        if (ec) { ec.clear(); continue; } // skip bad entries; keep going
+        if (ec) { ec.clear(); continue; }
         if (!is_file_or_link_to_file(*it)) continue;
 
         std::string fname = it->path().filename().string();
 #ifdef _WIN32
-        files.insert(Utils::toLower(std::move(fname)));
-#else
+        fname = Utils::toLower(fname); // keep your existing behavior
+#endif
         files.insert(std::move(fname));
-#endif
     }
 
-    fileCache.emplace(directory, std::move(files));
-}
-bool Utils::isFileInCache(const std::filesystem::path& baseDir, const std::string& filename) {
-    auto baseDirIt = fileCache.find(baseDir);
-    if (baseDirIt != fileCache.end()) {
-        const auto& files = baseDirIt->second;
-#ifdef WIN32
-        if (files.find(Utils::toLower(filename)) != files.end()) {
-#else
-        if (files.find(filename) != files.end()) {
-#endif
-            // Logging cache hit
-            LOG_FILECACHE("Hit", removeAbsolutePath(baseDir.string()) + " contains " + filename);
-            return true;
-        }
-        }
+    auto constFilesPtr = std::make_shared<const FileSet>(std::move(files));
 
-    return false;
+    {
+        std::unique_lock lock(fileCacheMutex);
+
+        // Double-check under lock
+        if (fileCache.find(dirKey) == fileCache.end() &&
+            nonExistingDirectories.find(dirKey) == nonExistingDirectories.end()) {
+            fileCache.emplace(dirKey, std::move(constFilesPtr));
+        }
     }
-
-
-
-bool Utils::isFileCachePopulated(const std::filesystem::path& baseDir) {
-    return fileCache.find(baseDir) != fileCache.end();
 }
 
-bool Utils::findMatchingFile(const std::string& prefix, const std::vector<std::string>& extensions, std::string& file) {
-    namespace fs = std::filesystem;
+std::shared_ptr<const Utils::FileSet>
+Utils::getOrPopulateFileSet(const std::filesystem::path& directory) {
+    const auto dirKey = normalizeCacheKey(directory);
 
-    fs::path absolutePath = Utils::combinePath(Configuration::absolutePath, prefix);
-    fs::path baseDir = absolutePath.parent_path();
+    {
+        std::shared_lock lock(fileCacheMutex);
 
-    // Check if the directory is known to not exist
-    if (nonExistingDirectories.find(baseDir) != nonExistingDirectories.end()) {
-        LOG_FILECACHE("Skip", "Skipping non-existing directory: " + removeAbsolutePath(baseDir.string()));
-        return false; // Directory was previously found not to exist
-    }
+        if (nonExistingDirectories.find(dirKey) != nonExistingDirectories.end()) {
+            return {};
+        }
 
-    // Early exit if the directory doesn't exist
-    if (!fs::is_directory(baseDir)) {
-        nonExistingDirectories.insert(baseDir); // Add to non-existing directories cache
-        return false;
-    }
-
-    std::string baseFileName = absolutePath.filename().string();
-
-    // Ensure the cache is populated
-    if (!isFileCachePopulated(baseDir)) {
-        populateCache(baseDir);
-    }
-
-    // Check for the file with each extension in the cache
-    for (const auto& ext : extensions) {
-        std::string tempFileName = baseFileName + "." + ext;
-        if (isFileInCache(baseDir, tempFileName)) {
-            file = (baseDir / tempFileName).string();
-            return true; // File found
+        auto it = fileCache.find(dirKey);
+        if (it != fileCache.end()) {
+            return it->second; // copy shared_ptr (safe)
         }
     }
 
-    // Log cache miss after checking all extensions
-    LOG_FILECACHE("Miss", removeAbsolutePath(baseDir.string()) + " does not contain file '" + baseFileName + "'");
-    return false; // No matching file found
+    // Not populated yet
+    populateCache(directory);
+
+    // Try again
+    {
+        std::shared_lock lock(fileCacheMutex);
+
+        if (nonExistingDirectories.find(dirKey) != nonExistingDirectories.end()) {
+            return {};
+        }
+
+        auto it = fileCache.find(dirKey);
+        if (it != fileCache.end()) {
+            return it->second;
+        }
+    }
+
+    return {};
+}
+
+bool Utils::findMatchingFile(const std::string& prefix,
+    const std::vector<std::string>& extensions,
+    std::string& file) {
+    constexpr size_t kStack = 16;
+    std::string_view stack[kStack];
+
+    const size_t n = extensions.size();
+    if (n == 0) return false;
+
+    if (n <= kStack) {
+        for (size_t i = 0; i < n; ++i) stack[i] = extensions[i];
+        return findMatchingFile(std::string_view(prefix), stack, stack + n, file);
+    }
+
+    std::vector<std::string_view> views;
+    views.reserve(n);
+    for (const auto& s : extensions) views.emplace_back(s);
+
+    return findMatchingFile(std::string_view(prefix), views.data(), views.data() + views.size(), file);
 }
 
 bool Utils::findMatchingFile(std::string_view prefixNoExt,
@@ -325,45 +342,51 @@ bool Utils::findMatchingFile(std::string_view prefixNoExt,
     std::string& outPath) {
     namespace fs = std::filesystem;
 
-    // Mirror the vector overload behavior: build an absolute prefix first
-    const std::string prefixStr(prefixNoExt);
-    fs::path absolutePath = Utils::combinePath(Configuration::absolutePath, prefixStr);
-    fs::path baseDir = absolutePath.parent_path();
-    std::string baseFileName = absolutePath.filename().string();
+    const fs::path absolutePath =
+        (fs::path(Configuration::absolutePath) / fs::path(std::string(prefixNoExt))).lexically_normal();
 
-    // Negative cache fast-path
-    if (nonExistingDirectories.find(baseDir) != nonExistingDirectories.end()) {
-        LOG_FILECACHE("Skip", "Skipping non-existing directory: " + removeAbsolutePath(baseDir.string()));
+    const fs::path baseDirPath = absolutePath.parent_path();
+    const std::string baseFileName = absolutePath.filename().string();
+
+    auto files = getOrPopulateFileSet(baseDirPath);
+    if (!files) {
+        LOG_FILECACHE("Skip", "Skipping non-existing directory: " + removeAbsolutePath(baseDirPath.string()));
         return false;
     }
 
-    // Validate / populate the cache safely (handles dir symlinks)
-    if (fileCache.find(baseDir) == fileCache.end()) {
-        populateCache(baseDir);
-        if (nonExistingDirectories.find(baseDir) != nonExistingDirectories.end()) {
-            return false;
-        }
-    }
+#ifdef _WIN32
+    const std::string baseSource = Utils::toLower(baseFileName);
+#else
+    const std::string& baseSource = baseFileName; // Reference to avoid a copy on non-Windows
+#endif
 
-    // Probe cache for each extension
-    std::string candidate;
-    candidate.reserve(baseFileName.size() + 1 + 8);
+    std::string candidate = baseSource;
+    candidate.push_back('.');
+    const size_t prefixLen = candidate.length();
+
+    // Pre-reserve enough space for the longest expected extension (e.g., .jpeg, .webp)
+    candidate.reserve(prefixLen + 8);
 
     for (auto it = extsBegin; it != extsEnd; ++it) {
         const std::string_view ext = *it;
-        candidate.assign(baseFileName);
-        candidate.push_back('.');
+
+        // Truncate back to "filename." and append the new extension
+        candidate.resize(prefixLen);
         candidate.append(ext.data(), ext.size());
 
-        if (isFileInCache(baseDir, candidate)) {
-            outPath = (baseDir / candidate).string();
+        if (files->find(candidate) != files->end()) {
+            outPath = (baseDirPath / candidate).string();
+
+            // Only log if necessary; string concatenation in logs can be expensive
+            LOG_FILECACHE("Hit", removeAbsolutePath(baseDirPath.string()) + " contains " + candidate);
             return true;
         }
     }
 
-    LOG_FILECACHE("Miss", removeAbsolutePath(baseDir.string()) + " does not contain file '" + baseFileName + "'");
+    LOG_FILECACHE("Miss", removeAbsolutePath(baseDirPath.string()) + " does not contain file '" + baseFileName + "'");
     return false;
 }
+
 
 
 std::string Utils::replace(
@@ -533,10 +556,6 @@ std::string Utils::trim(std::string str)
     str.erase(0, str.find_first_not_of(' '));       //prefixing spaces
     return str;
 }
-
-#include "../Database/Configuration.h"
-#include <filesystem>
-namespace fs = std::filesystem;
 
 bool Utils::isAbsolutePath(const std::string& path) {
     return fs::path(path).is_absolute();
