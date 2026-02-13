@@ -245,12 +245,4 @@ private:
     bool jukebox_;
     bool isLaunched_ = false;
 
-    bool idleCacheValid_ = false;
-    bool cachedMenuIdle_ = true;
-    bool cachedGraphicsIdle_ = true;
-    bool cachedIdle_ = true;
-    bool cachedAttractIdle_ = true;
-
-    void refreshIdleStates();
-
 };
