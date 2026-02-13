@@ -23,6 +23,10 @@
 #include <sstream>
 #include <mutex>
 
+#if defined(__SSE2__)
+#include <emmintrin.h>
+#endif
+
 namespace {
 std::string trimPlaylistToken(const std::string& token) {
     const size_t first = token.find_first_not_of(" \t\n\r");
@@ -33,6 +37,98 @@ std::string trimPlaylistToken(const std::string& token) {
     const size_t last = token.find_last_not_of(" \t\n\r");
     return token.substr(first, last - first + 1);
 }
+
+#if defined(__SSE2__)
+inline void evaluateLinearSse(const float* progress, const float* start, const float* change, float* out, size_t count) {
+    constexpr size_t kWidth = 4;
+    size_t i = 0;
+    for (; i + kWidth <= count; i += kWidth) {
+        const __m128 p = _mm_loadu_ps(progress + i);
+        const __m128 b = _mm_loadu_ps(start + i);
+        const __m128 c = _mm_loadu_ps(change + i);
+        const __m128 result = _mm_add_ps(_mm_mul_ps(c, p), b);
+        _mm_storeu_ps(out + i, result);
+    }
+
+    for (; i < count; ++i) {
+        out[i] = change[i] * progress[i] + start[i];
+    }
+}
+
+inline void evaluateEaseInQuadraticSse(const float* progress, const float* start, const float* change, float* out, size_t count) {
+    constexpr size_t kWidth = 4;
+    size_t i = 0;
+    for (; i + kWidth <= count; i += kWidth) {
+        const __m128 p = _mm_loadu_ps(progress + i);
+        const __m128 b = _mm_loadu_ps(start + i);
+        const __m128 c = _mm_loadu_ps(change + i);
+        const __m128 p2 = _mm_mul_ps(p, p);
+        const __m128 result = _mm_add_ps(_mm_mul_ps(c, p2), b);
+        _mm_storeu_ps(out + i, result);
+    }
+
+    for (; i < count; ++i) {
+        out[i] = change[i] * progress[i] * progress[i] + start[i];
+    }
+}
+
+inline void evaluateEaseOutQuadraticSse(const float* progress, const float* start, const float* change, float* out, size_t count) {
+    constexpr size_t kWidth = 4;
+    const __m128 two = _mm_set1_ps(2.0f);
+    size_t i = 0;
+    for (; i + kWidth <= count; i += kWidth) {
+        const __m128 p = _mm_loadu_ps(progress + i);
+        const __m128 b = _mm_loadu_ps(start + i);
+        const __m128 c = _mm_loadu_ps(change + i);
+        const __m128 pTerm = _mm_sub_ps(two, p); // 2 - p
+        const __m128 result = _mm_add_ps(_mm_mul_ps(c, _mm_mul_ps(p, pTerm)), b);
+        _mm_storeu_ps(out + i, result);
+    }
+
+    for (; i < count; ++i) {
+        out[i] = change[i] * progress[i] * (2.0f - progress[i]) + start[i];
+    }
+}
+
+inline void evaluateEaseInCubicSse(const float* progress, const float* start, const float* change, float* out, size_t count) {
+    constexpr size_t kWidth = 4;
+    size_t i = 0;
+    for (; i + kWidth <= count; i += kWidth) {
+        const __m128 p = _mm_loadu_ps(progress + i);
+        const __m128 b = _mm_loadu_ps(start + i);
+        const __m128 c = _mm_loadu_ps(change + i);
+        const __m128 p2 = _mm_mul_ps(p, p);
+        const __m128 p3 = _mm_mul_ps(p2, p);
+        const __m128 result = _mm_add_ps(_mm_mul_ps(c, p3), b);
+        _mm_storeu_ps(out + i, result);
+    }
+
+    for (; i < count; ++i) {
+        out[i] = change[i] * progress[i] * progress[i] * progress[i] + start[i];
+    }
+}
+
+inline void evaluateEaseOutCubicSse(const float* progress, const float* start, const float* change, float* out, size_t count) {
+    constexpr size_t kWidth = 4;
+    const __m128 one = _mm_set1_ps(1.0f);
+    size_t i = 0;
+    for (; i + kWidth <= count; i += kWidth) {
+        const __m128 p = _mm_loadu_ps(progress + i);
+        const __m128 b = _mm_loadu_ps(start + i);
+        const __m128 c = _mm_loadu_ps(change + i);
+        const __m128 q = _mm_sub_ps(p, one);
+        const __m128 q2 = _mm_mul_ps(q, q);
+        const __m128 q3 = _mm_mul_ps(q2, q);
+        const __m128 result = _mm_add_ps(_mm_mul_ps(c, _mm_add_ps(q3, one)), b);
+        _mm_storeu_ps(out + i, result);
+    }
+
+    for (; i < count; ++i) {
+        const float q = progress[i] - 1.0f;
+        out[i] = change[i] * (q * q * q + 1.0f) + start[i];
+    }
+}
+#endif
 }
 
 std::unordered_map<std::string, TweenAlgorithm> Tween::tweenTypeMap_ = {
@@ -202,19 +298,35 @@ Tween::EasingKernel Tween::getKernel(TweenAlgorithm type) {
 void Tween::evaluateBatch(TweenAlgorithm type, const float* progress, const float* start, const float* change, float* out, size_t count) {
     switch (type) {
         case EASE_IN_QUADRATIC:
+#if defined(__SSE2__)
+            evaluateEaseInQuadraticSse(progress, start, change, out, count);
+#else
             for (size_t i = 0; i < count; ++i) out[i] = easeInQuadratic(progress[i], start[i], change[i]);
+#endif
             break;
         case EASE_OUT_QUADRATIC:
+#if defined(__SSE2__)
+            evaluateEaseOutQuadraticSse(progress, start, change, out, count);
+#else
             for (size_t i = 0; i < count; ++i) out[i] = easeOutQuadratic(progress[i], start[i], change[i]);
+#endif
             break;
         case EASE_INOUT_QUADRATIC:
             for (size_t i = 0; i < count; ++i) out[i] = easeInOutQuadratic(progress[i], start[i], change[i]);
             break;
         case EASE_IN_CUBIC:
+#if defined(__SSE2__)
+            evaluateEaseInCubicSse(progress, start, change, out, count);
+#else
             for (size_t i = 0; i < count; ++i) out[i] = easeInCubic(progress[i], start[i], change[i]);
+#endif
             break;
         case EASE_OUT_CUBIC:
+#if defined(__SSE2__)
+            evaluateEaseOutCubicSse(progress, start, change, out, count);
+#else
             for (size_t i = 0; i < count; ++i) out[i] = easeOutCubic(progress[i], start[i], change[i]);
+#endif
             break;
         case EASE_INOUT_CUBIC:
             for (size_t i = 0; i < count; ++i) out[i] = easeInOutCubic(progress[i], start[i], change[i]);
@@ -266,7 +378,11 @@ void Tween::evaluateBatch(TweenAlgorithm type, const float* progress, const floa
             break;
         case LINEAR:
         default:
+#if defined(__SSE2__)
+            evaluateLinearSse(progress, start, change, out, count);
+#else
             for (size_t i = 0; i < count; ++i) out[i] = linear(progress[i], start[i], change[i]);
+#endif
             break;
     }
 }
