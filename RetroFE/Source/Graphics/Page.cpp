@@ -295,38 +295,77 @@ void Page::setStatusTextComponent(Text* t) {
 
 bool Page::addComponent(Component* c) {
 	if (c->baseViewInfo.Layer < NUM_LAYERS) {
-		// No need to resize—guaranteed by constructor
-		LayerComponents_[c->baseViewInfo.Layer].push_back(c);
-		return true;
+	if (!idleCacheValid_) {
+		refreshIdleStates();
+	return cachedMenuIdle_;
+
+
+	if (!idleCacheValid_) {
+		refreshIdleStates();
+	return cachedIdle_;
+	if (!idleCacheValid_) {
+		refreshIdleStates();
 	}
-	else {
-		std::stringstream ss;
-		ss << "Component layer too large. Layer: " << c->baseViewInfo.Layer;
-		LOG_ERROR("Page", ss.str());
-		return false;
-	}
+	return cachedAttractIdle_;
 }
 
 
-bool Page::isMenuIdle() {
-	if (playlistMenu_ && !playlistMenu_->isScrollingListIdle())
-		return false;
+bool Page::isGraphicsIdle() {
+	if (!idleCacheValid_) {
+		refreshIdleStates();
+	}
+	return cachedGraphicsIdle_;
+}
 
-	for (auto it = menus_.begin(); it != menus_.end(); ++it) {
-		for (auto it2 = it->begin(); it2 != it->end(); ++it2) {
-			ScrollingList* menu = *it2;
-			if (menu && !menu->isScrollingListIdle()) {
-				return false;
-			}
+
+void Page::refreshIdleStates() {
+	bool menuIdle = true;
+	bool menuAttractIdle = true;
+
+	if (playlistMenu_) {
+		if (!playlistMenu_->isScrollingListIdle()) {
+			menuIdle = false;
+		}
+		if (!playlistMenu_->isAttractIdle()) {
+			menuAttractIdle = false;
 		}
 	}
-	return true;
-}
 
+			if (!menu) {
+				continue;
+			}
 
-bool Page::isIdle() {
-	if (!isMenuIdle()) return false;
-	for (int i = NUM_LAYERS - 1; i >= 0; --i) {
+			if (menuIdle && !menu->isScrollingListIdle()) {
+				menuIdle = false;
+			}
+			if (menuAttractIdle && !menu->isAttractIdle()) {
+				menuAttractIdle = false;
+			}
+
+			if (!menuIdle && !menuAttractIdle) {
+				break;
+			}
+
+	bool graphicsIdle = true;
+	bool graphicsAttractIdle = true;
+			if (!component) {
+				continue;
+			}
+			if (graphicsIdle && !component->isIdle()) {
+				graphicsIdle = false;
+			}
+			if (graphicsAttractIdle && !component->isAttractIdle()) {
+				graphicsAttractIdle = false;
+			}
+			if (!graphicsIdle && !graphicsAttractIdle) {
+				break;
+			}
+
+	cachedMenuIdle_ = menuIdle;
+	cachedGraphicsIdle_ = graphicsIdle;
+	cachedIdle_ = menuIdle && graphicsIdle;
+	cachedAttractIdle_ = menuAttractIdle && graphicsAttractIdle;
+	idleCacheValid_ = true;
 		const auto& layer = LayerComponents_[i];
 		for (const Component* component : layer) {
 			if (!component->isIdle()) return false;
@@ -1372,6 +1411,7 @@ bool Page::playlistExists(const std::string& playlist) {
 
 
 void Page::update(float dt) {
+	idleCacheValid_ = false;
 	std::string playlistName = getPlaylistName();
 
 	// Check if the playlist name has changed since the last update
@@ -1420,9 +1460,12 @@ void Page::update(float dt) {
 		config_.setProperty("status", status);
 		textStatusComponent_->setText(status);
 	}
+
+	refreshIdleStates();
 }
 
 void Page::updateReloadables(float dt) {
+	idleCacheValid_ = false;
 	for (auto& layer : LayerComponents_) {
 		for (Component* component : layer) {
 			if (component) {
@@ -1430,6 +1473,7 @@ void Page::updateReloadables(float dt) {
 			}
 		}
 	}
+	refreshIdleStates();
 }
 
 void Page::cleanup() {
