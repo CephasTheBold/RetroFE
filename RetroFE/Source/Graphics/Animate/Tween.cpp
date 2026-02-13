@@ -23,7 +23,21 @@
 #include <sstream>
 #include <mutex>
 
+#if defined(_MSC_VER)
+#if defined(_M_X64) || defined(_M_AMD64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)
+#define HAVE_SSE2 1
+#else
+#define HAVE_SSE2 0
+#endif
+#else
 #if defined(__SSE2__)
+#define HAVE_SSE2 1
+#else
+#define HAVE_SSE2 0
+#endif
+#endif
+
+#if HAVE_SSE2
 #include <emmintrin.h>
 #endif
 
@@ -38,7 +52,7 @@ std::string trimPlaylistToken(const std::string& token) {
     return token.substr(first, last - first + 1);
 }
 
-#if defined(__SSE2__)
+#if HAVE_SSE2
 inline void evaluateLinearSse(const float* progress, const float* start, const float* change, float* out, size_t count) {
     constexpr size_t kWidth = 4;
     size_t i = 0;
@@ -298,14 +312,14 @@ Tween::EasingKernel Tween::getKernel(TweenAlgorithm type) {
 void Tween::evaluateBatch(TweenAlgorithm type, const float* progress, const float* start, const float* change, float* out, size_t count) {
     switch (type) {
         case EASE_IN_QUADRATIC:
-#if defined(__SSE2__)
+#if HAVE_SSE2
             evaluateEaseInQuadraticSse(progress, start, change, out, count);
 #else
             for (size_t i = 0; i < count; ++i) out[i] = easeInQuadratic(progress[i], start[i], change[i]);
 #endif
             break;
         case EASE_OUT_QUADRATIC:
-#if defined(__SSE2__)
+#if HAVE_SSE2
             evaluateEaseOutQuadraticSse(progress, start, change, out, count);
 #else
             for (size_t i = 0; i < count; ++i) out[i] = easeOutQuadratic(progress[i], start[i], change[i]);
@@ -315,14 +329,14 @@ void Tween::evaluateBatch(TweenAlgorithm type, const float* progress, const floa
             for (size_t i = 0; i < count; ++i) out[i] = easeInOutQuadratic(progress[i], start[i], change[i]);
             break;
         case EASE_IN_CUBIC:
-#if defined(__SSE2__)
+#if HAVE_SSE2
             evaluateEaseInCubicSse(progress, start, change, out, count);
 #else
             for (size_t i = 0; i < count; ++i) out[i] = easeInCubic(progress[i], start[i], change[i]);
 #endif
             break;
         case EASE_OUT_CUBIC:
-#if defined(__SSE2__)
+#if HAVE_SSE2
             evaluateEaseOutCubicSse(progress, start, change, out, count);
 #else
             for (size_t i = 0; i < count; ++i) out[i] = easeOutCubic(progress[i], start[i], change[i]);
@@ -378,7 +392,7 @@ void Tween::evaluateBatch(TweenAlgorithm type, const float* progress, const floa
             break;
         case LINEAR:
         default:
-#if defined(__SSE2__)
+#if HAVE_SSE2
             evaluateLinearSse(progress, start, change, out, count);
 #else
             for (size_t i = 0; i < count; ++i) out[i] = linear(progress[i], start[i], change[i]);
