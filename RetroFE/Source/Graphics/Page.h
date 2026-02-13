@@ -21,7 +21,6 @@
 #include <string>
 #include <list>
 #include <vector>
-#include <cstdint>
 
 class Component;
 class Configuration;
@@ -245,14 +244,5 @@ private:
     std::vector<int> layoutHeightByMonitor_;
     bool jukebox_;
     bool isLaunched_ = false;
-
-    uint64_t idleCacheUpdateToken_{ 0 };
-    uint64_t idleCacheBuiltToken_{ static_cast<uint64_t>(-1) };
-    bool cachedMenuIdle_{ true };
-    bool cachedGraphicsIdle_{ true };
-    bool cachedIdle_{ true };
-    bool cachedAttractIdle_{ true };
-
-    void refreshIdleCache();
 
 };

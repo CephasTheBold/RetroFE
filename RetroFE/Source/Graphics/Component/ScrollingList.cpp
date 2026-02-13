@@ -843,10 +843,6 @@ bool ScrollingList::update(float dt)
 {
     bool done = Component::update(dt);
 
-    cachedIdle_ = Component::isIdle();
-    cachedAttractIdle_ = Component::isAttractIdle();
-    idleCacheValid_ = true;
-
     if (components_.empty()) 
         return done;
     if (!items_) 
@@ -859,31 +855,10 @@ bool ScrollingList::update(float dt)
         if (c) {
             c->playlistName = playlistName;
             done &= c->update(dt);
-            cachedIdle_ = cachedIdle_ && c->isIdle();
-            cachedAttractIdle_ = cachedAttractIdle_ && c->isAttractIdle();
         }
     }
 
     return done;
-}
-
-void ScrollingList::refreshIdleCache()
-{
-    cachedIdle_ = Component::isIdle();
-    cachedAttractIdle_ = Component::isAttractIdle();
-
-    for (Component const* c : components_.raw()) {
-        if (!c) {
-            continue;
-        }
-        cachedIdle_ = cachedIdle_ && c->isIdle();
-        cachedAttractIdle_ = cachedAttractIdle_ && c->isAttractIdle();
-        if (!cachedIdle_ && !cachedAttractIdle_) {
-            break;
-        }
-    }
-
-    idleCacheValid_ = true;
 }
 
 size_t ScrollingList::getSelectedIndex( ) const
@@ -1237,18 +1212,28 @@ const std::vector<Component*>& ScrollingList::getComponents() const {
 
 bool ScrollingList::isScrollingListIdle()
 {
-    if (!idleCacheValid_) {
-        refreshIdleCache();
+    size_t componentSize = components_.size();
+    if ( !Component::isIdle(  ) ) return false;
+
+    for ( unsigned int i = 0; i < componentSize; ++i ) {
+        Component const *c = components_[i];
+        if ( c && !c->isIdle(  ) ) return false;
     }
-    return cachedIdle_;
+
+    return true;
 }
 
 bool ScrollingList::isScrollingListAttractIdle()
 {
-    if (!idleCacheValid_) {
-        refreshIdleCache();
+    size_t componentSize = components_.size();
+    if ( !Component::isAttractIdle(  ) ) return false;
+
+    for ( unsigned int i = 0; i < componentSize; ++i ) {
+        Component const *c = components_[i];
+        if ( c && !c->isAttractIdle(  ) ) return false;
     }
-    return cachedAttractIdle_;
+
+    return true;
 }
 
 void ScrollingList::resetScrollPeriod(  )
