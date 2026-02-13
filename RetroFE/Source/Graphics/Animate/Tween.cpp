@@ -24,29 +24,25 @@
 #include <mutex>
 
 #if defined(_MSC_VER)
-#if defined(_M_X64) || defined(_M_AMD64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)
-#define HAVE_SSE2 1
-#else
-#define HAVE_SSE2 0
-#endif
-#else
-#if defined(__SSE2__)
-#define HAVE_SSE2 1
-#else
-#define HAVE_SSE2 0
-#endif
-#endif
-
-#if defined(_MSC_VER)
 #if defined(_M_ARM64) || defined(_M_ARM64EC)
 #define HAVE_NEON 1
+#define HAVE_SSE2 0
+#elif defined(_M_X64) || defined(_M_AMD64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)
+#define HAVE_SSE2 1
+#define HAVE_NEON 0
 #else
+#define HAVE_SSE2 0
 #define HAVE_NEON 0
 #endif
 #else
-#if defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(__aarch64__)
+#if defined(__aarch64__) || defined(__ARM_NEON) || defined(__ARM_NEON__)
 #define HAVE_NEON 1
+#define HAVE_SSE2 0
+#elif defined(__SSE2__)
+#define HAVE_SSE2 1
+#define HAVE_NEON 0
 #else
+#define HAVE_SSE2 0
 #define HAVE_NEON 0
 #endif
 #endif
