@@ -37,8 +37,26 @@
 #endif
 #endif
 
+#if defined(_MSC_VER)
+#if defined(_M_ARM64) || defined(_M_ARM64EC)
+#define HAVE_NEON 1
+#else
+#define HAVE_NEON 0
+#endif
+#else
+#if defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(__aarch64__)
+#define HAVE_NEON 1
+#else
+#define HAVE_NEON 0
+#endif
+#endif
+
 #if HAVE_SSE2
 #include <emmintrin.h>
+#endif
+
+#if HAVE_NEON
+#include <arm_neon.h>
 #endif
 
 namespace {
@@ -135,6 +153,98 @@ inline void evaluateEaseOutCubicSse(const float* progress, const float* start, c
         const __m128 q3 = _mm_mul_ps(q2, q);
         const __m128 result = _mm_add_ps(_mm_mul_ps(c, _mm_add_ps(q3, one)), b);
         _mm_storeu_ps(out + i, result);
+    }
+
+    for (; i < count; ++i) {
+        const float q = progress[i] - 1.0f;
+        out[i] = change[i] * (q * q * q + 1.0f) + start[i];
+    }
+}
+#endif
+
+#if HAVE_NEON
+inline void evaluateLinearNeon(const float* progress, const float* start, const float* change, float* out, size_t count) {
+    constexpr size_t kWidth = 4;
+    size_t i = 0;
+    for (; i + kWidth <= count; i += kWidth) {
+        const float32x4_t p = vld1q_f32(progress + i);
+        const float32x4_t b = vld1q_f32(start + i);
+        const float32x4_t c = vld1q_f32(change + i);
+        const float32x4_t result = vmlaq_f32(b, c, p);
+        vst1q_f32(out + i, result);
+    }
+
+    for (; i < count; ++i) {
+        out[i] = change[i] * progress[i] + start[i];
+    }
+}
+
+inline void evaluateEaseInQuadraticNeon(const float* progress, const float* start, const float* change, float* out, size_t count) {
+    constexpr size_t kWidth = 4;
+    size_t i = 0;
+    for (; i + kWidth <= count; i += kWidth) {
+        const float32x4_t p = vld1q_f32(progress + i);
+        const float32x4_t b = vld1q_f32(start + i);
+        const float32x4_t c = vld1q_f32(change + i);
+        const float32x4_t p2 = vmulq_f32(p, p);
+        const float32x4_t result = vmlaq_f32(b, c, p2);
+        vst1q_f32(out + i, result);
+    }
+
+    for (; i < count; ++i) {
+        out[i] = change[i] * progress[i] * progress[i] + start[i];
+    }
+}
+
+inline void evaluateEaseOutQuadraticNeon(const float* progress, const float* start, const float* change, float* out, size_t count) {
+    constexpr size_t kWidth = 4;
+    const float32x4_t two = vdupq_n_f32(2.0f);
+    size_t i = 0;
+    for (; i + kWidth <= count; i += kWidth) {
+        const float32x4_t p = vld1q_f32(progress + i);
+        const float32x4_t b = vld1q_f32(start + i);
+        const float32x4_t c = vld1q_f32(change + i);
+        const float32x4_t pTerm = vsubq_f32(two, p);
+        const float32x4_t result = vmlaq_f32(b, c, vmulq_f32(p, pTerm));
+        vst1q_f32(out + i, result);
+    }
+
+    for (; i < count; ++i) {
+        out[i] = change[i] * progress[i] * (2.0f - progress[i]) + start[i];
+    }
+}
+
+inline void evaluateEaseInCubicNeon(const float* progress, const float* start, const float* change, float* out, size_t count) {
+    constexpr size_t kWidth = 4;
+    size_t i = 0;
+    for (; i + kWidth <= count; i += kWidth) {
+        const float32x4_t p = vld1q_f32(progress + i);
+        const float32x4_t b = vld1q_f32(start + i);
+        const float32x4_t c = vld1q_f32(change + i);
+        const float32x4_t p2 = vmulq_f32(p, p);
+        const float32x4_t p3 = vmulq_f32(p2, p);
+        const float32x4_t result = vmlaq_f32(b, c, p3);
+        vst1q_f32(out + i, result);
+    }
+
+    for (; i < count; ++i) {
+        out[i] = change[i] * progress[i] * progress[i] * progress[i] + start[i];
+    }
+}
+
+inline void evaluateEaseOutCubicNeon(const float* progress, const float* start, const float* change, float* out, size_t count) {
+    constexpr size_t kWidth = 4;
+    const float32x4_t one = vdupq_n_f32(1.0f);
+    size_t i = 0;
+    for (; i + kWidth <= count; i += kWidth) {
+        const float32x4_t p = vld1q_f32(progress + i);
+        const float32x4_t b = vld1q_f32(start + i);
+        const float32x4_t c = vld1q_f32(change + i);
+        const float32x4_t q = vsubq_f32(p, one);
+        const float32x4_t q2 = vmulq_f32(q, q);
+        const float32x4_t q3 = vmulq_f32(q2, q);
+        const float32x4_t result = vmlaq_f32(b, c, vaddq_f32(q3, one));
+        vst1q_f32(out + i, result);
     }
 
     for (; i < count; ++i) {
@@ -314,6 +424,8 @@ void Tween::evaluateBatch(TweenAlgorithm type, const float* progress, const floa
         case EASE_IN_QUADRATIC:
 #if HAVE_SSE2
             evaluateEaseInQuadraticSse(progress, start, change, out, count);
+#elif HAVE_NEON
+            evaluateEaseInQuadraticNeon(progress, start, change, out, count);
 #else
             for (size_t i = 0; i < count; ++i) out[i] = easeInQuadratic(progress[i], start[i], change[i]);
 #endif
@@ -321,6 +433,8 @@ void Tween::evaluateBatch(TweenAlgorithm type, const float* progress, const floa
         case EASE_OUT_QUADRATIC:
 #if HAVE_SSE2
             evaluateEaseOutQuadraticSse(progress, start, change, out, count);
+#elif HAVE_NEON
+            evaluateEaseOutQuadraticNeon(progress, start, change, out, count);
 #else
             for (size_t i = 0; i < count; ++i) out[i] = easeOutQuadratic(progress[i], start[i], change[i]);
 #endif
@@ -331,6 +445,8 @@ void Tween::evaluateBatch(TweenAlgorithm type, const float* progress, const floa
         case EASE_IN_CUBIC:
 #if HAVE_SSE2
             evaluateEaseInCubicSse(progress, start, change, out, count);
+#elif HAVE_NEON
+            evaluateEaseInCubicNeon(progress, start, change, out, count);
 #else
             for (size_t i = 0; i < count; ++i) out[i] = easeInCubic(progress[i], start[i], change[i]);
 #endif
@@ -338,6 +454,8 @@ void Tween::evaluateBatch(TweenAlgorithm type, const float* progress, const floa
         case EASE_OUT_CUBIC:
 #if HAVE_SSE2
             evaluateEaseOutCubicSse(progress, start, change, out, count);
+#elif HAVE_NEON
+            evaluateEaseOutCubicNeon(progress, start, change, out, count);
 #else
             for (size_t i = 0; i < count; ++i) out[i] = easeOutCubic(progress[i], start[i], change[i]);
 #endif
@@ -394,6 +512,8 @@ void Tween::evaluateBatch(TweenAlgorithm type, const float* progress, const floa
         default:
 #if HAVE_SSE2
             evaluateLinearSse(progress, start, change, out, count);
+#elif HAVE_NEON
+            evaluateLinearNeon(progress, start, change, out, count);
 #else
             for (size_t i = 0; i < count; ++i) out[i] = linear(progress[i], start[i], change[i]);
 #endif
