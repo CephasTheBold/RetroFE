@@ -295,44 +295,50 @@ void Page::setStatusTextComponent(Text* t) {
 
 bool Page::addComponent(Component* c) {
 	if (c->baseViewInfo.Layer < NUM_LAYERS) {
-		// No need to resize—guaranteed by constructor
-		LayerComponents_[c->baseViewInfo.Layer].push_back(c);
-		return true;
-	}
-	else {
-		std::stringstream ss;
-		ss << "Component layer too large. Layer: " << c->baseViewInfo.Layer;
-		LOG_ERROR("Page", ss.str());
-		return false;
-	}
+	refreshIdleCache();
+	return cachedMenuIdle_;
+
+	refreshIdleCache();
+	return cachedIdle_;
+	refreshIdleCache();
+	return cachedAttractIdle_;
 }
 
 
-bool Page::isMenuIdle() {
-	if (playlistMenu_ && !playlistMenu_->isScrollingListIdle())
-		return false;
+bool Page::isGraphicsIdle() {
+	refreshIdleCache();
+	return cachedGraphicsIdle_;
+}
 
-	for (auto it = menus_.begin(); it != menus_.end(); ++it) {
-		for (auto it2 = it->begin(); it2 != it->end(); ++it2) {
-			ScrollingList* menu = *it2;
-			if (menu && !menu->isScrollingListIdle()) {
-				return false;
+void Page::refreshIdleCache() {
+	if (idleCacheBuiltToken_ == idleCacheUpdateToken_) {
+		return;
+	}
+
+	cachedMenuIdle_ = true;
+	if (playlistMenu_ && !playlistMenu_->isScrollingListIdle()) {
+		cachedMenuIdle_ = false;
+	}
+
+	cachedAttractIdle_ = true;
+			if (!menu) {
+				continue;
 			}
-		}
-	}
-	return true;
-}
-
-
-bool Page::isIdle() {
-	if (!isMenuIdle()) return false;
-	for (int i = NUM_LAYERS - 1; i >= 0; --i) {
+			cachedMenuIdle_ = cachedMenuIdle_ && menu->isScrollingListIdle();
+			cachedAttractIdle_ = cachedAttractIdle_ && menu->isAttractIdle();
+	cachedGraphicsIdle_ = true;
 		const auto& layer = LayerComponents_[i];
 		for (const Component* component : layer) {
-			if (!component->isIdle()) return false;
+			if (!component) {
+				continue;
+			}
+			cachedGraphicsIdle_ = cachedGraphicsIdle_ && component->isIdle();
+			cachedAttractIdle_ = cachedAttractIdle_ && component->isAttractIdle();
 		}
 	}
-	return true;
+
+	cachedIdle_ = cachedMenuIdle_ && cachedGraphicsIdle_;
+	idleCacheBuiltToken_ = idleCacheUpdateToken_;
 }
 
 
@@ -1372,6 +1378,7 @@ bool Page::playlistExists(const std::string& playlist) {
 
 
 void Page::update(float dt) {
+	++idleCacheUpdateToken_;
 	std::string playlistName = getPlaylistName();
 
 	// Check if the playlist name has changed since the last update
@@ -1423,6 +1430,7 @@ void Page::update(float dt) {
 }
 
 void Page::updateReloadables(float dt) {
+	++idleCacheUpdateToken_;
 	for (auto& layer : LayerComponents_) {
 		for (Component* component : layer) {
 			if (component) {
