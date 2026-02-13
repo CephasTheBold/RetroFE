@@ -908,9 +908,11 @@ void ScrollingList::resetTweens(Component* c, std::shared_ptr<AnimationEvents> s
             property,
             LINEAR,
             duration,
+            0.0f,
             true,
             start,
             end,
+            0.0f,
             {}
         });
     };

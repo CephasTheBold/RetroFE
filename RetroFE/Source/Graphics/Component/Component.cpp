@@ -60,9 +60,6 @@ void Component::freeGraphicsMemory() {
     elapsedTweenTime_ = 0;
 
     tweenEvaluations_.clear();
-    for (auto& bucket : tweenAlgorithmBuckets_) {
-        bucket.clear();
-    }
     tweenProgressBatch_.clear();
     tweenStartBatch_.clear();
     tweenChangeBatch_.clear();
@@ -253,14 +250,12 @@ bool Component::animate() {
         if (!tweens) return true; // Additional check for safety
 
         const auto& compiledTweens = tweens->compiledTweens();
+        const auto& compiledTweensByAlgorithm = tweens->compiledTweensByAlgorithm();
         const bool hasCurrentPlaylist = !playlistName.empty();
         const uint32_t currentPlaylistId = hasCurrentPlaylist ? Tween::playlistTokenId(playlistName) : 0;
 
         tweenEvaluations_.clear();
         tweenEvaluations_.reserve(compiledTweens.size());
-        for (auto& bucket : tweenAlgorithmBuckets_) {
-            bucket.clear();
-        }
 
         auto getStoreValueForProperty = [this](TweenProperty property) -> float {
             switch (property) {
@@ -291,45 +286,9 @@ bool Component::animate() {
             }
         };
 
-        for (const auto& compiledTween : compiledTweens) {
-            if (!Tween::matchesPlaylistTokenIds(compiledTween.playlistTokenIds, currentPlaylistId, hasCurrentPlaylist)) {
-                continue;
-            }
-
-            double elapsedTime = elapsedTweenTime_;
-            if (elapsedTime < compiledTween.duration) {
-                currentDone = false;
-            }
-            else {
-                elapsedTime = compiledTween.duration;
-            }
-
-            const auto algorithmIndex = static_cast<size_t>(compiledTween.algorithm);
-            if (algorithmIndex >= kTweenAlgorithmCount) {
-                continue;
-            }
-
-            const float resolvedStartValue = compiledTween.startDefined
-                ? compiledTween.startValue
-                : getStoreValueForProperty(compiledTween.property);
-
-            TweenEvaluation evaluation {
-                compiledTween.property,
-                elapsedTime,
-                compiledTween.duration,
-                resolvedStartValue,
-                compiledTween.endValue,
-                0.0f
-            };
-
-            const size_t evaluationIndex = tweenEvaluations_.size();
-            tweenEvaluations_.push_back(evaluation);
-            tweenAlgorithmBuckets_[algorithmIndex].push_back(evaluationIndex);
-        }
-
         for (size_t algorithmIndex = 0; algorithmIndex < kTweenAlgorithmCount; ++algorithmIndex) {
             const auto algorithm = static_cast<TweenAlgorithm>(algorithmIndex);
-            const auto& bucket = tweenAlgorithmBuckets_[algorithmIndex];
+            const auto& bucket = compiledTweensByAlgorithm[algorithmIndex];
             if (bucket.empty()) {
                 continue;
             }
@@ -345,20 +304,44 @@ bool Component::animate() {
             tweenValueBatch_.reserve(bucket.size());
             tweenOutputIndices_.reserve(bucket.size());
 
-            for (const size_t evaluationIndex : bucket) {
-                auto& evaluation = tweenEvaluations_[evaluationIndex];
-                const float endValue = evaluation.endValue;
-                const float duration = evaluation.duration;
-
-                if (duration <= 0.0f) {
-                    evaluation.value = endValue;
+            for (const size_t compiledIndex : bucket) {
+                const auto& compiledTween = compiledTweens[compiledIndex];
+                if (!Tween::matchesPlaylistTokenIds(compiledTween.playlistTokenIds, currentPlaylistId, hasCurrentPlaylist)) {
                     continue;
                 }
 
-                tweenProgressBatch_.push_back(static_cast<float>(evaluation.elapsedTime) / duration);
-                tweenStartBatch_.push_back(evaluation.startValue);
-                tweenChangeBatch_.push_back(endValue - evaluation.startValue);
-                tweenOutputIndices_.push_back(evaluationIndex);
+                double elapsedTime = elapsedTweenTime_;
+                if (elapsedTime < compiledTween.duration) {
+                    currentDone = false;
+                }
+                else {
+                    elapsedTime = compiledTween.duration;
+                }
+
+                const float resolvedStartValue = compiledTween.startDefined
+                    ? compiledTween.startValue
+                    : getStoreValueForProperty(compiledTween.property);
+
+                TweenEvaluation evaluation {
+                    compiledTween.property,
+                    elapsedTime,
+                    compiledTween.duration,
+                    resolvedStartValue,
+                    compiledTween.endValue,
+                    0.0f
+                };
+
+                if (compiledTween.duration <= 0.0f) {
+                    evaluation.value = compiledTween.endValue;
+                }
+                else {
+                    tweenProgressBatch_.push_back(static_cast<float>(elapsedTime) * compiledTween.invDuration);
+                    tweenStartBatch_.push_back(resolvedStartValue);
+                    tweenChangeBatch_.push_back(compiledTween.startDefined ? compiledTween.deltaValue : (compiledTween.endValue - resolvedStartValue));
+                    tweenOutputIndices_.push_back(tweenEvaluations_.size());
+                }
+
+                tweenEvaluations_.push_back(evaluation);
             }
 
             if (tweenOutputIndices_.empty()) {

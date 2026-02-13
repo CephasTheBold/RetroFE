@@ -113,7 +113,6 @@ private:
     int          id_;
 
     std::vector<TweenEvaluation> tweenEvaluations_;
-    std::array<std::vector<size_t>, kTweenAlgorithmCount> tweenAlgorithmBuckets_;
     std::vector<float> tweenProgressBatch_;
     std::vector<float> tweenStartBatch_;
     std::vector<float> tweenChangeBatch_;

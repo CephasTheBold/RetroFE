@@ -19,17 +19,22 @@
 #include <vector>
 #include <memory>
 #include <cstdint>
+#include <array>
 
 class TweenSet
 {
 public:
+    static constexpr size_t kTweenAlgorithmCount = static_cast<size_t>(EASE_INOUT_CIRCULAR) + 1;
+
     struct CompiledTweenEntry {
         TweenProperty property;
         TweenAlgorithm algorithm;
         float duration;
+        float invDuration;
         bool startDefined;
         float startValue;
         float endValue;
+        float deltaValue;
         std::vector<uint32_t> playlistTokenIds;
     };
 
@@ -41,6 +46,7 @@ public:
     void pushCompiled(CompiledTweenEntry tween);
     void clear();
     const std::vector<CompiledTweenEntry>& compiledTweens() const;
+    const std::array<std::vector<size_t>, kTweenAlgorithmCount>& compiledTweensByAlgorithm() const;
 
     size_t size() const;
 
@@ -48,4 +54,5 @@ private:
     static CompiledTweenEntry compileTween(const Tween& tween);
 
     std::vector<CompiledTweenEntry> compiledSet_;
+    std::array<std::vector<size_t>, kTweenAlgorithmCount> compiledByAlgorithm_;
 };
