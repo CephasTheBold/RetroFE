@@ -35,6 +35,8 @@
 #include <memory>  // For std::unique_ptr
 #include <optional>
 #include <sstream>
+#include <thread>
+#include <algorithm>
 
 // --- New Refactored Components ---
 #include "Input/InputMonitor.h"

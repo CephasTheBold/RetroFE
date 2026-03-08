@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <utility>
 #include <deque>
+#include <cstring>
 
 static constexpr int DYNAMIC_ATLAS_SIZE = 2048;
 

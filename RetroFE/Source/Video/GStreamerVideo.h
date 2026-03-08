@@ -89,7 +89,6 @@ public:
 
 	bool hasFinishedLoops() const;
 
-	void detectStreamTypes();
 
 	bool hasError() const override {
 		return hasError_.load(std::memory_order_acquire);

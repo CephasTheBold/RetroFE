@@ -247,10 +247,44 @@ gboolean GStreamerVideo::busCallback(GstBus* bus, GstMessage* msg, gpointer user
 						bool expected = false;
 						(void)video->pipeLineReady_.compare_exchange_strong(expected, true,
 							std::memory_order_release, std::memory_order_relaxed);
-						// Detect stream types now that pipeline is ready
-						video->detectStreamTypes();
 					}
 				}
+			}
+			break;
+		}
+		case GST_MESSAGE_STREAM_COLLECTION: {
+			if (GST_MESSAGE_SRC(msg) == GST_OBJECT(video->pipeline_)) {
+				GstStreamCollection* collection = nullptr;
+				gst_message_parse_stream_collection(msg, &collection);
+
+				int nVideo = 0;
+				int nAudio = 0;
+				int nText  = 0;
+
+				if (collection) {
+					const guint size = gst_stream_collection_get_size(collection);
+					for (guint i = 0; i < size; ++i) {
+						GstStream* stream = gst_stream_collection_get_stream(collection, i);
+						if (!stream) {
+							continue;
+						}
+
+						GstStreamType type = gst_stream_get_stream_type(stream);
+						if (type & GST_STREAM_TYPE_VIDEO) ++nVideo;
+						if (type & GST_STREAM_TYPE_AUDIO) ++nAudio;
+						if (type & GST_STREAM_TYPE_TEXT)  ++nText;
+					}
+
+					gst_object_unref(collection);
+				}
+
+				video->hasVideoStream_.store(nVideo > 0, std::memory_order_release);
+
+				LOG_DEBUG("GStreamerVideo",
+						  "Stream collection for " + video->currentFile_ +
+						  ": video=" + std::to_string(nVideo) +
+						  " audio=" + std::to_string(nAudio) +
+						  " text="  + std::to_string(nText));
 			}
 			break;
 		}
@@ -1955,16 +1989,4 @@ void GStreamerVideo::setPerspectiveCorners(const int* corners) {
 
 bool GStreamerVideo::hasFinishedLoops() const {
 	return loopsFinished_.load(std::memory_order_acquire);
-}
-
-void GStreamerVideo::detectStreamTypes() {
-	if (!playbin_) return;
-
-	gint n_video = 0;
-	g_object_get(playbin_, "n-video", &n_video, nullptr);
-
-	hasVideoStream_.store(n_video > 0, std::memory_order_release);
-
-	LOG_DEBUG("GStreamerVideo", "Stream detection for " + currentFile_ +
-		": video streams=" + std::to_string(n_video));
 }

@@ -9,6 +9,7 @@
 #include <memory>
 #include <atomic>
 #include <algorithm>
+#include <cstring>
 
 #include "../Utility/Log.h"
 

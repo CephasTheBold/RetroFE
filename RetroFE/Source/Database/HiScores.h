@@ -5,6 +5,7 @@
 #include <unordered_map>
 #include <shared_mutex>
 #include <functional>
+#include <atomic>
 
 // Local utils/config (used by .cpp; harmless to keep here)
 #include "../Utility/Utils.h"
