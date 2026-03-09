@@ -14,6 +14,7 @@ BP Files/RetroFE.cpp
 /.vs
 /RetroFE/Builds
 /RetroFE/Build2
+RetroFE/BuildRelease
 .DS_Store
 .vscode/settings.json
 RetroFE/ThirdPartyMac/*
@@ -25,3 +26,8 @@ RetroFE/xcode/retrofe.xcodeproj/project.xcworkspace/xcuserdata/aiden.xcuserdatad
 !RetroFE/ThirdPartyMac/libminizip.dylib
 !RetroFE/ThirdPartyMac/libusb-1.0.0.dylib
 RetroFE/Source/autogen/versioning.h
+CLAUDE.md
+.vscode/c_cpp_properties.json
+.vscode/launch.json
+.vscode/tasks.json
+.gitignore

@@ -35,6 +35,7 @@
 #else
 #error "Cannot find SDL_ttf header"
 #endif
+#include <atomic>
 #include <list>
 #include <stack>
 #include <map>
@@ -167,6 +168,8 @@ private:
         RETROFE_QUIT,
         RETROFE_SCROLL_PLAYLIST_FORWARD,
         RETROFE_SCROLL_PLAYLIST_BACK,
+        RETROFE_RELOAD_REQUEST,
+        RETROFE_RELOAD_EXECUTE,
     };
 
     RETROFE_STATE state_ = RETROFE_IDLE;
@@ -187,6 +190,10 @@ private:
     void handleMusicControls(UserInput::KeyCode_E input);
     Page           *loadPage(const std::string& collectionName);
     Page           *loadSplashPage( );
+    static void     handleSigusr1(int sig);
+    static void     handleSighup(int sig);
+    static std::atomic<bool> reloadRequested_;
+    static std::atomic<bool> sighupReceived_;
 
     std::vector<std::string> collectionCycle_;
     std::vector<std::string>::iterator collectionCycleIt_;

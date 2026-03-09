@@ -236,6 +236,17 @@ std::map<std::string, size_t> Page::getLastPlaylistOffsets() const {
 	return lastPlaylistOffsets_;
 }
 
+void Page::setLastPlaylistOffsets(const std::map<std::string, size_t>& offsets) {
+	lastPlaylistOffsets_ = offsets;
+}
+
+CollectionInfo* Page::detachCollection() {
+	if (collections_.empty()) return nullptr;
+	CollectionInfo* c = collections_.back().collection;
+	collections_.back().collection = nullptr; // prevent deInitialize() from deleting it
+	return c;
+}
+
 void Page::onNewScrollItemSelected() {
 	if (!getAnActiveMenu()) return;
 
@@ -295,7 +306,7 @@ void Page::setStatusTextComponent(Text* t) {
 
 bool Page::addComponent(Component* c) {
 	if (c->baseViewInfo.Layer < NUM_LAYERS) {
-		// No need to resize—guaranteed by constructor
+		// No need to resizeï¿½guaranteed by constructor
 		LayerComponents_[c->baseViewInfo.Layer].push_back(c);
 		return true;
 	}

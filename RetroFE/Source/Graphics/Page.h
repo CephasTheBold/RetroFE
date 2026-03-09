@@ -51,6 +51,8 @@ public:
     void returnToRememberSelectedItem();
     void rememberSelectedItem();
     std::map<std::string, size_t> getLastPlaylistOffsets() const;
+    void setLastPlaylistOffsets(const std::map<std::string, size_t>& offsets);
+    CollectionInfo* detachCollection();
     void highlightLoadArt();
     bool pushCollection(CollectionInfo *collection);
     bool popCollection();
