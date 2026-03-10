@@ -68,8 +68,18 @@ jobs:
 
       - name: Install linuxdeploy
         run: |
-          wget https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-${{ matrix.config.arch == 'arm64' && 'aarch64' || matrix.config.arch }}.AppImage -O linuxdeploy-${{ matrix.config.arch }}.AppImage
-          chmod +x linuxdeploy-${{ matrix.config.arch }}.AppImage
+          URL="https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-${{ matrix.config.arch == 'arm64' && 'aarch64' || matrix.config.arch }}.AppImage"
+          OUT="linuxdeploy-${{ matrix.config.arch }}.AppImage"
+
+          for i in 1 2 3 4 5; do
+            curl -fL --retry 5 --retry-all-errors --connect-timeout 20 --max-time 120 \
+              "$URL" -o "$OUT" && break
+            echo "Download failed, attempt $i"
+            sleep 10
+          done
+
+          test -f "$OUT"
+          chmod +x "$OUT"
           
       - name: Install linuxdeploy-plugin-gstreamer
         run: |
