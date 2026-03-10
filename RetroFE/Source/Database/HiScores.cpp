@@ -575,7 +575,7 @@ static inline std::string rowKey_(const GlobalRow& r) {
 	return r.player + SEP + r.score + SEP + r.date;
 }
 
-static bool rowsEqualAsSets_(const std::vector<GlobalRow>& a,
+[[maybe_unused]] static bool rowsEqualAsSets_(const std::vector<GlobalRow>& a,
 	const std::vector<GlobalRow>& b) {
 	if (a.size() != b.size()) return false;
 	std::vector<std::string> ka; ka.reserve(a.size());
@@ -1694,11 +1694,11 @@ static inline bool isBetterForMode_(GlobalSort sortKind,
 				return (sortKind == GlobalSort::ScoreAsc) ? (na < nb) : (na > nb);
 			}
 			if (ha != hb) return ha; // numeric beats non-numeric
-			// Tie-breaker: lexicographic score, then earlier date (so older wins, tweak if desired)
 			int c = a.score.compare(b.score);
 			if (c != 0) return c < 0;
 			return a.date < b.date;
 		}
+
 		case GlobalSort::TimeAsc:
 		case GlobalSort::TimeDesc: {
 			long long ta, tb;
@@ -1707,11 +1707,12 @@ static inline bool isBetterForMode_(GlobalSort sortKind,
 			if (ha && hb) {
 				return (sortKind == GlobalSort::TimeAsc) ? (ta < tb) : (ta > tb);
 			}
-			if (ha != hb) return ha; // numeric beats non-numeric
+			if (ha != hb) return ha;
 			int c = a.score.compare(b.score);
 			if (c != 0) return c < 0;
 			return a.date < b.date;
 		}
+
 		case GlobalSort::MoneyAsc:
 		case GlobalSort::MoneyDesc: {
 			long long va, vb;
@@ -1720,32 +1721,105 @@ static inline bool isBetterForMode_(GlobalSort sortKind,
 			if (ha && hb) {
 				return (sortKind == GlobalSort::MoneyAsc) ? (va < vb) : (va > vb);
 			}
-			if (ha != hb) return ha; // numeric beats non-numeric
+			if (ha != hb) return ha;
 			int c = a.score.compare(b.score);
 			if (c != 0) return c < 0;
 			return a.date < b.date;
 		}
-		case GlobalSort::DivideBy10Asc:   case GlobalSort::DivideBy10Desc:
-		case GlobalSort::DivideBy100Asc:  case GlobalSort::DivideBy100Desc:
-		case GlobalSort::DivideBy1000Asc: case GlobalSort::DivideBy1000Desc:
-		case GlobalSort::MultiplyBy10Asc: case GlobalSort::MultiplyBy10Desc:
-		case GlobalSort::MultiplyBy100Asc: case GlobalSort::MultiplyBy100Desc:
-		case GlobalSort::MultiplyBy1000Asc: case GlobalSort::MultiplyBy1000Desc:
-		{
+
+		case GlobalSort::DistanceCmAsc:
+		case GlobalSort::DistanceCmDesc:
+		case GlobalSort::DistanceMAsc:
+		case GlobalSort::DistanceMDesc:
+		case GlobalSort::DistanceKmAsc:
+		case GlobalSort::DistanceKmDesc:
+		case GlobalSort::DistanceMilesAsc:
+		case GlobalSort::DistanceMilesDesc:
+		case GlobalSort::DistanceCmMAsc:
+		case GlobalSort::DistanceCmMDesc:
+		case GlobalSort::DistanceInAsc:
+		case GlobalSort::DistanceInDesc:
+		case GlobalSort::DistanceFtAsc:
+		case GlobalSort::DistanceFtDesc:
+		case GlobalSort::DistanceFtInAsc:
+		case GlobalSort::DistanceFtInDesc:
+		case GlobalSort::DistanceYdAsc:
+		case GlobalSort::DistanceYdDesc: {
+			long long ca, cb;
+			bool ha = toCanonicalDistance_(sortKind, a.score, ca);
+			bool hb = toCanonicalDistance_(sortKind, b.score, cb);
+
+			const bool asc =
+				(sortKind == GlobalSort::DistanceCmAsc ||
+					sortKind == GlobalSort::DistanceMAsc ||
+					sortKind == GlobalSort::DistanceKmAsc ||
+					sortKind == GlobalSort::DistanceMilesAsc ||
+					sortKind == GlobalSort::DistanceCmMAsc ||
+					sortKind == GlobalSort::DistanceInAsc ||
+					sortKind == GlobalSort::DistanceFtAsc ||
+					sortKind == GlobalSort::DistanceFtInAsc ||
+					sortKind == GlobalSort::DistanceYdAsc);
+
+			if (ha && hb) return asc ? (ca < cb) : (ca > cb);
+			if (ha != hb) return ha;
+			int c = a.score.compare(b.score);
+			if (c != 0) return asc ? (c < 0) : (c > 0);
+			return a.date < b.date;
+		}
+
+		case GlobalSort::WeightGAsc:
+		case GlobalSort::WeightGDesc:
+		case GlobalSort::WeightKgAsc:
+		case GlobalSort::WeightKgDesc:
+		case GlobalSort::WeightKgGAsc:
+		case GlobalSort::WeightKgGDesc: {
+			long long ca, cb;
+			bool ha = toCanonicalWeight_(sortKind, a.score, ca);
+			bool hb = toCanonicalWeight_(sortKind, b.score, cb);
+
+			const bool asc =
+				(sortKind == GlobalSort::WeightGAsc ||
+					sortKind == GlobalSort::WeightKgAsc ||
+					sortKind == GlobalSort::WeightKgGAsc);
+
+			if (ha && hb) return asc ? (ca < cb) : (ca > cb);
+			if (ha != hb) return ha;
+			int c = a.score.compare(b.score);
+			if (c != 0) return asc ? (c < 0) : (c > 0);
+			return a.date < b.date;
+		}
+
+		case GlobalSort::DivideBy10Asc:
+		case GlobalSort::DivideBy10Desc:
+		case GlobalSort::DivideBy100Asc:
+		case GlobalSort::DivideBy100Desc:
+		case GlobalSort::DivideBy1000Asc:
+		case GlobalSort::DivideBy1000Desc:
+		case GlobalSort::MultiplyBy10Asc:
+		case GlobalSort::MultiplyBy10Desc:
+		case GlobalSort::MultiplyBy100Asc:
+		case GlobalSort::MultiplyBy100Desc:
+		case GlobalSort::MultiplyBy1000Asc:
+		case GlobalSort::MultiplyBy1000Desc: {
 			double na, nb;
 			bool ha = getScaledScore_(sortKind, a.score, na);
 			bool hb = getScaledScore_(sortKind, b.score, nb);
 			const bool asc =
-				(sortKind == GlobalSort::DivideBy10Asc || sortKind == GlobalSort::DivideBy100Asc ||
-					sortKind == GlobalSort::DivideBy1000Asc || sortKind == GlobalSort::MultiplyBy10Asc ||
-					sortKind == GlobalSort::MultiplyBy100Asc || sortKind == GlobalSort::MultiplyBy1000Asc);
+				(sortKind == GlobalSort::DivideBy10Asc ||
+					sortKind == GlobalSort::DivideBy100Asc ||
+					sortKind == GlobalSort::DivideBy1000Asc ||
+					sortKind == GlobalSort::MultiplyBy10Asc ||
+					sortKind == GlobalSort::MultiplyBy100Asc ||
+					sortKind == GlobalSort::MultiplyBy1000Asc);
+
 			if (ha && hb) return asc ? (na < nb) : (na > nb);
-			if (ha != hb) return ha; // numeric beats non-numeric
+			if (ha != hb) return ha;
 			int c = a.score.compare(b.score);
 			if (c != 0) return c < 0;
 			return a.date < b.date;
 		}
 	}
+
 	return false;
 }
 
@@ -2197,10 +2271,6 @@ HighScoreData* HiScores::getGlobalHiScoreTable(Item* item) const {
 				true,   // Score
 				true    // Date
 				});
-		}
-
-		for (; rank <= kRowsPerTable; ++rank) {
-			t.rows.push_back({ ordinal_(rank), phName, phScore, phDate });
 		}
 
 		t.forceRedraw = true;
