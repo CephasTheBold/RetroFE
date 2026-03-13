@@ -125,6 +125,7 @@
 #define OPTION_CONTROLLERCOMBOSETTINGS "controllerComboSettings"
 #define OPTION_SETTINGSCOLLECTIONPLAYLIST "settingsCollectionPlaylist"
 #define OPTION_SERVOSTIKENABLED "servoStikEnabled"
+#define OPTION_SDLGAMECONTROLLER       "SDLGameController"
 
 // METADATA OPTIONS
 #define OPTION_METALOCK               "metaLock"
@@ -267,6 +268,7 @@ public:
 	const char* quicklistcollectionplaylist() { return value(OPTION_QUICKLISTCOLLECTIONPLAYLIST); }
     const char *settingscollectionplaylist() { return value(OPTION_SETTINGSCOLLECTIONPLAYLIST); }
     bool servostickenabled() { return bool_value(OPTION_SERVOSTIKENABLED); }
+    bool sdlgamecontroller() { return bool_value(OPTION_SDLGAMECONTROLLER); }
     
     bool metalock() { return bool_value(OPTION_METALOCK); }
     bool overwritexml() { return bool_value(OPTION_OVERWRITEXML); }

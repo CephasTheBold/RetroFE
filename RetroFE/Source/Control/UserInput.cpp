@@ -19,6 +19,8 @@
 #include "../Database/GlobalOpts.h"
 #include "../Utility/Log.h"
 #include "../Utility/Utils.h"
+#include "GameControllerAxisHandler.h"
+#include "GameControllerButtonHandler.h"
 #include "JoyAxisHandler.h"
 #include "JoyButtonHandler.h"
 #include "JoyHatHandler.h"
@@ -34,6 +36,7 @@ UserInput::UserInput(Configuration &c)
     }
     for ( unsigned int i = 0; i < cMaxJoy; i++ ) {
         joysticks_[i] = -1;
+        gameControllers_[i] = -1;
     }
 }
 
@@ -48,7 +51,12 @@ UserInput::~UserInput()
 
 bool UserInput::initialize()
 {
-    
+    sdlGameController_ = false;
+    config_.getProperty(OPTION_SDLGAMECONTROLLER, sdlGameController_);
+    if (sdlGameController_) {
+        LOG_INFO("Input", "SDL GameController mode enabled");
+    }
+
     // Optional keys
     MapKey("playlistUp", KeyCodePlaylistUp, false );
     MapKey("playlistDown", KeyCodePlaylistDown, false );
@@ -207,13 +215,16 @@ bool UserInput::HandleInputMapping(const std::string& token, KeyCode_E key, cons
                 std::stringstream ss;
                 ss << Utils::replace(joydesc, "button", "");
                 ss >> button;
-                keyHandlers_.push_back(std::pair<InputHandler*, KeyCode_E>(new JoyButtonHandler(joynum, button), key));
-                LOG_INFO("Input", "Binding joypad button " + ss.str());
+                if (sdlGameController_) {
+                    keyHandlers_.push_back(std::pair<InputHandler*, KeyCode_E>(new GameControllerButtonHandler(joynum, static_cast<SDL_GameControllerButton>(button)), key));
+                    LOG_INFO("Input", "Binding game controller button " + ss.str());
+                } else {
+                    keyHandlers_.push_back(std::pair<InputHandler*, KeyCode_E>(new JoyButtonHandler(joynum, button), key));
+                    LOG_INFO("Input", "Binding joypad button " + ss.str());
+                }
                 found = true;
             }
             else if (joydesc.find("hat") == 0) {
-                Uint8 hat = 0;
-
                 joydesc = Utils::replace(joydesc, "hat", "");
                 std::stringstream sshat;
                 sshat << joydesc.at(0);
@@ -221,19 +232,37 @@ bool UserInput::HandleInputMapping(const std::string& token, KeyCode_E key, cons
                 sshat >> hatnum;
                 joydesc = joydesc.erase(0, 1);
 
-                if (joydesc == "leftup") hat = SDL_HAT_LEFTUP;
-                else if (joydesc == "left") hat = SDL_HAT_LEFT;
-                else if (joydesc == "leftdown") hat = SDL_HAT_LEFTDOWN;
-                else if (joydesc == "up") hat = SDL_HAT_UP;
-                //else if(joydesc == "centered") hat = SDL_HAT_CENTERED;
-                else if (joydesc == "down") hat = SDL_HAT_DOWN;
-                else if (joydesc == "rightup") hat = SDL_HAT_RIGHTUP;
-                else if (joydesc == "right") hat = SDL_HAT_RIGHT;
-                else if (joydesc == "rightdown") hat = SDL_HAT_RIGHTDOWN;
+                if (sdlGameController_) {
+                    // In game controller mode, D-pad directions map to individual buttons
+                    SDL_GameControllerButton dpadButton = SDL_CONTROLLER_BUTTON_INVALID;
+                    if (joydesc == "up")         dpadButton = SDL_CONTROLLER_BUTTON_DPAD_UP;
+                    else if (joydesc == "down")  dpadButton = SDL_CONTROLLER_BUTTON_DPAD_DOWN;
+                    else if (joydesc == "left")  dpadButton = SDL_CONTROLLER_BUTTON_DPAD_LEFT;
+                    else if (joydesc == "right") dpadButton = SDL_CONTROLLER_BUTTON_DPAD_RIGHT;
 
-                keyHandlers_.push_back(std::pair<InputHandler*, KeyCode_E>(new JoyHatHandler(joynum, hatnum, hat), key));
-                LOG_INFO("Input", "Binding joypad hat " + joydesc);
-                found = true;
+                    if (dpadButton != SDL_CONTROLLER_BUTTON_INVALID) {
+                        keyHandlers_.push_back(std::pair<InputHandler*, KeyCode_E>(new GameControllerButtonHandler(joynum, dpadButton), key));
+                        LOG_INFO("Input", "Binding game controller D-pad " + joydesc);
+                        found = true;
+                    } else {
+                        LOG_ERROR("Input", "Unsupported hat direction '" + joydesc + "' in GameController mode for " + configKey + ". Use up/down/left/right.");
+                    }
+                } else {
+                    Uint8 hat = 0;
+                    if (joydesc == "leftup") hat = SDL_HAT_LEFTUP;
+                    else if (joydesc == "left") hat = SDL_HAT_LEFT;
+                    else if (joydesc == "leftdown") hat = SDL_HAT_LEFTDOWN;
+                    else if (joydesc == "up") hat = SDL_HAT_UP;
+                    //else if(joydesc == "centered") hat = SDL_HAT_CENTERED;
+                    else if (joydesc == "down") hat = SDL_HAT_DOWN;
+                    else if (joydesc == "rightup") hat = SDL_HAT_RIGHTUP;
+                    else if (joydesc == "right") hat = SDL_HAT_RIGHT;
+                    else if (joydesc == "rightdown") hat = SDL_HAT_RIGHTDOWN;
+
+                    keyHandlers_.push_back(std::pair<InputHandler*, KeyCode_E>(new JoyHatHandler(joynum, hatnum, hat), key));
+                    LOG_INFO("Input", "Binding joypad hat " + joydesc);
+                    found = true;
+                }
             }
             else if (joydesc.find("axis") == 0) {
                 // string is now axis0+
@@ -264,8 +293,13 @@ bool UserInput::HandleInputMapping(const std::string& token, KeyCode_E key, cons
                 std::stringstream ss;
                 ss << joydesc;
                 ss >> axis;
-                LOG_INFO("Input", "Binding joypad axis " + ss.str());
-                keyHandlers_.push_back(std::pair<InputHandler*, KeyCode_E>(new JoyAxisHandler(joynum, axis, min, max), key));
+                if (sdlGameController_) {
+                    LOG_INFO("Input", "Binding game controller axis " + ss.str());
+                    keyHandlers_.push_back(std::pair<InputHandler*, KeyCode_E>(new GameControllerAxisHandler(joynum, static_cast<SDL_GameControllerAxis>(axis), min, max), key));
+                } else {
+                    LOG_INFO("Input", "Binding joypad axis " + ss.str());
+                    keyHandlers_.push_back(std::pair<InputHandler*, KeyCode_E>(new JoyAxisHandler(joynum, axis, min, max), key));
+                }
                 found = true;
             }
         }
@@ -332,40 +366,84 @@ void UserInput::resetStates()
 
 
 bool UserInput::update(SDL_Event& e) {
-    // Handle adding a joystick
-    if (e.type == SDL_JOYDEVICEADDED) {
-        SDL_JoystickID id = SDL_JoystickInstanceID(SDL_JoystickOpen(e.jdevice.which));
-        for (unsigned int i = 0; i < cMaxJoy; i++) {
-            if (joysticks_[i] == -1) {
-                joysticks_[i] = id;
-                break;
+    if (sdlGameController_) {
+        // Handle adding a game controller
+        if (e.type == SDL_CONTROLLERDEVICEADDED) {
+            SDL_GameController* controller = SDL_GameControllerOpen(e.cdevice.which);
+            if (controller) {
+                SDL_JoystickID id = SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(controller));
+                for (unsigned int i = 0; i < cMaxJoy; i++) {
+                    if (gameControllers_[i] == -1) {
+                        gameControllers_[i] = id;
+                        break;
+                    }
+                }
             }
         }
-    }
 
-    // Handle removing a joystick
-    if (e.type == SDL_JOYDEVICEREMOVED) {
-        for (unsigned int i = 0; i < cMaxJoy; i++) {
-            if (joysticks_[i] == e.jdevice.which) {
-                joysticks_[i] = -1;
-                break;
+        // Handle removing a game controller
+        if (e.type == SDL_CONTROLLERDEVICEREMOVED) {
+            for (unsigned int i = 0; i < cMaxJoy; i++) {
+                if (gameControllers_[i] == e.cdevice.which) {
+                    gameControllers_[i] = -1;
+                    break;
+                }
+            }
+            SDL_GameController* controller = SDL_GameControllerFromInstanceID(e.cdevice.which);
+            if (controller) {
+                SDL_GameControllerClose(controller);
             }
         }
-        SDL_JoystickClose(SDL_JoystickFromInstanceID(e.jdevice.which));
-    }
 
-    // Remap joystick events
-    if (e.type == SDL_JOYAXISMOTION ||
-        e.type == SDL_JOYBUTTONUP ||
-        e.type == SDL_JOYBUTTONDOWN ||
-        e.type == SDL_JOYHATMOTION) {
-        for (unsigned int i = 0; i < cMaxJoy; i++) {
-            if (joysticks_[i] == e.jdevice.which) {
-                e.jdevice.which = i;
-                e.jaxis.which = i;
-                e.jbutton.which = i;
-                e.jhat.which = i;
-                break;
+        // Remap game controller events: replace instance ID with slot index
+        if (e.type == SDL_CONTROLLERBUTTONUP   ||
+            e.type == SDL_CONTROLLERBUTTONDOWN ||
+            e.type == SDL_CONTROLLERAXISMOTION) {
+            for (unsigned int i = 0; i < cMaxJoy; i++) {
+                if (gameControllers_[i] == e.cdevice.which) {
+                    e.cdevice.which  = i;
+                    e.cbutton.which  = i;
+                    e.caxis.which    = i;
+                    break;
+                }
+            }
+        }
+    } else {
+        // Handle adding a joystick
+        if (e.type == SDL_JOYDEVICEADDED) {
+            SDL_JoystickID id = SDL_JoystickInstanceID(SDL_JoystickOpen(e.jdevice.which));
+            for (unsigned int i = 0; i < cMaxJoy; i++) {
+                if (joysticks_[i] == -1) {
+                    joysticks_[i] = id;
+                    break;
+                }
+            }
+        }
+
+        // Handle removing a joystick
+        if (e.type == SDL_JOYDEVICEREMOVED) {
+            for (unsigned int i = 0; i < cMaxJoy; i++) {
+                if (joysticks_[i] == e.jdevice.which) {
+                    joysticks_[i] = -1;
+                    break;
+                }
+            }
+            SDL_JoystickClose(SDL_JoystickFromInstanceID(e.jdevice.which));
+        }
+
+        // Remap joystick events
+        if (e.type == SDL_JOYAXISMOTION ||
+            e.type == SDL_JOYBUTTONUP ||
+            e.type == SDL_JOYBUTTONDOWN ||
+            e.type == SDL_JOYHATMOTION) {
+            for (unsigned int i = 0; i < cMaxJoy; i++) {
+                if (joysticks_[i] == e.jdevice.which) {
+                    e.jdevice.which = i;
+                    e.jaxis.which = i;
+                    e.jbutton.which = i;
+                    e.jhat.which = i;
+                    break;
+                }
             }
         }
     }
@@ -404,6 +482,7 @@ void UserInput::clearJoysticks( )
 {
     for ( unsigned int i = 0; i < cMaxJoy; i++ ) {
         joysticks_[i] = -1;
+        gameControllers_[i] = -1;
     }
 }
 
