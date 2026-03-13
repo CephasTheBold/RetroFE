@@ -370,13 +370,22 @@ bool UserInput::update(SDL_Event& e) {
         // Handle adding a game controller
         if (e.type == SDL_CONTROLLERDEVICEADDED) {
             SDL_GameController* controller = SDL_GameControllerOpen(e.cdevice.which);
-            if (controller) {
+            if (!controller) {
+                LOG_ERROR("Input", "Failed to open game controller: " << SDL_GetError());
+            } else {
                 SDL_JoystickID id = SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(controller));
+                bool added = false;
                 for (unsigned int i = 0; i < cMaxJoy; i++) {
                     if (gameControllers_[i] == -1) {
                         gameControllers_[i] = id;
+                        LOG_INFO("Input", "Game controller connected, assigned to slot " << i);
+                        added = true;
                         break;
                     }
+                }
+                if (!added) {
+                    LOG_WARNING("Input", "Maximum number of game controllers (" << cMaxJoy << ") reached; new controller ignored");
+                    SDL_GameControllerClose(controller);
                 }
             }
         }
@@ -386,6 +395,7 @@ bool UserInput::update(SDL_Event& e) {
             for (unsigned int i = 0; i < cMaxJoy; i++) {
                 if (gameControllers_[i] == e.cdevice.which) {
                     gameControllers_[i] = -1;
+                    LOG_INFO("Input", "Game controller disconnected from slot " << i);
                     break;
                 }
             }
@@ -393,6 +403,8 @@ bool UserInput::update(SDL_Event& e) {
             if (controller) {
                 SDL_GameControllerClose(controller);
             }
+            // Reset all handler pressed states so no input remains "stuck" after disconnect
+            resetStates();
         }
 
         // Remap game controller events: replace instance ID with slot index
@@ -400,7 +412,7 @@ bool UserInput::update(SDL_Event& e) {
             e.type == SDL_CONTROLLERBUTTONDOWN ||
             e.type == SDL_CONTROLLERAXISMOTION) {
             for (unsigned int i = 0; i < cMaxJoy; i++) {
-                if (gameControllers_[i] == e.cdevice.which) {
+                if (gameControllers_[i] == e.cbutton.which) {
                     e.cdevice.which  = i;
                     e.cbutton.which  = i;
                     e.caxis.which    = i;
@@ -411,11 +423,23 @@ bool UserInput::update(SDL_Event& e) {
     } else {
         // Handle adding a joystick
         if (e.type == SDL_JOYDEVICEADDED) {
-            SDL_JoystickID id = SDL_JoystickInstanceID(SDL_JoystickOpen(e.jdevice.which));
-            for (unsigned int i = 0; i < cMaxJoy; i++) {
-                if (joysticks_[i] == -1) {
-                    joysticks_[i] = id;
-                    break;
+            SDL_Joystick* joy = SDL_JoystickOpen(e.jdevice.which);
+            if (!joy) {
+                LOG_ERROR("Input", "Failed to open joystick: " << SDL_GetError());
+            } else {
+                SDL_JoystickID id = SDL_JoystickInstanceID(joy);
+                bool added = false;
+                for (unsigned int i = 0; i < cMaxJoy; i++) {
+                    if (joysticks_[i] == -1) {
+                        joysticks_[i] = id;
+                        LOG_INFO("Input", "Joystick connected, assigned to slot " << i);
+                        added = true;
+                        break;
+                    }
+                }
+                if (!added) {
+                    LOG_WARNING("Input", "Maximum number of joysticks (" << cMaxJoy << ") reached; new joystick ignored");
+                    SDL_JoystickClose(joy);
                 }
             }
         }
@@ -425,10 +449,16 @@ bool UserInput::update(SDL_Event& e) {
             for (unsigned int i = 0; i < cMaxJoy; i++) {
                 if (joysticks_[i] == e.jdevice.which) {
                     joysticks_[i] = -1;
+                    LOG_INFO("Input", "Joystick disconnected from slot " << i);
                     break;
                 }
             }
-            SDL_JoystickClose(SDL_JoystickFromInstanceID(e.jdevice.which));
+            SDL_Joystick* joy = SDL_JoystickFromInstanceID(e.jdevice.which);
+            if (joy) {
+                SDL_JoystickClose(joy);
+            }
+            // Reset all handler pressed states so no input remains "stuck" after disconnect
+            resetStates();
         }
 
         // Remap joystick events
