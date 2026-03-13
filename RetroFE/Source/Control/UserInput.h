@@ -16,6 +16,7 @@
 #pragma once
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_joystick.h>
+#include <SDL2/SDL_gamecontroller.h>
 #include <map>
 #include <string>
 #include <vector>
@@ -121,6 +122,8 @@ private:
     Configuration& config_;
     bool updated_{ false };
     SDL_JoystickID joysticks_[cMaxJoy];
+    SDL_JoystickID gameControllers_[cMaxJoy];
+    bool sdlGameController_{ false };
     std::vector<std::pair<InputHandler *, KeyCode_E> > keyHandlers_;
     bool lastKeyState_[KeyCodeMax]; 
     bool currentKeyState_[KeyCodeMax]; 

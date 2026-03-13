@@ -126,6 +126,7 @@ For all `BOOLEAN` types, the following values are accepted: `yes`, `no`, `true`,
 | `controllerComboSettings` | `false` | `BOOLEAN` | Open settings playlist with the controller combo set in controls.conf | ✅ |
 | `settingsCollectionPlaylist` | `Arcades:settings` | `STRING` | Used by settings toggle to go to the playlist in collection:playlist format, defaults to settings.txt in the current collection | ✅ |
 | `servoStikEnabled` | `false` | `BOOLEAN` | Enable ServoStik support | |
+| `SDLGameController` | `false` | `BOOLEAN` | Use SDL GameController API instead of raw joystick API (enables button remapping; hat bindings support up/down/left/right only) | ✅ |
 
 ## METADATA OPTIONS
 | Option | Default | Type | Description | CoinOPS Added Feature |

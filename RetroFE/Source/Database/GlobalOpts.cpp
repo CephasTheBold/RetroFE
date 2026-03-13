@@ -133,6 +133,7 @@ const global_options::options_entry global_options::s_option_entries[] =
     { OPTION_CONTROLLERCOMBOSETTINGS,  "false",    global_options::option_type::BOOLEAN,  "Open settings playlist with the controller combo set in controls.conf" },
     { OPTION_SETTINGSCOLLECTIONPLAYLIST,"Arcades:settings", global_options::option_type::STRING,   "Used by settings toggle to go to the playlist in collection:playlist format, defaults to settings.txt in the current collection" },
     { OPTION_SERVOSTIKENABLED,         "false",    global_options::option_type::BOOLEAN,   "Enable ServoStik support" },
+    { OPTION_SDLGAMECONTROLLER,        "false",    global_options::option_type::BOOLEAN,   "Use SDL GameController API instead of raw joystick API for controller input" },
 
     { nullptr,                         nullptr,    global_options::option_type::HEADER,   "METADATA OPTIONS" },
     { OPTION_METALOCK,                 "true",     global_options::option_type::BOOLEAN,  "Locks RetroFE from looking for XML changes and uses meta.db, faster loading when true" },
