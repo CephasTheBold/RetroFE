@@ -128,7 +128,84 @@ These keys are used to define button combos with two keycodes. The first value d
 | `joyXAxis3-` | Right analog stick, vertical axis up (joystick X) |
 
 If X is omitted, RetroFE will accept input from all controllers.
-(version 0.8.13+) 
+(version 0.8.13+)
+
+---
+
+## Gamepad codes when `SDLGameController=true`
+
+When `SDLGameController=true` is set in `settings.conf`, RetroFE uses the
+SDL GameController API instead of the raw joystick API. The syntax in
+`controls.conf` is **identical** (`joyXButtonY`, `joyXAxisY+/-`,
+`joyXHatY<direction>`), but the button and axis **numbers now correspond to
+fixed SDL GameController enum values** that are the same for every supported
+controller, regardless of device-specific driver numbering.
+
+### Button numbers (`joyXButtonY`)
+
+| Number | SDL name | Typical label |
+|--------|----------|---------------|
+| `0` | `SDL_CONTROLLER_BUTTON_A` | A / Cross |
+| `1` | `SDL_CONTROLLER_BUTTON_B` | B / Circle |
+| `2` | `SDL_CONTROLLER_BUTTON_X` | X / Square |
+| `3` | `SDL_CONTROLLER_BUTTON_Y` | Y / Triangle |
+| `4` | `SDL_CONTROLLER_BUTTON_BACK` | Back / Select / View |
+| `5` | `SDL_CONTROLLER_BUTTON_GUIDE` | Guide / Home / PS |
+| `6` | `SDL_CONTROLLER_BUTTON_START` | Start / Menu |
+| `7` | `SDL_CONTROLLER_BUTTON_LEFTSTICK` | Left stick click (L3) |
+| `8` | `SDL_CONTROLLER_BUTTON_RIGHTSTICK` | Right stick click (R3) |
+| `9` | `SDL_CONTROLLER_BUTTON_LEFTSHOULDER` | Left bumper / L1 |
+| `10` | `SDL_CONTROLLER_BUTTON_RIGHTSHOULDER` | Right bumper / R1 |
+| `11` | `SDL_CONTROLLER_BUTTON_DPAD_UP` | D-pad up |
+| `12` | `SDL_CONTROLLER_BUTTON_DPAD_DOWN` | D-pad down |
+| `13` | `SDL_CONTROLLER_BUTTON_DPAD_LEFT` | D-pad left |
+| `14` | `SDL_CONTROLLER_BUTTON_DPAD_RIGHT` | D-pad right |
+| `15` | `SDL_CONTROLLER_BUTTON_MISC1` | Share / Capture / Microphone |
+
+### Axis numbers (`joyXAxisY+` / `joyXAxisY-`)
+
+| Number | SDL name | Direction |
+|--------|----------|-----------|
+| `0` | `SDL_CONTROLLER_AXIS_LEFTX` | Left stick, right (`+`) / left (`-`) |
+| `1` | `SDL_CONTROLLER_AXIS_LEFTY` | Left stick, down (`+`) / up (`-`) |
+| `2` | `SDL_CONTROLLER_AXIS_RIGHTX` | Right stick, right (`+`) / left (`-`) |
+| `3` | `SDL_CONTROLLER_AXIS_RIGHTY` | Right stick, down (`+`) / up (`-`) |
+| `4` | `SDL_CONTROLLER_AXIS_TRIGGERLEFT` | Left trigger / L2 (full pull = `+`) |
+| `5` | `SDL_CONTROLLER_AXIS_TRIGGERRIGHT` | Right trigger / R2 (full pull = `+`) |
+
+### Hat / D-pad (`joyXHatYdirection`)
+
+In GameController mode D-pad directions are exposed as buttons. The
+`joyXHatY<direction>` shorthand still works, but only the four cardinal
+directions are supported. Diagonal compound values (`leftup`, `rightdown`,
+etc.) will log an error and be ignored.
+
+| Keycode | Equivalent button |
+|---------|-------------------|
+| `joyXHat0Up` | `joyXButton11` |
+| `joyXHat0Down` | `joyXButton12` |
+| `joyXHat0Left` | `joyXButton13` |
+| `joyXHat0Right` | `joyXButton14` |
+
+### Example controls.conf entries for GameController mode
+
+```ini
+# settings.conf:  SDLGameController=true
+
+up             = joyAxis1-,      joyHat0Up
+down           = joyAxis1+,      joyHat0Down
+left           = joyAxis0-,      joyHat0Left
+right          = joyAxis0+,      joyHat0Right
+select         = joyButton0                    # A / Cross
+back           = joyButton1                    # B / Circle
+quit           = joyButton5                    # Guide / PS
+settings       = joyButton6                    # Start / Menu
+nextCyclePlaylist = joyButton10               # Right bumper / R1
+prevCyclePlaylist = joyButton9                # Left bumper / L1
+letterDown     = joyAxis5+                    # Right trigger / R2
+letterUp       = joyAxis4+                    # Left trigger / L2
+quitCombo      = joyButton4, joyButton6       # Back + Start
+```
 
 ## Mouse Codes
 
