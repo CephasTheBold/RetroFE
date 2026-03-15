@@ -30,6 +30,11 @@
 #include <cerrno>  // For errno
 
 #include "../../../Utility/Log.h"
+#include "../../../Utility/Utils.h"
+#include <filesystem>
+#include <fstream>
+
+namespace fs = std::filesystem;
 
  // --- Helper for wordexp RAII ---
 struct WordExpWrapper {
@@ -37,6 +42,11 @@ struct WordExpWrapper {
     WordExpWrapper() { p.we_wordc = 0; }
     ~WordExpWrapper() { if (p.we_wordc > 0) wordfree(&p); }
 };
+
+bool UnixProcessManager::isMameExeName(const std::string& exeName) {
+    std::string lowerName = Utils::toLower(exeName);
+    return (lowerName.rfind("mame", 0) == 0); // starts with "mame"
+}
 
 UnixProcessManager::UnixProcessManager() {
     LOG_INFO("ProcessManager", "UnixProcessManager created.");
@@ -97,6 +107,10 @@ bool UnixProcessManager::launch(const std::string& executable,
     if (!currentDirectory.empty()) {
         LOG_INFO("ProcessManager", "     Working directory: " + currentDirectory);
     }
+
+    // Store executable base name and working directory for use in terminate()
+    executableName_ = fs::path(executable).filename().string();
+    workingDirectory_ = currentDirectory;
 
     // Build argv via wordexp (blocks command substitution)
     std::string quotedExecutable = "\"" + executable + "\"";
@@ -337,6 +351,39 @@ void UnixProcessManager::terminate() {
             LOG_INFO("ProcessManager", std::string("Sent ") + name + " to PGID " + std::to_string(target_pgid) + ".");
         }
         };
+
+    // --- MAME special-case: ask it to quit via trigger file first ---
+    const bool isMame = isMameExeName(executableName_);
+    if (isMame && !workingDirectory_.empty()) {
+        fs::path mameTriggerPath = fs::path(workingDirectory_) / "mame_exit.trigger";
+        std::ofstream triggerFile(mameTriggerPath.string(), std::ios::out | std::ios::trunc);
+        if (triggerFile.good()) {
+            triggerFile.close();
+            LOG_INFO("ProcessManager", "MAME detected - wrote exit trigger: " + mameTriggerPath.string());
+
+            if (waitChildExitTimed(8000)) {
+                LOG_INFO("ProcessManager", "MAME exited cleanly after trigger.");
+                std::error_code ec;
+                fs::remove(mameTriggerPath, ec);
+                reapAllChildrenNonBlocking();
+                pid_ = -1; pgid_ = -1;
+                return;
+            }
+
+            // MAME did not exit in time; remove trigger and escalate
+            std::error_code ec;
+            fs::remove(mameTriggerPath, ec);
+            if (ec) {
+                LOG_WARNING("ProcessManager", "Failed to remove MAME exit trigger (" + mameTriggerPath.string() + "): " + ec.message());
+            }
+            else {
+                LOG_INFO("ProcessManager", "MAME did not exit in time; removed exit trigger and escalating.");
+            }
+        }
+        else {
+            LOG_WARNING("ProcessManager", "MAME detected but could not write exit trigger: " + mameTriggerPath.string());
+        }
+    }
 
     send_group(SIGTERM, "SIGTERM");
     if (waitChildExitTimed(500)) {

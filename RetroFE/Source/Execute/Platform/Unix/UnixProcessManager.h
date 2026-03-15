@@ -54,7 +54,10 @@ private:
     pid_t pid_ = -1; // Process ID of the forked child process.
     pid_t pgid_ = -1;
     int   lastExitCode_ = -1;   // -1 => unknown or still running
+    std::string executableName_;  // Base name of the launched executable
+    std::string workingDirectory_; // Working directory of the launched process
     bool isRunning() const;
+    static bool isMameExeName(const std::string& exeName);
 
 };
 #endif
