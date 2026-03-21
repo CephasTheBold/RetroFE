@@ -103,8 +103,10 @@ void FontManager::fillHolesInOutline(SDL_Surface* s,
                 auto [cx, cy] = qq.front(); qq.pop_front();
                 int kc = id(cx, cy);
                 comp.push_back(kc);
-                if (cx < minx) minx = cx; if (cx > maxx) maxx = cx;
-                if (cy < miny) miny = cy; if (cy > maxy) maxy = cy;
+                if (cx < minx) minx = cx;
+                if (cx > maxx) maxx = cx;
+                if (cy < miny) miny = cy;
+                if (cy > maxy) maxy = cy;
 
                 for (int d = 0; d < 8; ++d) {
                     int nx = cx + dx8[d], ny = cy + dy8[d];

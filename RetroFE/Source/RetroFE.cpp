@@ -193,7 +193,6 @@ void RetroFE::render() {
 	static double lateSumUsInWindow = 0.0;
 	static double lateMaxUsInWindow = 0.0;
 
-	static double displayedWorkAvgMs = 0.0;
 	static double displayedLateAvgUs = 0.0;
 	static double displayedLateMaxUs = 0.0;
 
@@ -254,7 +253,6 @@ void RetroFE::render() {
 		lateSumUsInWindow = 0.0;
 		lateMaxUsInWindow = 0.0;
 
-		displayedWorkAvgMs = 0.0;
 		displayedLateAvgUs = 0.0;
 		displayedLateMaxUs = 0.0;
 	}
@@ -281,7 +279,6 @@ void RetroFE::render() {
 
 			// --- Compute displayed 1s window stats ---
 			const int denom = std::max(1, framesSinceFpsUpdate);
-			displayedWorkAvgMs = workSumMsInWindow / (double)denom;
 			displayedLateAvgUs = lateSumUsInWindow / (double)denom;
 			displayedLateMaxUs = lateMaxUsInWindow;
 
@@ -390,7 +387,6 @@ void RetroFE::render() {
 		lateSumUsInWindow = 0.0;
 		lateMaxUsInWindow = 0.0;
 
-		displayedWorkAvgMs = 0.0;
 		displayedLateAvgUs = 0.0;
 		displayedLateMaxUs = 0.0;
 	}
@@ -681,7 +677,7 @@ bool RetroFE::deInitialize() {
 		musicPlayer_ = nullptr;
 	}
 
-	LOG_INFO("RetroFE", reboot_ ? "Rebooting" : "Exiting");
+	LOG_INFO("RetroFE", (reboot_ ? "Rebooting" : "Exiting"));
 
 	return retVal;
 }
@@ -3054,12 +3050,6 @@ bool RetroFE::back(bool& exit) {
 	return canGoBack;
 }
 
-// depricated - use kiosk mode
-bool RetroFE::isStandalonePlaylist(std::string playlist) {
-	// return playlist == "street fighter and capcom fighters" || playlist == "street fighter";
-	return false;
-}
-
 bool RetroFE::isInAttractModeSkipPlaylist(std::string playlist) {
 	if (lkupAttractModeSkipPlaylist_.empty())
 	{
@@ -3549,23 +3539,18 @@ RetroFE::RETROFE_STATE RetroFE::processUserInput(Page* page) {
 		else if (!kioskLock_ && (input_.keystate(UserInput::KeyCodeCyclePlaylist) ||
 			input_.keystate(UserInput::KeyCodeNextCyclePlaylist)))
 		{
-			if (!isStandalonePlaylist(currentPage_->getPlaylistName()))
-			{
-				//resetInfoToggle();
-				attract_.reset();
-				keyLastTime_ = currentTime_;
-				return RETROFE_PLAYLIST_NEXT_CYCLE;
-			}
+			//resetInfoToggle();
+			attract_.reset();
+			keyLastTime_ = currentTime_;
+			return RETROFE_PLAYLIST_NEXT_CYCLE;
 		}
 		else if (!kioskLock_ && input_.keystate(UserInput::KeyCodePrevCyclePlaylist))
 		{
-			if (!isStandalonePlaylist(currentPage_->getPlaylistName()))
-			{
-				//resetInfoToggle();
-				attract_.reset();
-				keyLastTime_ = currentTime_;
-				return RETROFE_PLAYLIST_PREV_CYCLE;
-			}
+
+			//resetInfoToggle();
+			attract_.reset();
+			keyLastTime_ = currentTime_;
+			return RETROFE_PLAYLIST_PREV_CYCLE;
 		}
 		else if (!kioskLock_ && input_.keystate(UserInput::KeyCodeBack))
 		{
@@ -3736,23 +3721,19 @@ RetroFE::RETROFE_STATE RetroFE::processUserInput(Page* page) {
 
 		else if (!kioskLock_ && input_.keystate(UserInput::KeyCodeAddPlaylist))
 		{
-			if (!isStandalonePlaylist(currentPage_->getPlaylistName()))
-			{
-				attract_.reset();
-				page->rememberSelectedItem();
-				page->addPlaylist();
-				// don't trigger playlist change events but refresh item states
-				currentPage_->onNewItemSelected();
-				state = RETROFE_PLAYLIST_ENTER;
-			}
+			attract_.reset();
+			page->rememberSelectedItem();
+			page->addPlaylist();
+			// don't trigger playlist change events but refresh item states
+			currentPage_->onNewItemSelected();
+			state = RETROFE_PLAYLIST_ENTER;
 		}
 
 		else if (!kioskLock_ && input_.keystate(UserInput::KeyCodeTogglePlaylist))
 		{
 			if ((currentPage_->getPlaylistName() != "favorites"
 				&& currentPage_->getPlaylistName() != "settings"
-				&& currentPage_->getPlaylistName() != "quicklist")
-				&& !isStandalonePlaylist(currentPage_->getPlaylistName()))
+				&& currentPage_->getPlaylistName() != "quicklist"))
 			{
 				attract_.reset();
 				page->rememberSelectedItem();

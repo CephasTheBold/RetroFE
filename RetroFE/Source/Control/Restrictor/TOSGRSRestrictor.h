@@ -7,7 +7,11 @@
 
 class TOSGRSRestrictor : public IRestrictor {
 public:
-    TOSGRSRestrictor(uint16_t vid = 0x2341, uint16_t pid = 0x8036);
+    // Constants for the GRS hardware (Arduino Leonardo based)
+    static constexpr uint16_t GRS_VID = 0x2341;
+    static constexpr uint16_t GRS_PID = 0x8036;
+
+    TOSGRSRestrictor();
     ~TOSGRSRestrictor() override;
 
     bool initialize() override;
@@ -17,9 +21,8 @@ public:
     static bool isPresent();
 
 private:
-    uint16_t vid_, pid_;
     sp_port* port_;
 
-    sp_port* findPort(uint16_t vid, uint16_t pid);
+    sp_port* findPort();
     std::string sendCmd(const std::string&);
 };

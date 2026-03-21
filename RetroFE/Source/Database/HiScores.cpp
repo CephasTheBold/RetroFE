@@ -1403,7 +1403,6 @@ static inline std::string formatThousands_(const std::string& s) {
 	std::string frac;
 	if (i < s.size() && s[i] == '.') {
 		size_t dot = i++;
-		size_t startFrac = i;
 		while (i < s.size() && std::isdigit((unsigned char)s[i])) ++i;
 		// If anything non-digit after frac, bail (e.g., scientific or junk)
 		if (i != s.size()) return s;

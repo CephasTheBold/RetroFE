@@ -1233,22 +1233,30 @@ void ReloadableGlobalHiscores::reloadTexture() {
         if (qrW == 0 || qrH == 0) continue;
         auto& m = qrReserve[t];
         switch (qrPlacement_) {
-            case QrPlacement::TopCentered:    m.T = (float)qrMarginPx_ + (float)qrH; break;
-            case QrPlacement::BottomCenter:   m.B = (float)qrMarginPx_ + (float)qrH; break;
-            case QrPlacement::LeftMiddle:     if (reserveHorizontalForSides) m.L = (float)qrMarginPx_ + (float)qrW; break;
-            case QrPlacement::RightMiddle:    if (reserveHorizontalForSides) m.R = (float)qrMarginPx_ + (float)qrW; break;
+            case QrPlacement::TopCentered:    m.T = (float)qrMarginPx_ + (float)qrH;
+                break;
+            case QrPlacement::BottomCenter:   m.B = (float)qrMarginPx_ + (float)qrH;
+                break;
+            case QrPlacement::LeftMiddle:     if (reserveHorizontalForSides) m.L = (float)qrMarginPx_ + (float)qrW;
+                break;
+            case QrPlacement::RightMiddle:    if (reserveHorizontalForSides) m.R = (float)qrMarginPx_ + (float)qrW;
+                break;
             case QrPlacement::TopLeft:
             if (reserveHorizontalForSides) m.L = (float)qrMarginPx_ + (float)qrW;
-            if (reserveVerticalForCorners) m.T = (float)qrMarginPx_ + (float)qrH; break;
+            if (reserveVerticalForCorners) m.T = (float)qrMarginPx_ + (float)qrH;
+                break;
             case QrPlacement::TopRight:
             if (reserveHorizontalForSides) m.R = (float)qrMarginPx_ + (float)qrW;
-            if (reserveVerticalForCorners) m.T = (float)qrMarginPx_ + (float)qrH; break;
+            if (reserveVerticalForCorners) m.T = (float)qrMarginPx_ + (float)qrH;
+                break;
             case QrPlacement::BottomLeft:
             if (reserveHorizontalForSides) m.L = (float)qrMarginPx_ + (float)qrW;
-            if (reserveVerticalForCorners) m.B = (float)qrMarginPx_ + (float)qrH; break;
+            if (reserveVerticalForCorners) m.B = (float)qrMarginPx_ + (float)qrH;
+                break;
             case QrPlacement::BottomRight:
             if (reserveHorizontalForSides) m.R = (float)qrMarginPx_ + (float)qrW;
-            if (reserveVerticalForCorners) m.B = (float)qrMarginPx_ + (float)qrH; break;
+            if (reserveVerticalForCorners) m.B = (float)qrMarginPx_ + (float)qrH;
+                break;
         }
     }
     std::vector<float> qrExtraW(Nvisible, 0.f), qrExtraH(Nvisible, 0.f);

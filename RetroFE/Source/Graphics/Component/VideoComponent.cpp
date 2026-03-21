@@ -41,21 +41,6 @@
 #include <gst/video/video.h>
 #include "../../Video/VideoPool.h"
 
-static bool is_audio_only_path(std::string_view p) {
-	auto dot = p.find_last_of('.');
-	if (dot == std::string_view::npos) return false;
-	auto ext = p.substr(dot);
-
-	auto lower = [](char c) { return (c >= 'A' && c <= 'Z') ? char(c + ('a' - 'A')) : c; };
-
-	// ".mp3"
-	if (ext.size() == 4 &&
-		lower(ext[0]) == '.' && lower(ext[1]) == 'm' && lower(ext[2]) == 'p' && lower(ext[3]) == '3')
-		return true;
-
-	return false;
-}
-
 VideoComponent::VideoComponent(Page& p, const std::string& videoFile, int monitor, int numLoops, bool softOverlay, int listId, const int* perspectiveCorners)
 	: Component(p), videoFile_(videoFile), softOverlay_(softOverlay), numLoops_(numLoops), monitor_(monitor), listId_(listId), currentPage_(&p) {
 	if (perspectiveCorners) {

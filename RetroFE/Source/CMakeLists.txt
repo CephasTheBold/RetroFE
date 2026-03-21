@@ -29,7 +29,7 @@ set(SQLITE3_ROOT "${RETROFE_THIRD_PARTY_DIR}/sqlite3")
 set(QRCODEGEN_ROOT "${RETROFE_THIRD_PARTY_DIR}/qrcodegen")
 set(CURL_ROOT "${RETROFE_THIRD_PARTY_DIR}/curl_x64-windows")
 set(JSON_ROOT "${RETROFE_THIRD_PARTY_DIR}/json/single_include")
-set(RAPIDXML_ROOT "${RETROFE_THIRD_PARTY_DIR}/rapidxml-1.13")
+set(RAPIDXML_ROOT "${RETROFE_THIRD_PARTY_DIR}/rapidxml-1.17")
 set(KISSFFT_ROOT "${RETROFE_THIRD_PARTY_DIR}/kissfft-131.1.0")
 
 if(WIN32)
@@ -179,7 +179,6 @@ set(RETROFE_INCLUDE_DIRS
     "${JSON_ROOT}"
     "${CURL_ROOT}/include"
     "${SQLITE3_ROOT}"
-    "${RAPIDXML_ROOT}"
     "${PACDRIVE_ROOT}"
     "${KISSFFT_ROOT}"
     "/opt/homebrew/lib/glib-2.0/include"
@@ -380,6 +379,8 @@ set(EXECUTABLE_OUTPUT_PATH "${RETROFE_DIR}/Build" CACHE PATH "Build directory" F
 set(LIBRARY_OUTPUT_PATH "${RETROFE_DIR}/Build" CACHE PATH "Build directory" FORCE)
 
 include_directories(${RETROFE_INCLUDE_DIRS})
+include_directories(SYSTEM "${RAPIDXML_ROOT}")
+set_source_files_properties("${SQLITE3_ROOT}/sqlite3.c" PROPERTIES COMPILE_FLAGS "-w")
 add_executable(retrofe  ${RETROFE_SOURCES} ${RETROFE_HEADERS})
 add_dependencies(retrofe GenerateVersioningHeader)
 
@@ -468,11 +469,11 @@ else()
     set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -O0 -Wall -ggdb")
 
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64")
-        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O2 -march=x86-64-v2 -msse4.2 -mavx -Wall -Wextra -funroll-loops")
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O2 -march=x86-64-v2 -msse4.2 -mavx -Wall -Wextra -Wno-reorder -funroll-loops")
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O2 -march=x86-64-v2 -msse4.2 -mavx -Wall -Wextra -Wno-deprecated-declarations -funroll-loops")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O2 -march=x86-64-v2 -msse4.2 -mavx -Wall -Wextra -Wno-reorder -Wno-deprecated-declarations -funroll-loops")
     elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
-        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O2 -mcpu=native -funroll-loops -fstrict-aliasing -ffast-math -Wall -Wextra")
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O2 -mcpu=native -funroll-loops -fstrict-aliasing -ffast-math -Wall -Wextra -Wno-reorder")
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O2 -mcpu=native -funroll-loops -fstrict-aliasing -ffast-math -Wall -Wextra -Wno-deprecated-declarations")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O2 -mcpu=native -funroll-loops -fstrict-aliasing -ffast-math -Wall -Wextra -Wno-reorder -Wno-deprecated-declarations")
     endif()
     message(STATUS "Using C Flags: ${CMAKE_C_FLAGS}")
     message(STATUS "Using CXX Flags: ${CMAKE_CXX_FLAGS}")

@@ -50,6 +50,7 @@ private:
     void renderTableRowsTexture(FontManager* font, const HighScoreTable& table, float scale, float drawableHeight, float rowPadding, float paddingBetweenColumns, float totalTableWidth);
     
     // Configuration Parameters
+    Configuration& config_;
     FontManager* fontInst_;
     std::string textFormat_;
     std::string excludedColumns_;

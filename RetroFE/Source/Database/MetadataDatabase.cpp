@@ -57,14 +57,6 @@ namespace {
         std::string lastModified;
     };
 
-    // Trim long values in logs
-    static std::string preview(const char* s, size_t max = 64) {
-        if (!s) return "(null)";
-        std::string out(s);
-        if (out.size() > max) { out.resize(max); out += "..."; }
-        return out;
-    }
-
     static size_t writeFileCb(char* ptr, size_t size, size_t nmemb, void* userdata) {
         std::ofstream* out = static_cast<std::ofstream*>(userdata);
         out->write(ptr, static_cast<std::streamsize>(size * nmemb));
@@ -318,7 +310,7 @@ namespace {
         // Allocate and append a brand new node.
         char* tagA = doc.allocate_string(tag);
         char* valA = doc.allocate_string(text ? text : "");
-        auto* node = doc.allocate_node(rapidxml::node_element, tagA, valA);
+        auto* node = doc.allocate_node(rapidxml::node_type::node_element, tagA, valA);
         parent->append_node(node);
         return node;
     }
@@ -341,64 +333,6 @@ namespace {
         return dst;
     }
 
-    static bool mergeGame(rapidxml::xml_document<>& localDoc,
-        rapidxml::xml_node<>* localMenu,
-        const rapidxml::xml_node<>* remoteGame,
-        const MergeOptions& opt) {
-        if (!localMenu || !remoteGame) return false;
-
-        auto* nameAttr = remoteGame->first_attribute("name");
-        if (!nameAttr || !nameAttr->value() || !*nameAttr->value()) return false;
-        const std::string gname = nameAttr->value();
-
-        auto* localGame = findGameByName(localMenu, gname);
-        if (!localGame) {
-            if (!opt.appendNewGames) return false;
-            localMenu->append_node(deepCloneNode(localDoc, remoteGame));
-            LOG_INFO("Metadata", "merge: added missing game '" + gname + "'");
-            return true;
-        }
-
-        bool changed = false;
-        for (const char* tag : MERGEABLE_TAGS) {
-            auto* localTag = localGame->first_node(tag);
-            auto* remoteTag = remoteGame->first_node(tag);
-
-            if (isForceOverwriteTag(tag)) {
-                // Remote is authoritative for these tags
-                if (remoteTag) {
-                    const char* rv = remoteTag->value() ? remoteTag->value() : "";
-                    const char* lv = localTag && localTag->value() ? localTag->value() : "";
-                    if (!localTag || std::strcmp(lv, rv) != 0) {
-                        LOG_INFO("Metadata", "merge: [" + gname + "] force '" + std::string(tag) +
-                            "' '" + preview(lv) + "' -> '" + preview(rv) + "'");
-                        ensureChildWithText(localDoc, localGame, tag, rv);
-                        changed = true;
-                    }
-                }
-                else {
-                    if (localTag) {
-                        LOG_INFO("Metadata", "merge: [" + gname + "] remove '" + std::string(tag) +
-                            "' (missing in remote)");
-                        localGame->remove_node(localTag);
-                        changed = true;
-                    }
-                }
-                continue;
-            }
-
-            // Fill-only rule
-            if (remoteTag && isMissingOrEmpty(localTag, opt.treatEmptyAsMissing) && hasNonEmptyText(remoteTag)) {
-                LOG_INFO("Metadata", "merge: [" + gname + "] fill missing '" + std::string(tag) +
-                    "' -> '" + preview(remoteTag->value()) + "'");
-                ensureChildWithText(localDoc, localGame, tag, remoteTag->value());
-                changed = true;
-            }
-        }
-        return changed;
-    }
-
-
     // Merge remote XML file into local XML; write result to outPath.
     // Returns true if merged content differs from original local.
     static int countGamesWithName(rapidxml::xml_node<>* menu, const std::string& name) {
@@ -409,15 +343,6 @@ namespace {
             }
         }
         return cnt;
-    }
-
-    static std::string getNodeText(const rapidxml::xml_node<>* p, const char* tag) {
-        if (!p) return {};
-        if (auto* n = p->first_node(tag)) {
-            const char* v = n->value();
-            return v ? std::string(v) : std::string();
-        }
-        return {};
     }
 
     static bool mergeHyperlistFiles(const fs::path& localPath,
@@ -489,8 +414,6 @@ namespace {
                 return true;
             }
 
-            // Run the regular merge logic + count if anything changed for this game
-            bool before = false;
             // We reuse the existing mergeGame but we also detect if it changed this particular game.
             // Implement inline to see game-local delta:
             bool localChanged = false;

@@ -71,7 +71,7 @@ PageBuilder::PageBuilder(const std::string& layoutKey, const std::string& layout
 
 PageBuilder::~PageBuilder() = default;
 
-Page* PageBuilder::buildPage(const std::string& collectionName, bool defaultToCurrentLayout) {
+Page* PageBuilder::buildPage(const std::string& collectionName, bool /* defaultToCurrentLayout */) {
 	Page* page = nullptr;
 
 	std::string layoutFile;

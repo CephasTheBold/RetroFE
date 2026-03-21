@@ -1,16 +1,11 @@
 #include "TOSGRSRestrictor.h"
-#include "libserialport.h"
 #include "../../Utility/Log.h"
-#include <sstream>
-#include <iomanip>
-#include <memory>
-#include <thread>
+#include <algorithm>
+#include <string>
 
 static constexpr char COMPONENT[] = "TOSGRS";
 
-TOSGRSRestrictor::TOSGRSRestrictor(uint16_t vid, uint16_t pid)
-	: vid_(vid), pid_(pid), port_(nullptr) {
-}
+TOSGRSRestrictor::TOSGRSRestrictor() : port_(nullptr) {}
 
 TOSGRSRestrictor::~TOSGRSRestrictor() {
 	if (port_) {
@@ -20,77 +15,83 @@ TOSGRSRestrictor::~TOSGRSRestrictor() {
 }
 
 bool TOSGRSRestrictor::initialize() {
-	LOG_INFO(COMPONENT, "Attempting to initialize TOS GRS restrictor...");
+	if (port_) {
+		sp_close(port_);
+		sp_free_port(port_);
+		port_ = nullptr;
+	}
 
-	port_ = findPort(vid_, pid_);
+	LOG_INFO(COMPONENT, "Searching for TOS GRS hardware...");
+	port_ = findPort();
+
 	if (!port_) {
-		LOG_INFO(COMPONENT, "No GRS device found");
+		LOG_ERROR(COMPONENT, "GRS device not found or failed to initialize.");
 		return false;
 	}
 
-	// DO NOT re-open — port_ is already open and configured
-	LOG_INFO(COMPONENT, "TOS GRS restrictor detected and initialized.");
+	LOG_INFO(COMPONENT, "TOS GRS restrictor initialized successfully.");
 	return true;
 }
 
 bool TOSGRSRestrictor::setWay(int way) {
-	if (!port_ || (way != 4 && way != 8)) return false;
+	if (way != 4 && way != 8) return false;
+
+	// Auto-reconnect if port was lost or never found
+	if (!port_ && !initialize()) return false;
+
 	auto current = getWay();
 	if (current && *current == way) return true;
+
 	return sendCmd("setway,all," + std::to_string(way)) != "err";
 }
 
-
 std::optional<int> TOSGRSRestrictor::getWay() {
-	if (!port_) return std::nullopt;
+	if (!port_ && !initialize()) return std::nullopt;
+
 	auto r = sendCmd("getway,1");
-	if (r.size() && (r[0] == '4' || r[0] == '8')) return r[0] - '0';
+	if (!r.empty() && (r[0] == '4' || r[0] == '8')) {
+		return r[0] - '0';
+	}
 	return std::nullopt;
 }
 
 std::string TOSGRSRestrictor::sendCmd(const std::string& cmd) {
-	sp_flush(port_, SP_BUF_INPUT); // Clear stale input
+	if (!port_) return "err";
+
+	sp_flush(port_, SP_BUF_INPUT);
 
 	std::string command = cmd;
 	if (command.empty() || command.back() != '\r') {
 		command += '\r';
 	}
 
-	if (sp_blocking_write(port_, command.c_str(), command.size(), 500) != (int)command.size()) {
-		LOG_ERROR(COMPONENT, "Failed to write command to device.");
+	// Check for write failure (unplugged/hardware error)
+	if (sp_blocking_write(port_, command.c_str(), command.size(), 500) < 0) {
+		LOG_ERROR(COMPONENT, "Write failed. Device disconnected. Attempting recovery...");
+
+		sp_close(port_);
+		sp_free_port(port_);
+		port_ = nullptr;
+
+		if (initialize()) {
+			return sendCmd(cmd); // Recursive retry once
+		}
 		return "err";
 	}
 
-	// Set up event waiting
 	struct sp_event_set* eventSet = nullptr;
-	if (sp_new_event_set(&eventSet) != SP_OK) {
-		LOG_ERROR(COMPONENT, "Failed to create event set.");
-		return "err";
-	}
+	if (sp_new_event_set(&eventSet) != SP_OK) return "err";
+	sp_add_port_events(eventSet, port_, SP_EVENT_RX_READY);
 
-	if (sp_add_port_events(eventSet, port_, SP_EVENT_RX_READY) != SP_OK) {
-		LOG_ERROR(COMPONENT, "Failed to add RX_READY event to event set.");
-		sp_free_event_set(eventSet);
-		return "err";
-	}
-
-	// Wait up to 1000ms for the device to respond
 	int n = 0;
 	char buf[128];
-
 	if (sp_wait(eventSet, 1000) == SP_OK) {
 		n = sp_nonblocking_read(port_, buf, sizeof(buf));
 	}
-	else {
-		LOG_ERROR(COMPONENT, "Timeout or error waiting for device response.");
-		sp_free_event_set(eventSet);
-		return "err";
-	}
-
 	sp_free_event_set(eventSet);
 
 	if (n <= 0) {
-		LOG_ERROR(COMPONENT, "Read failed or returned no data.");
+		LOG_ERROR(COMPONENT, "No response from GRS device.");
 		return "err";
 	}
 
@@ -103,79 +104,63 @@ std::string TOSGRSRestrictor::sendCmd(const std::string& cmd) {
 	return response.empty() ? "err" : response;
 }
 
-std::string intToHex(int value) {
-	std::stringstream ss;
-	ss << std::hex << std::showbase << value;
-	return ss.str();
-}
-
-sp_port* TOSGRSRestrictor::findPort(uint16_t vid, uint16_t pid) {
+sp_port* TOSGRSRestrictor::findPort() {
 	sp_port** ports = nullptr;
-	if (sp_list_ports(&ports) != SP_OK) {
-		LOG_ERROR(COMPONENT, "sp_list_ports() failed. Cannot search for device.");
-		return nullptr;
-	}
+	if (sp_list_ports(&ports) != SP_OK) return nullptr;
 
 	sp_port* result = nullptr;
-
 	for (int i = 0; ports[i]; ++i) {
-		// Only proceed if the port is a physical USB device.
-		// This will skip Bluetooth, legacy, and virtual ports.
-		if (sp_get_port_transport(ports[i]) != SP_TRANSPORT_USB) {
-			continue; // Skip this port
-		}
+		if (sp_get_port_transport(ports[i]) != SP_TRANSPORT_USB) continue;
 
-		LOG_INFO(COMPONENT, "Probing USB port: " + std::string(sp_get_port_name(ports[i])) +
-			" [" + sp_get_port_description(ports[i]) + "]");
+		int vid, pid;
+		if (sp_get_port_usb_vid_pid(ports[i], &vid, &pid) != SP_OK) continue;
+
+		// Match against GRS_VID/GRS_PID constants from header
+		if (vid != GRS_VID || pid != GRS_PID) continue;
+
+		LOG_INFO(COMPONENT, "Candidate found: " + std::string(sp_get_port_name(ports[i])));
 
 		sp_port* testPort = nullptr;
 		if (sp_copy_port(ports[i], &testPort) != SP_OK) continue;
 
-		if (sp_open(testPort, SP_MODE_READ_WRITE) != SP_OK) {
-			sp_free_port(testPort);
-			continue;
-		}
+		if (sp_open(testPort, SP_MODE_READ_WRITE) == SP_OK) {
+			sp_set_baudrate(testPort, 115200);
+			sp_set_bits(testPort, 8);
+			sp_set_parity(testPort, SP_PARITY_NONE);
+			sp_set_stopbits(testPort, 1);
+			sp_set_flowcontrol(testPort, SP_FLOWCONTROL_NONE);
 
-		// Configure port...
-		sp_set_baudrate(testPort, 115200);
-		sp_set_bits(testPort, 8);
-		sp_set_parity(testPort, SP_PARITY_NONE);
-		sp_set_stopbits(testPort, 1);
-		sp_set_flowcontrol(testPort, SP_FLOWCONTROL_NONE);
+			const std::string probe = "getwelcome\r";
+			sp_blocking_write(testPort, probe.c_str(), probe.size(), 200);
 
-		// Probe for TOSGRS welcome
-		const std::string probe = "getwelcome\r";
-		sp_blocking_write(testPort, probe.c_str(), probe.size(), 200);
+			char buf[128] = {};
+			int n = sp_blocking_read(testPort, buf, sizeof(buf), 500);
+			if (n > 0) {
+				std::string response(buf, n);
+				std::transform(response.begin(), response.end(), response.begin(),
+							   [](unsigned char c){ return std::tolower(c); });
 
-		char buf[128] = {};
-		int n = sp_blocking_read(testPort, buf, sizeof(buf), 500);
-		if (n > 0) {
-			std::string response(buf, n);
-
-			std::string logResponse = response;
-			while (!logResponse.empty() && (logResponse.back() == '\r' || logResponse.back() == '\n'))
-				logResponse.pop_back();
-
-			LOG_INFO(COMPONENT, "Probe response: \"" + logResponse + "\"");
-
-			std::string lower;
-			for (char c : response) lower += std::tolower(c);
-			if (lower.find("tos428") != std::string::npos) {
-				LOG_INFO(COMPONENT, "Confirmed TOS GRS on port: " + std::string(sp_get_port_name(testPort)));
-				result = testPort;
-				// Since we found it, no need to keep searching.
-				break;
+				if (response.find("tos428") != std::string::npos) {
+					LOG_INFO(COMPONENT, "Handshake successful on " + std::string(sp_get_port_name(testPort)));
+					result = testPort;
+					break;
+				}
 			}
+			sp_close(testPort);
 		}
-
-		sp_close(testPort);
 		sp_free_port(testPort);
 	}
-
 	sp_free_port_list(ports);
 	return result;
 }
 
 bool TOSGRSRestrictor::isPresent() {
-	return TOSGRSRestrictor().findPort(0x2341, 0x8036) != nullptr;
+	TOSGRSRestrictor temp;
+	sp_port* p = temp.findPort();
+	if (p) {
+		sp_close(p);
+		sp_free_port(p);
+		return true;
+	}
+	return false;
 }

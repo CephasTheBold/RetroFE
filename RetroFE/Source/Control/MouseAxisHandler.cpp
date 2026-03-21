@@ -10,7 +10,7 @@ void MouseAxisHandler::reset() {
     pressed_ = false;
 }
 
-bool MouseAxisHandler::update(SDL_Event& e) {
+bool MouseAxisHandler::update(SDL_Event& /*e*/) {
     pressed_ = false;
 
     return pressed_;

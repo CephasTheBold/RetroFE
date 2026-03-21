@@ -151,6 +151,7 @@ ReloadableHiscores::ReloadableHiscores(Configuration& config, std::string textFo
 	Page& p, int displayOffset, FontManager* font, float scrollingSpeed, float startTime,
 	std::string excludedColumns, float baseColumnPadding, float baseRowPadding, size_t maxRows)
 	: Component(p)
+	, config_(config)
 	, fontInst_(font)
 	, textFormat_(textFormat)
 	, excludedColumns_(excludedColumns)
@@ -879,7 +880,7 @@ void ReloadableHiscores::renderTableRowsTexture(
 	SDL_Texture* fillTex = mip->fillTexture;
 	SDL_Texture* outlineTex = mip->outlineTexture;
 
-	for (int rowIndex = 0; rowIndex < rowsToActuallyRender; ++rowIndex) {
+	for (size_t rowIndex = 0; rowIndex < rowsToActuallyRender; ++rowIndex) {
 		float y = (drawableHeight + rowPadding) * rowIndex; // This is the baseline y for this row.
 		float x = 0.0f;
 		for (size_t i = 0; i < visibleColumnIndices_.size(); ++i) {

@@ -179,7 +179,7 @@ GStreamerVideo::~GStreamerVideo() {
 	}
 }
 
-gboolean GStreamerVideo::busCallback(GstBus* bus, GstMessage* msg, gpointer user_data) {
+gboolean GStreamerVideo::busCallback(GstBus* /*bus*/, GstMessage* msg, gpointer user_data) {
 	auto* video = static_cast<GStreamerVideo*>(user_data);
 
 	if (!video) {
@@ -1042,9 +1042,9 @@ bool GStreamerVideo::play(const std::string& file) {
 			return false;
 		}
 		LOG_DEBUG("GStreamerVideo",
-			(scr == GST_STATE_CHANGE_ASYNC)
+		((scr == GST_STATE_CHANGE_ASYNC)
 			? "PAUSED is async (prerolling)"
-			: "PAUSED immediately");
+			: "PAUSED immediately"));
 
 		// Start muted/0.0; unmute later in resume()
 		gst_stream_volume_set_volume(GST_STREAM_VOLUME(playbin_), GST_STREAM_VOLUME_FORMAT_LINEAR, 0.0);
@@ -1084,7 +1084,7 @@ void GStreamerVideo::setupCallbacksForSession(uint64_t sessionId) {
 	gst_app_sink_set_callbacks(GST_APP_SINK(audioSink_), &audioCbs_, audioCtx_, nullptr);
 }
 
-GstPadProbeReturn GStreamerVideo::padProbeCallback(GstPad* pad, GstPadProbeInfo* info, gpointer user_data) {
+GstPadProbeReturn GStreamerVideo::padProbeCallback(GstPad* /*pad*/, GstPadProbeInfo* info, gpointer user_data) {
 	auto* ctx = static_cast<SessionCtx*>(user_data);
 	auto* self = ctx ? ctx->self : nullptr;
 	if (!self || !self->isCurrentSession(ctx->session)) {

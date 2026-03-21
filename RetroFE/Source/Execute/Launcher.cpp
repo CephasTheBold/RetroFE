@@ -722,7 +722,12 @@ void Launcher::LEDBlinky(int command, std::string collection, Item* collectionIt
 			LOG_WARNING("LEDBlinky", "Failed to launch (no-wait mode).");
 		}
 	}
-#endif // WIN32
+
+#else
+    (void)command;
+    (void)collection;
+    (void)collectionItem;
+#endif
 }
 
 bool Launcher::launcherName(std::string& launcherName, std::string collection) {
