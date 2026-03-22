@@ -778,8 +778,10 @@ bool MetadataDatabase::importHyperlist(const std::string& hyperlistFile, const s
             };
 
         for (auto game = root.child("game"); game; game = game.next_sibling("game")) {
-            const char* name = game.attribute("name").value();
-            if (!name || name[0] == '\0') continue;
+            auto nameAttr = game.attribute("name");
+            if (!nameAttr) continue;
+            const char* name = nameAttr.value();
+            if (name[0] == '\0') continue;
 
             sqlite3_bind_text(stmt, 1, name, -1, SQLITE_TRANSIENT);
             sqlite3_bind_text(stmt, 2, getV(game, "description"), -1, SQLITE_TRANSIENT);
