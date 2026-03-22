@@ -50,6 +50,122 @@
 
 using namespace pugi;
 
+// Pre-process a raw XML buffer to fix mismatched opening/closing tag names.
+//
+// rapidxml never validated that a closing tag's name matched its corresponding
+// opening tag — it simply popped the element stack on any </...>.  pugixml is
+// strict and returns status_end_element_mismatch for the same files.
+//
+// This function replicates rapidxml's lenient behaviour: it walks the raw bytes
+// of the buffer, tracks the stack of open element names, and rewrites every
+// closing tag whose name does not match the top of the stack so that it uses the
+// correct name instead.  The result is a buffer that pugixml will accept without
+// errors, and that is semantically equivalent to what rapidxml used to produce.
+static void fixMismatchedClosingTags(std::vector<char>& buf) {
+	std::size_t n = buf.size();
+	std::vector<std::string> stack; // stack of open element names
+
+	auto skipWs = [&](std::size_t i) {
+		while (i < n && (buf[i] == ' ' || buf[i] == '\t' || buf[i] == '\r' || buf[i] == '\n')) ++i;
+		return i;
+	};
+
+	std::size_t i = 0;
+	while (i < n) {
+		if (buf[i] != '<') { ++i; continue; }
+		++i; // past '<'
+		if (i >= n) break;
+
+		if (buf[i] == '!') {
+			// Comment (<!--) or declaration/CDATA
+			if (i + 2 < n && buf[i + 1] == '-' && buf[i + 2] == '-') {
+				i += 3; // past '<!--'
+				while (i + 2 < n && !(buf[i] == '-' && buf[i + 1] == '-' && buf[i + 2] == '>')) ++i;
+				i += 3; // past '-->'
+			}
+			else {
+				while (i < n && buf[i] != '>') ++i;
+				if (i < n) ++i;
+			}
+		}
+		else if (buf[i] == '?') {
+			// Processing instruction
+			while (i + 1 < n && !(buf[i] == '?' && buf[i + 1] == '>')) ++i;
+			i += 2;
+		}
+		else if (buf[i] == '/') {
+			// Closing tag: </tagname ...>
+			++i; // past '/'
+			i = skipWs(i);
+
+			std::size_t nameBegin = i;
+			while (i < n && buf[i] != '>' && buf[i] != ' ' && buf[i] != '\t' && buf[i] != '\r' && buf[i] != '\n') ++i;
+			std::size_t nameEnd = i;
+
+			// Advance past '>'
+			while (i < n && buf[i] != '>') ++i;
+			if (i < n) ++i;
+
+			if (stack.empty()) continue;
+
+			std::string closingName(buf.data() + nameBegin, nameEnd - nameBegin);
+			const std::string& expected = stack.back();
+
+			if (closingName != expected) {
+				// Replace the wrong closing-tag name with the expected one.
+				std::ptrdiff_t delta = static_cast<std::ptrdiff_t>(expected.size()) -
+					static_cast<std::ptrdiff_t>(closingName.size());
+				if (delta == 0) {
+					std::memcpy(buf.data() + nameBegin, expected.data(), expected.size());
+				}
+				else {
+					buf.erase(buf.begin() + nameBegin, buf.begin() + nameEnd);
+					buf.insert(buf.begin() + nameBegin, expected.begin(), expected.end());
+					n = buf.size();
+					i = static_cast<std::size_t>(static_cast<std::ptrdiff_t>(i) + delta);
+				}
+			}
+			stack.pop_back();
+		}
+		else {
+			// Opening tag: <tagname ...> or self-closing <tagname .../>
+			std::size_t nameBegin = i;
+			while (i < n && buf[i] != '>' && buf[i] != '/' &&
+				buf[i] != ' ' && buf[i] != '\t' && buf[i] != '\r' && buf[i] != '\n') ++i;
+			std::string name(buf.data() + nameBegin, i - nameBegin);
+
+			if (name.empty()) {
+				while (i < n && buf[i] != '>') ++i;
+				if (i < n) ++i;
+				continue;
+			}
+
+			// Scan to end of tag, respecting quoted attribute values, to detect />
+			bool selfClose = false;
+			bool inQuote = false;
+			char quoteChar = 0;
+			while (i < n) {
+				char c = buf[i];
+				if (inQuote) {
+					if (c == quoteChar) inQuote = false;
+				}
+				else if (c == '"' || c == '\'') {
+					inQuote = true; quoteChar = c;
+				}
+				else if (c == '/' && i + 1 < n && buf[i + 1] == '>') {
+					selfClose = true; i += 2; break;
+				}
+				else if (c == '>') {
+					++i; break;
+				}
+				++i;
+			}
+
+			if (!selfClose) stack.push_back(std::move(name));
+		}
+	}
+}
+
 static const int MENU_FIRST = 0;   // first visible item in the list
 static const int MENU_LAST = -3;   // last visible item in the list
 static const int MENU_START = -1;  // first item transitions here after it scrolls "off the menu/screen"
@@ -224,6 +340,14 @@ Page* PageBuilder::buildPage(const std::string& collectionName, bool /* defaultT
 				++i; // skip the inserted space
 			}
 		}
+
+		// Compatibility fix for layout files authored when the project used rapidxml, which
+		// never validated that a closing tag's name matched the opening tag — it simply
+		// popped the element stack on any </...>.  pugixml is strict and returns
+		// status_end_element_mismatch for such files.  fixMismatchedClosingTags() replicates
+		// rapidxml's lenient behaviour by rewriting every wrong </closingTag> to use the
+		// correct name from the element stack.
+		fixMismatchedClosingTags(buffer);
 
 		try {
 			xml_parse_result parseResult = doc->load_buffer(buffer.data(), buffer.size());
