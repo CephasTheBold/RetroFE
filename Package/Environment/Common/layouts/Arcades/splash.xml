@@ -1,7 +1,7 @@
 <layout width="1920" height="1080" font="Roboto-Bold.ttf" loadFontSize="32" fontColor="dedede">
    
 
-   <reloadableVideo src="video/Intro.mp4" height="1080" width="1920" alpha="1" volume="0">
+   <video src="video/Intro.mp4" numLoops="1" height="1080" width="1920" alpha="1" volume="0">
   		<onIdle>
 		<set duration="1">                
 		<animate type="volume" to="1" algorithm="easeinquadratic"/>  
@@ -16,7 +16,7 @@
 		<animate type="volume" to="0" algorithm="easeinquadratic"/>  
 	    	</set>
   		</onIdle> 
-  </reloadableVideo>  
+  </video>  
 
  <image src="images/Splash.png" alpha="1" x="center" y="center" xOrigin="center" yOrigin="center" height="1080" width="1920" layer="18">
 </image>
