@@ -39,8 +39,7 @@
 #include <cstring>
 
 #include <curl/curl.h>
-#include <rapidxml.hpp>
-#include <rapidxml_print.hpp>
+#include <pugixml.hpp>
 #include <sqlite3.h>
 
 namespace fs = std::filesystem;
@@ -108,15 +107,10 @@ namespace {
         std::ifstream f(path, std::ios::binary);
         if (!f) return false;
         std::vector<char> buf((std::istreambuf_iterator<char>(f)), {});
-        buf.push_back('\0');
-        try {
-            rapidxml::xml_document<> doc;
-            doc.parse<0>(buf.data());
-            return doc.first_node("menu") != nullptr;
-        }
-        catch (...) {
-            return false;
-        }
+        pugi::xml_document doc;
+        pugi::xml_parse_result result = doc.load_buffer(buf.data(), buf.size());
+        if (!result) return false;
+        return doc.child("menu") != nullptr;
     }
 
     // Download remote to 'destFile' only if newer (ETag/Last-Modified).
@@ -249,9 +243,9 @@ namespace {
         return std::strcmp(tag, "iscoredid") == 0 || std::strcmp(tag, "iscoredtype") == 0;
     }
 
-    static bool hasNonEmptyText(const rapidxml::xml_node<>* n) {
+    static bool hasNonEmptyText(pugi::xml_node n) {
         if (!n) return false;
-        const char* v = n->value();
+        const char* v = n.child_value();
         if (!v) return false;
         const char* s = v;
         while (*s && std::isspace((unsigned char)*s)) ++s;
@@ -274,10 +268,10 @@ namespace {
         bool appendNewGames = true;  // add remote-only <game>
     };
 
-    static bool isMissingOrEmpty(rapidxml::xml_node<>* n, bool treatEmptyAsMissing) {
+    static bool isMissingOrEmpty(pugi::xml_node n, bool treatEmptyAsMissing) {
         if (!n) return true;
         if (!treatEmptyAsMissing) return false;
-        const char* v = n->value();
+        const char* v = n.child_value();
         if (!v) return true;
         const char* s = v;
         while (*s && std::isspace((unsigned char)*s)) ++s;
@@ -287,59 +281,38 @@ namespace {
         return (e == s);
     }
 
-    static rapidxml::xml_node<>* findGameByName(rapidxml::xml_node<>* menu, const std::string& name) {
-        for (auto* n = menu->first_node("game"); n; n = n->next_sibling("game")) {
-            if (auto* a = n->first_attribute("name")) {
-                if (name == a->value()) return n;
+    static pugi::xml_node findGameByName(pugi::xml_node menu, const std::string& name) {
+        for (auto n = menu.child("game"); n; n = n.next_sibling("game")) {
+            if (auto a = n.attribute("name")) {
+                if (name == a.value()) return n;
             }
         }
-        return nullptr;
+        return pugi::xml_node{};
     }
 
-    static rapidxml::xml_node<>* ensureChildWithText(rapidxml::xml_document<>& doc,
-        rapidxml::xml_node<>* parent,
+    static pugi::xml_node ensureChildWithText(pugi::xml_node parent,
         const char* tag,
         const char* text) {
-        if (!parent) return nullptr;
+        if (!parent) return pugi::xml_node{};
 
         // Always remove the old node if it exists.
-        if (auto* child = parent->first_node(tag)) {
-            parent->remove_node(child);
+        if (auto child = parent.child(tag)) {
+            parent.remove_child(child);
         }
 
-        // Allocate and append a brand new node.
-        char* tagA = doc.allocate_string(tag);
-        char* valA = doc.allocate_string(text ? text : "");
-        auto* node = doc.allocate_node(rapidxml::node_type::node_element, tagA, valA);
-        parent->append_node(node);
+        // Append a brand new node with text content.
+        auto node = parent.append_child(tag);
+        node.text().set(text ? text : "");
         return node;
-    }
-
-    static rapidxml::xml_node<>* deepCloneNode(rapidxml::xml_document<>& toDoc,
-        const rapidxml::xml_node<>* src) {
-        if (!src) return nullptr;
-        char* name = toDoc.allocate_string(src->name());
-        char* val = toDoc.allocate_string(src->value());
-        auto* dst = toDoc.allocate_node(src->type(), name, val);
-
-        for (auto* a = src->first_attribute(); a; a = a->next_attribute()) {
-            char* an = toDoc.allocate_string(a->name());
-            char* av = toDoc.allocate_string(a->value());
-            dst->append_attribute(toDoc.allocate_attribute(an, av));
-        }
-        for (auto* c = src->first_node(); c; c = c->next_sibling()) {
-            dst->append_node(deepCloneNode(toDoc, c));
-        }
-        return dst;
     }
 
     // Merge remote XML file into local XML; write result to outPath.
     // Returns true if merged content differs from original local.
-    static int countGamesWithName(rapidxml::xml_node<>* menu, const std::string& name) {
+    static int countGamesWithName(pugi::xml_node menu, const std::string& name) {
         int cnt = 0;
-        for (auto* n = menu->first_node("game"); n; n = n->next_sibling("game")) {
-            if (auto* a = n->first_attribute("name")) {
-                if (name == a->value()) ++cnt;
+        for (auto n = menu.child("game"); n; n = n.next_sibling("game")) {
+            if (auto a = n.attribute("name")) {
+                if (name == a.value()) ++cnt;
             }
         }
         return cnt;
@@ -358,26 +331,22 @@ namespace {
         // load local
         std::ifstream lf(localPath, std::ios::binary);
         std::vector<char> lb((std::istreambuf_iterator<char>(lf)), {});
-        lb.push_back('\0');
 
         // load remote
         std::ifstream rf(remotePath, std::ios::binary);
         std::vector<char> rb((std::istreambuf_iterator<char>(rf)), {});
-        rb.push_back('\0');
 
-        rapidxml::xml_document<> ldoc, rdoc;
-        try { ldoc.parse<0>(lb.data()); rdoc.parse<0>(rb.data()); }
-        catch (const std::exception& e) {
-            LOG_ERROR("Metadata", std::string("merge: parse failure: ") + e.what());
-            return false;
-        }
-        catch (...) {
-            LOG_ERROR("Metadata", "merge: parse failure (unknown)");
+        pugi::xml_document ldoc, rdoc;
+        pugi::xml_parse_result lresult = ldoc.load_buffer(lb.data(), lb.size());
+        pugi::xml_parse_result rresult = rdoc.load_buffer(rb.data(), rb.size());
+        if (!lresult || !rresult) {
+            LOG_ERROR("Metadata", std::string("merge: parse failure: ") +
+                (!lresult ? lresult.description() : rresult.description()));
             return false;
         }
 
-        auto* lmenu = ldoc.first_node("menu");
-        auto* rmenu = rdoc.first_node("menu");
+        auto lmenu = ldoc.child("menu");
+        auto rmenu = rdoc.child("menu");
         if (!lmenu || !rmenu) {
             LOG_ERROR("Metadata", "merge: missing <menu> in local or remote");
             return false;
@@ -385,10 +354,10 @@ namespace {
 
         // Duplicate detection (optional but useful while debugging)
         // Walk remote names and see if local has dupes
-        for (auto* rg = rmenu->first_node("game"); rg; rg = rg->next_sibling("game")) {
-            auto* a = rg->first_attribute("name");
-            if (!a || !a->value() || !*a->value()) continue;
-            std::string gname = a->value();
+        for (auto rg = rmenu.child("game"); rg; rg = rg.next_sibling("game")) {
+            auto a = rg.attribute("name");
+            if (!a || !a.value() || !*a.value()) continue;
+            std::string gname = a.value();
             int dups = countGamesWithName(lmenu, gname);
             if (dups > 1) {
                 LOG_WARNING("Metadata", "merge: DUPLICATE local entries for [" + gname + "]: " + std::to_string(dups));
@@ -399,16 +368,16 @@ namespace {
         int visited = 0, modifiedGames = 0, addedGames = 0;
 
         // Slightly extended mergeGame to tell us if we added the whole game
-        auto mergeGameWithStats = [&](rapidxml::xml_node<>* remoteGame)->bool {
+        auto mergeGameWithStats = [&](pugi::xml_node remoteGame)->bool {
             ++visited;
-            auto* nameAttr = remoteGame->first_attribute("name");
-            if (!nameAttr || !nameAttr->value() || !*nameAttr->value()) return false;
-            const std::string gname = nameAttr->value();
+            auto nameAttr = remoteGame.attribute("name");
+            if (!nameAttr || !nameAttr.value() || !*nameAttr.value()) return false;
+            const std::string gname = nameAttr.value();
 
-            auto* localGame = findGameByName(lmenu, gname);
+            auto localGame = findGameByName(lmenu, gname);
             if (!localGame) {
                 if (!opt.appendNewGames) return false;
-                lmenu->append_node(deepCloneNode(ldoc, remoteGame));
+                lmenu.append_copy(remoteGame);
                 ++addedGames;
                 LOG_INFO("Metadata", "merge: added new game [" + gname + "]");
                 return true;
@@ -418,32 +387,32 @@ namespace {
             // Implement inline to see game-local delta:
             bool localChanged = false;
             for (const char* tag : MERGEABLE_TAGS) {
-                auto* localTag = localGame->first_node(tag);
-                auto* remoteTag = remoteGame->first_node(tag);
+                auto localTag = localGame.child(tag);
+                auto remoteTag = remoteGame.child(tag);
 
                 if (isForceOverwriteTag(tag)) {
                     if (remoteTag) {
-                        const char* rv = remoteTag->value() ? remoteTag->value() : "";
-                        const char* lv = (localTag && localTag->value()) ? localTag->value() : "";
+                        const char* rv = remoteTag.child_value();
+                        const char* lv = localTag ? localTag.child_value() : "";
                         if (!localTag || std::strcmp(lv, rv) != 0) {
                             LOG_INFO("Metadata", "merge: [" + gname + "] force '" + std::string(tag) +
-                                "' '" + (lv ? lv : "") + "' -> '" + rv + "'");
-                            ensureChildWithText(ldoc, localGame, tag, rv);
+                                "' '" + lv + "' -> '" + rv + "'");
+                            ensureChildWithText(localGame, tag, rv);
                             localChanged = true;
                         }
                     }
                     else if (localTag) {
                         LOG_INFO("Metadata", "merge: [" + gname + "] remove '" + std::string(tag) + "' (missing on remote)");
-                        localGame->remove_node(localTag);
+                        localGame.remove_child(localTag);
                         localChanged = true;
                     }
                     continue;
                 }
 
                 if (remoteTag && isMissingOrEmpty(localTag, opt.treatEmptyAsMissing) && hasNonEmptyText(remoteTag)) {
-                    ensureChildWithText(ldoc, localGame, tag, remoteTag->value());
+                    ensureChildWithText(localGame, tag, remoteTag.child_value());
                     LOG_INFO("Metadata", "merge: [" + gname + "] fill '" + std::string(tag) + "' -> '" +
-                        (remoteTag->value() ? remoteTag->value() : "") + "'");
+                        remoteTag.child_value() + "'");
                     localChanged = true;
                 }
             }
@@ -451,7 +420,7 @@ namespace {
             return localChanged;
             };
 
-        for (auto* rg = rmenu->first_node("game"); rg; rg = rg->next_sibling("game")) {
+        for (auto rg = rmenu.child("game"); rg; rg = rg.next_sibling("game")) {
             changed |= mergeGameWithStats(rg);
         }
 
@@ -461,13 +430,13 @@ namespace {
         }
 
         // --- serialize to outPath ---
-        LOG_INFO("Metadata", "merge: writing \"" + outPath.string() + "\" …");
+        LOG_INFO("Metadata", "merge: writing \"" + outPath.string() + "\"");
         std::ofstream ofs(outPath, std::ios::binary | std::ios::trunc);
         if (!ofs) {
             LOG_ERROR("Metadata", "merge: cannot open for write: " + outPath.string());
             return false;
         }
-        rapidxml::print(static_cast<std::ostream&>(ofs), ldoc); // default formatting
+        ldoc.save(ofs);
         ofs.flush();
         ofs.close();
 
@@ -477,19 +446,18 @@ namespace {
         {
             std::ifstream vr(outPath, std::ios::binary);
             std::vector<char> vb((std::istreambuf_iterator<char>(vr)), {});
-            vb.push_back('\0');
-            rapidxml::xml_document<> vdoc;
-            try { vdoc.parse<0>(vb.data()); }
-            catch (...) {
+            pugi::xml_document vdoc;
+            pugi::xml_parse_result vresult = vdoc.load_buffer(vb.data(), vb.size());
+            if (!vresult) {
                 LOG_WARNING("Metadata", "merge: verification parse failed for " + outPath.string());
             }
 
             // (Optional) spot-check: look up some known forced tag from this run if you cache one.
             // For now, just log a summary:
-            auto* vmenu = vdoc.first_node("menu");
+            auto vmenu = vdoc.child("menu");
             int vcount = 0;
             if (vmenu) {
-                for (auto* n = vmenu->first_node("game"); n; n = n->next_sibling("game")) ++vcount;
+                for (auto n = vmenu.child("game"); n; n = n.next_sibling("game")) ++vcount;
             }
             LOG_INFO("Metadata", "merge: wrote \"" + outPath.string() + "\" (games visited=" +
                 std::to_string(visited) + ", changed=" + std::to_string(modifiedGames) +
@@ -766,12 +734,19 @@ bool MetadataDatabase::importHyperlist(const std::string& hyperlistFile, const s
     }
 
     std::vector<char> buffer((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-    buffer.push_back('\0');
 
-    rapidxml::xml_document<> doc;
+    pugi::xml_document doc;
+    pugi::xml_parse_result result = doc.load_buffer(buffer.data(), buffer.size());
+    if (!result) {
+        auto line = static_cast<long>(std::count(buffer.begin(), buffer.begin() + result.offset, '\n') + 1);
+        std::stringstream ss;
+        ss << "Could not parse hyperlist file. [Line: " << line << "] Reason: " << result.description();
+        LOG_ERROR("Metadata", ss.str());
+        return false;
+    }
+
     try {
-        doc.parse<0>(buffer.data());
-        rapidxml::xml_node<> const* root = doc.first_node("menu");
+        pugi::xml_node root = doc.child("menu");
         if (!root) {
             LOG_ERROR("Metadata", "Does not appear to be a HyperList file (missing <menu> tag)");
             return false;
@@ -797,13 +772,13 @@ bool MetadataDatabase::importHyperlist(const std::string& hyperlistFile, const s
             return false;
         }
 
-        auto getV = [](rapidxml::xml_node<> const* parent, const char* tag) -> const char* {
-            auto* n = parent->first_node(tag);
-            return n ? n->value() : "";
+        auto getV = [](pugi::xml_node parent, const char* tag) -> const char* {
+            auto n = parent.child(tag);
+            return n ? n.child_value() : "";
             };
 
-        for (auto const* game = root->first_node("game"); game; game = game->next_sibling("game")) {
-            const char* name = (game->first_attribute("name") ? game->first_attribute("name")->value() : "");
+        for (auto game = root.child("game"); game; game = game.next_sibling("game")) {
+            const char* name = game.attribute("name").value();
             if (!name || name[0] == '\0') continue;
 
             sqlite3_bind_text(stmt, 1, name, -1, SQLITE_TRANSIENT);
@@ -836,12 +811,6 @@ bool MetadataDatabase::importHyperlist(const std::string& hyperlistFile, const s
         sqlite3_exec(handle, "COMMIT;", nullptr, nullptr, nullptr);
         config_.setProperty("status", "Saved data from \"" + hyperlistFile + "\"");
         return true;
-    }
-    catch (rapidxml::parse_error& e) {
-        auto line = static_cast<long>(std::count(buffer.begin(), buffer.begin() + (e.where<char>() - &buffer.front()), '\n') + 1);
-        std::stringstream ss;
-        ss << "Could not parse hyperlist file. [Line: " << line << "] Reason: " << e.what();
-        LOG_ERROR("Metadata", ss.str());
     }
     catch (std::exception& e) {
         LOG_ERROR("Metadata", std::string("Could not parse hyperlist file. Reason: ") + e.what());

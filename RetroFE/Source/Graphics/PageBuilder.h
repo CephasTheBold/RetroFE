@@ -25,7 +25,7 @@
 #else
 #error "Cannot find SDL_mixer header"
 #endif
-#include <rapidxml.hpp>
+#include <pugixml.hpp>
 #include <vector>
 
 static const int MENU_INDEX_HIGH = 16;
@@ -61,21 +61,21 @@ private:
     FontCache *fontCache_;
     bool isMenu_;
 
-    FontManager *addFont(const rapidxml::xml_node<> *component, const rapidxml::xml_node<> *defaults, int monitor);
-    void loadReloadableImages(const rapidxml::xml_node<> *layout, const std::string& tagName, Page *page);
-    float getVerticalAlignment(const rapidxml::xml_attribute<> *attribute, float valueIfNull) const;
-    float getHorizontalAlignment(const rapidxml::xml_attribute<> *attribute, float valueIfNull) const;
-    void buildViewInfo(rapidxml::xml_node<> *componentXml, ViewInfo &info, rapidxml::xml_node<> *defaultXml = nullptr);
-    bool buildComponents(rapidxml::xml_node<> *layout, Page *page, const std::string&);
-    void loadTweens(Component *c, rapidxml::xml_node<> *componentXml);
-    std::shared_ptr<AnimationEvents> createTweenInstance(rapidxml::xml_node<>* componentXml);
-    void buildTweenSet(AnimationEvents *tweens, rapidxml::xml_node<> *componentXml, const std::string& tagName, const std::string& tweenName);
-    ScrollingList * buildMenu(rapidxml::xml_node<> *menuXml, Page &p, int monitor);
-    void buildCustomMenu(ScrollingList *menu, const rapidxml::xml_node<> *menuXml, rapidxml::xml_node<> *itemDefaults);
-    void buildVerticalMenu(ScrollingList *menu, const rapidxml::xml_node<> *menuXml, rapidxml::xml_node<> *itemDefaults);
+    FontManager *addFont(const pugi::xml_node component, const pugi::xml_node defaults, int monitor);
+    void loadReloadableImages(const pugi::xml_node layout, const std::string& tagName, Page *page);
+    float getVerticalAlignment(const pugi::xml_attribute attribute, float valueIfNull) const;
+    float getHorizontalAlignment(const pugi::xml_attribute attribute, float valueIfNull) const;
+    void buildViewInfo(pugi::xml_node componentXml, ViewInfo &info, pugi::xml_node defaultXml = pugi::xml_node{});
+    bool buildComponents(pugi::xml_node layout, Page *page, const std::string&);
+    void loadTweens(Component *c, pugi::xml_node componentXml);
+    std::shared_ptr<AnimationEvents> createTweenInstance(pugi::xml_node componentXml);
+    void buildTweenSet(AnimationEvents *tweens, pugi::xml_node componentXml, const std::string& tagName, const std::string& tweenName);
+    ScrollingList * buildMenu(pugi::xml_node menuXml, Page &p, int monitor);
+    void buildCustomMenu(ScrollingList *menu, const pugi::xml_node menuXml, pugi::xml_node itemDefaults);
+    void buildVerticalMenu(ScrollingList *menu, const pugi::xml_node menuXml, pugi::xml_node itemDefaults);
     int parseMenuPosition(const std::string& strIndex);
-    rapidxml::xml_attribute<> *findAttribute(const rapidxml::xml_node<> *componentXml, const std::string& attribute, const rapidxml::xml_node<> *defaultXml);
-    void getTweenSet(const rapidxml::xml_node<> *node, Animation *animation);
-    void getAnimationEvents(const rapidxml::xml_node<> *node, TweenSet &tweens);
-    ViewInfo * createMenuItemInfo(rapidxml::xml_node<> *component, rapidxml::xml_node<> *defaults, const ViewInfo& info);
+    pugi::xml_attribute findAttribute(const pugi::xml_node componentXml, const std::string& attribute, const pugi::xml_node defaultXml);
+    void getTweenSet(const pugi::xml_node node, Animation *animation);
+    void getAnimationEvents(const pugi::xml_node node, TweenSet &tweens);
+    ViewInfo * createMenuItemInfo(pugi::xml_node component, pugi::xml_node defaults, const ViewInfo& info);
 };

@@ -29,7 +29,7 @@ set(SQLITE3_ROOT "${RETROFE_THIRD_PARTY_DIR}/sqlite3")
 set(QRCODEGEN_ROOT "${RETROFE_THIRD_PARTY_DIR}/qrcodegen")
 set(CURL_ROOT "${RETROFE_THIRD_PARTY_DIR}/curl_x64-windows")
 set(JSON_ROOT "${RETROFE_THIRD_PARTY_DIR}/json/single_include")
-set(RAPIDXML_ROOT "${RETROFE_THIRD_PARTY_DIR}/rapidxml-1.17")
+set(PUGIXML_ROOT "${RETROFE_THIRD_PARTY_DIR}/pugixml-1.14")
 set(KISSFFT_ROOT "${RETROFE_THIRD_PARTY_DIR}/kissfft-131.1.0")
 
 if(WIN32)
@@ -175,7 +175,7 @@ set(RETROFE_INCLUDE_DIRS
     "${SDL2_TTF_INCLUDE_DIRS}"
     "${ZLIB_INCLUDE_DIRS}"
     "${WEBP_INCLUDE_DIRS}"
-    "${QRCODEGEN_ROOT}"
+    "${PUGIXML_ROOT}"
     "${JSON_ROOT}"
     "${CURL_ROOT}/include"
     "${SQLITE3_ROOT}"
@@ -369,6 +369,7 @@ set(RETROFE_SOURCES
 	"${RETROFE_DIR}/Source/Main.cpp"
 	"${RETROFE_DIR}/Source/RetroFE.cpp"
 	"${RETROFE_DIR}/Source/SDL.cpp"
+    "${PUGIXML_ROOT}/pugixml.cpp"
     "${QRCODEGEN_ROOT}/qrcodegen.cpp"
     "${SQLITE3_ROOT}/sqlite3.c"
     "${KISSFFT_ROOT}/kiss_fft.c"
@@ -379,7 +380,7 @@ set(EXECUTABLE_OUTPUT_PATH "${RETROFE_DIR}/Build" CACHE PATH "Build directory" F
 set(LIBRARY_OUTPUT_PATH "${RETROFE_DIR}/Build" CACHE PATH "Build directory" FORCE)
 
 include_directories(${RETROFE_INCLUDE_DIRS})
-include_directories(SYSTEM "${RAPIDXML_ROOT}")
+include_directories(SYSTEM "${PUGIXML_ROOT}")
 set_source_files_properties("${SQLITE3_ROOT}/sqlite3.c" PROPERTIES COMPILE_FLAGS "-w")
 add_executable(retrofe  ${RETROFE_SOURCES} ${RETROFE_HEADERS})
 add_dependencies(retrofe GenerateVersioningHeader)

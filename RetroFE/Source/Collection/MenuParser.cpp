@@ -23,7 +23,7 @@
 #include "../Database/Configuration.h"
 #include "../Database/DB.h"
 #include <algorithm>
-#include <rapidxml.hpp>
+#include <pugixml.hpp>
 #include <fstream>
 #include <sstream>
 #include <filesystem>
@@ -140,8 +140,7 @@ bool MenuParser::buildLegacyXmlMenu(CollectionInfo *collection, bool sort)
     bool retVal = false;
     //todo: magic string
     std::string menuFilename = Utils::combinePath(Configuration::absolutePath, "collections", collection->name, "menu.xml");
-    rapidxml::xml_document<> doc;
-    rapidxml::xml_node<> const * rootNode;
+    pugi::xml_document doc;
     std::vector<Item *> menuItems;
 
     try {
@@ -153,14 +152,18 @@ bool MenuParser::buildLegacyXmlMenu(CollectionInfo *collection, bool sort)
             LOG_INFO("Menu", "Using legacy menu.xml file. Consider using the new menu.txt format");
             std::vector<char> buffer((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
 
-            buffer.push_back('\0');
+            pugi::xml_parse_result result = doc.load_buffer(buffer.data(), buffer.size());
+            if (!result) {
+                std::stringstream ss;
+                ss << "Could not parse menu file \"" << menuFilename << "\": " << result.description();
+                LOG_ERROR("Menu", ss.str());
+                return false;
+            }
 
-            doc.parse<0>(&buffer[0]);
+            pugi::xml_node rootNode = doc.child("menu");
 
-            rootNode = doc.first_node("menu");
-
-            for (rapidxml::xml_node<> const * itemNode = rootNode->first_node("item"); itemNode; itemNode = itemNode->next_sibling()) {
-                rapidxml::xml_attribute<> const *collectionAttribute = itemNode->first_attribute("collection");
+            for (pugi::xml_node itemNode = rootNode.child("item"); itemNode; itemNode = itemNode.next_sibling()) {
+                pugi::xml_attribute collectionAttribute = itemNode.attribute("collection");
 
                 if(!collectionAttribute) {
                     retVal = false;
@@ -168,11 +171,11 @@ bool MenuParser::buildLegacyXmlMenu(CollectionInfo *collection, bool sort)
                     break;
                 }
                 //todo, check for empty string
-                std::string title = collectionAttribute->value();
+                std::string title = collectionAttribute.value();
                 auto *item = new Item();
                 item->title = title;
                 item->fullTitle = title;
-                item->name = collectionAttribute->value();
+                item->name = collectionAttribute.value();
                 item->leaf = false;
                 item->collectionInfo = collection;
 

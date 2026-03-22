@@ -13,8 +13,7 @@
 #include "SDL_image.h"
 #include "minizip/unzip.h"
 #include "qrcodegen.hpp"
-#include "rapidxml.hpp"
-#include "rapidxml_utils.hpp"
+#include "pugixml.hpp"
 #include <sstream>
 #include <iomanip>
 #include <iostream>
@@ -670,9 +669,9 @@ void HiScores::loadFromZip(const std::string& zipPath) {
 				// Deobfuscate content before parsing
 				std::string deobfuscatedContent = Utils::removeNullCharacters(Utils::deobfuscate(std::string(buffer.begin(), buffer.end())));
 
-				// Load deobfuscated data into rapidxml
+				// Load deobfuscated data into pugixml
 				std::vector<char> xmlBuffer(deobfuscatedContent.begin(), deobfuscatedContent.end());
-				xmlBuffer.push_back('\0');  // Null-terminate for rapidxml
+				xmlBuffer.push_back('\0');  // Null-terminate the buffer
 
 				std::string gameName = std::filesystem::path(fileName).stem().string();
 				loadFromFile(gameName, fileName, xmlBuffer);  // Parse and load XML
@@ -686,20 +685,14 @@ void HiScores::loadFromZip(const std::string& zipPath) {
 // Parse a single XML file for high score data with dynamic columns
 void HiScores::loadFromFile(const std::string& gameName, const std::string& filePath, std::vector<char>& buffer) {
 
-	// Ensure the buffer is null-terminated
-	buffer.push_back('\0');
-
-	rapidxml::xml_document<> doc;
-
-	try {
-		doc.parse<0>(buffer.data());
-	}
-	catch (const rapidxml::parse_error& e) {
-		LOG_ERROR("HiScores", "Parse error in file " + filePath + ": " + e.what());
+	pugi::xml_document doc;
+	pugi::xml_parse_result result = doc.load_buffer(buffer.data(), buffer.size());
+	if (!result) {
+		LOG_ERROR("HiScores", "Parse error in file " + filePath + ": " + result.description());
 		return;
 	}
 
-	rapidxml::xml_node<> const* rootNode = doc.first_node("hi2txt");
+	pugi::xml_node rootNode = doc.child("hi2txt");
 	if (!rootNode) {
 		LOG_ERROR("HiScores", "Root node <hi2txt> not found in file " + filePath);
 		return;
@@ -707,24 +700,24 @@ void HiScores::loadFromFile(const std::string& gameName, const std::string& file
 
 	HighScoreData highScoreData;
 
-	for (rapidxml::xml_node<> const* tableNode = rootNode->first_node("table"); tableNode; tableNode = tableNode->next_sibling("table")) {
+	for (pugi::xml_node tableNode = rootNode.child("table"); tableNode; tableNode = tableNode.next_sibling("table")) {
 		HighScoreTable highScoreTable;
 
 		// Assign ID if present
-		if (tableNode->first_attribute("id")) {
-			highScoreTable.id = tableNode->first_attribute("id")->value();
+		if (tableNode.attribute("id")) {
+			highScoreTable.id = tableNode.attribute("id").value();
 		}
 
 		// Parse columns
-		for (rapidxml::xml_node<> const* colNode = tableNode->first_node("col"); colNode; colNode = colNode->next_sibling("col")) {
-			highScoreTable.columns.push_back(Utils::trimEnds(colNode->value()));
+		for (pugi::xml_node colNode = tableNode.child("col"); colNode; colNode = colNode.next_sibling("col")) {
+			highScoreTable.columns.push_back(Utils::trimEnds(colNode.child_value()));
 		}
 
 		// Parse rows
-		for (rapidxml::xml_node<> const* rowNode = tableNode->first_node("row"); rowNode; rowNode = rowNode->next_sibling("row")) {
+		for (pugi::xml_node rowNode = tableNode.child("row"); rowNode; rowNode = rowNode.next_sibling("row")) {
 			std::vector<std::string> rowData;
-			for (rapidxml::xml_node<> const* cellNode = rowNode->first_node("cell"); cellNode; cellNode = cellNode->next_sibling("cell")) {
-				rowData.push_back(Utils::trimEnds(cellNode->value()));
+			for (pugi::xml_node cellNode = rowNode.child("cell"); cellNode; cellNode = cellNode.next_sibling("cell")) {
+				rowData.push_back(Utils::trimEnds(cellNode.child_value()));
 			}
 			highScoreTable.rows.push_back(rowData);
 		}
@@ -869,7 +862,7 @@ bool HiScores::runHi2Txt(const std::string& gameName) {
 	}
 	// Parse the XML content to update the cache
 	std::vector<char> xmlBuffer(xmlContent.begin(), xmlContent.end());
-	xmlBuffer.push_back('\0');  // Null-terminate for rapidxml
+	xmlBuffer.push_back('\0');  // Null-terminate the buffer
 	loadFromFile(gameName, gameName + ".xml", xmlBuffer);
 
 	// Obfuscate the XML content before saving
@@ -1443,7 +1436,7 @@ static inline std::string normName_(std::string s) {
 
 
 
-// strict integer parse (±digits only)
+// strict integer parse (ï¿½digits only)
 static inline bool parseLongLongStrict_(const std::string& s, long long& out) {
 	if (s.empty()) return false;
 	char* end = nullptr;
@@ -1849,7 +1842,7 @@ static inline std::string monthName_(int m) {
 	return (m >= 1 && m <= 12) ? M[m - 1] : std::string();
 }
 static inline std::string prettyDate_(const std::string& ymd_hms) {
-	// Expect "YYYY-MM-DD HH:MM:SS" – be forgiving if not exact
+	// Expect "YYYY-MM-DD HH:MM:SS" ï¿½ be forgiving if not exact
 	if (ymd_hms.size() < 10) return ymd_hms;
 	int y = 0, m = 0, d = 0;
 	try {
