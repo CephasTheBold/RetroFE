@@ -162,7 +162,7 @@ bool MenuParser::buildLegacyXmlMenu(CollectionInfo *collection, bool sort)
 
             pugi::xml_node rootNode = doc.child("menu");
 
-            for (pugi::xml_node itemNode = rootNode.child("item"); itemNode; itemNode = itemNode.next_sibling()) {
+            for (pugi::xml_node itemNode = rootNode.child("item"); itemNode; itemNode = itemNode.next_sibling("item")) {
                 pugi::xml_attribute collectionAttribute = itemNode.attribute("collection");
 
                 if(!collectionAttribute) {

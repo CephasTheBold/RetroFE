@@ -324,6 +324,17 @@ Page* PageBuilder::buildPage(const std::string& collectionName, bool /* defaultT
 				}
 			}
 
+			// Guard: if no page has been created yet (e.g. the layout file omits width/height),
+			// there is nothing to apply subsequent attributes or components to.  This preserves
+			// the same return-value contract as the original rapidxml implementation: the caller
+			// always receives the Page* created by the first valid layout file, or nullptr if no
+			// file could establish dimensions.  Without this guard the dereferences below would
+			// be undefined behaviour (null pointer crash) when page is still null.
+			if (!page) {
+				LOG_WARNING("Layout", "Layout \"" + layoutFile + "\" is missing required width and height attributes; please add them to the <layout> tag. Skipping attribute and component processing for this file.");
+				continue;
+			}
+
 			// Process minShowTime
 			if (minShowTimeXml) {
 				page->setMinShowTime(Utils::convertFloat(minShowTimeXml.value()));
@@ -376,7 +387,11 @@ Page* PageBuilder::buildPage(const std::string& collectionName, bool /* defaultT
 				}
 			}
 
-			// Build components
+			// Build components.
+			// Note: buildComponents() always returns true (every failure path within it logs a
+			// warning/error and moves on rather than propagating a false return).  The failure
+			// branch below is therefore currently unreachable, but is retained as a defensive
+			// guard in case that contract changes in the future.
 			if (!buildComponents(root, page, collectionName)) {
 				LOG_ERROR("Layout", "Failed to build components for layout: " + layoutFile);
 				delete page;
