@@ -11,12 +11,12 @@
 <onEnter><set duration="0.001"><animate type="alpha" to="1" playlist="street fighter and capcom fighters,street fighter"/></set></onEnter>
 <onIdle > 
 <set duration="0.6">
-                <animate type="x"to ="1235" algorithm="easeinquadratic"/>
+                <animate type="x" to ="1235" algorithm="easeinquadratic"/>
                 <animate type="y" to="20" algorithm="easeinquadratic"/>
                 <animate type="angle" to="-15" algorithm="easeinquadratic"/>
 </set>            
 <set duration="1.1">
-                <animate type="x"to ="1230" algorithm="easeinquadratic"/>
+                <animate type="x" to ="1230" algorithm="easeinquadratic"/>
                 <animate type="y" to="0" algorithm="easeinquadratic"/>
                 <animate type="angle" to="-14" algorithm="easeinquadratic"/>
 </set> 
@@ -27,12 +27,12 @@
 <onEnter><set duration="0.001"><animate type="alpha" to="1" playlist="street fighter and capcom fighters,street fighter"/></set></onEnter>
 <onIdle > 
 <set duration="0.7">
-                <animate type="x"to ="1232" algorithm="easeinquadratic"/>
+                <animate type="x" to ="1232" algorithm="easeinquadratic"/>
                 <animate type="y" to="15" algorithm="easeinquadratic"/>
                 <animate type="angle" to="-16" algorithm="easeinquadratic"/>
 </set>            
 <set duration="1.0">
-                <animate type="x"to ="1228" algorithm="easeinquadratic"/>
+                <animate type="x" to ="1228" algorithm="easeinquadratic"/>
                 <animate type="y" to="-5" algorithm="easeinquadratic"/>
                 <animate type="angle" to="-14" algorithm="easeinquadratic"/>
 </set>        
@@ -43,12 +43,12 @@
 <onEnter><set duration="0.001"><animate type="alpha" to="1" playlist="street fighter and capcom fighters,street fighter"/></set></onEnter>
 <onIdle > 
 <set duration="0.7">
-                <animate type="x"to ="1210" algorithm="easeinquadratic"/>
+                <animate type="x" to ="1210" algorithm="easeinquadratic"/>
                 <animate type="y" to="40" algorithm="easeinquadratic"/>
                 <animate type="angle" to="-16" algorithm="easeinquadratic"/>
 </set>            
 <set duration="1.0">
-                <animate type="x"to ="1205" algorithm="easeinquadratic"/>
+                <animate type="x" to ="1205" algorithm="easeinquadratic"/>
                 <animate type="y" to="22" algorithm="easeinquadratic"/>
                 <animate type="angle" to="-15" algorithm="easeinquadratic"/>
 </set>        
@@ -173,7 +173,7 @@
 <onPlaylistExit><set duration="0.01"><animate type="volume" to="0"/></set></onPlaylistExit>
 <onMenuJumpEnter><set duration="0.01"><animate type="width" to="2178"/><animate type="height" to="1188"/><animate type="volume" to="0"/></set></onMenuJumpEnter>
 <onMenuJumpExit><set duration="0.01"><animate type="volume" to="0"/></set></onMenuJumpExit>
-<onMenuScroll><set duration="0.2"><animate type="volume" to="0"/></set></onMenuJumpScroll>
+<onMenuScroll><set duration="0.2"><animate type="volume" to="0"/></set></onMenuScroll>
 <onMenuIdle><set duration="0.3"><animate type="width" to ="1980"/><animate type="height" to ="1080"/><animate type="volume" to="0.5"/></set></onMenuIdle >
 		<onExit>        
 		<set duration="1">                
@@ -198,7 +198,7 @@
 <onMenuIdle >    
 <set duration="0.3">
                 <animate type="width" to ="500" algorithm="easeinquadratic"/>
-		<animate type="yOffset"to="0"/>
+		<animate type="yOffset" to="0"/>
 </set>          
 </onMenuIdle > 
   <onGameExit><set duration="0.5"><animate type="alpha" to ="1"/><animate type="width" from="580" to="500"/><animate type="yOffset" from="-80" to="0"/></set></onGameExit>
@@ -305,7 +305,7 @@
 <reloadableText type="collectionSize" x="1865" y="1040" xOrigin="left" yOrigin="top" fontSize="30" alpha="0.5" layer="17">
 <onGameEnter><set duration="1"><animate type="alpha" to="0"/></set></onGameEnter>
 <onGameExit><set duration="0.01"><animate type="alpha" to="0.5"/></set></onGameExit>
-</text>
+</reloadableText>
 
 <text value="|" x="1857" y="1040" xOrigin="left" yOrigin="top" fontSize="30" alpha="0.5" layer="17">
 <onGameEnter><set duration="1"><animate type="alpha" to="0"/></set></onGameEnter>
@@ -315,7 +315,7 @@
 <reloadableText type="collectionIndex" x="1855" y="1040" xOrigin="right" yOrigin="top" fontSize="30" alpha="0.5" menuScrollReload="true" layer="17">
 <onGameEnter><set duration="1"><animate type="alpha" to="0"/></set></onGameEnter>
 <onGameExit><set duration="0.01"><animate type="alpha" to="0.5"/></set></onGameExit>
-</text>
+</reloadableText>
 
 <!-----------------Overlays----------------->
 
@@ -357,7 +357,7 @@
                 <animate type="maxHeight" to="249" algorithm="easeinquadratic"/>
       </set>
     </onGameExit >
-</image>
+</reloadableImage>
 
 <image src="images/ShutDown.png" alpha="1" x="0" y="0" width="1920" height="2320" layer="19">
   <onExit><set duration="1"><animate type="y" to="0"/></set></onExit>

@@ -209,6 +209,22 @@ Page* PageBuilder::buildPage(const std::string& collectionName, bool /* defaultT
 		std::vector<char> buffer((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
 		file.close();
 
+		// Compatibility fix for layout files authored when the project used rapidxml, which
+		// silently accepted a missing space between a closing attribute-value quote and the
+		// start of the next attribute name (e.g. type="xoffset"to="0").  pugixml requires
+		// strict XML, so we insert the missing space here before parsing.
+		// Only a closing quote (not preceded by '=') immediately followed by an XML
+		// name-start character can be an attribute-separator boundary.
+		auto isXmlNameStartChar = [](char c) {
+			return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || c == ':';
+		};
+		for (std::size_t i = 0; i + 1 < buffer.size(); ++i) {
+			if (buffer[i] == '"' && i > 0 && buffer[i - 1] != '=' && isXmlNameStartChar(buffer[i + 1])) {
+				buffer.insert(buffer.begin() + i + 1, ' ');
+				++i; // skip the inserted space
+			}
+		}
+
 		try {
 			xml_parse_result parseResult = doc->load_buffer(buffer.data(), buffer.size());
 			if (!parseResult) {

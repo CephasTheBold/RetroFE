@@ -11,7 +11,7 @@
 <onPlaylistExit><set duration="0.01"></set></onPlaylistExit>
 <onMenuJumpEnter><set duration="0.01"><animate type="width" to ="2016"/><animate type="height" to ="1134"/></set></onMenuJumpEnter>
 <onMenuJumpExit><set duration="0.01"></set></onMenuJumpExit>
-<onMenuScroll><set duration="0.2"></set></onMenuJumpScroll>
+<onMenuScroll><set duration="0.2"></set></onMenuScroll>
 <onMenuIdle><set duration="0.3"><animate type="width" to ="1920"/><animate type="height" to ="1080"/></set></onMenuIdle >
 	</item>
 	<item monitor="1" xOffset="145" alpha="0" layer="1">

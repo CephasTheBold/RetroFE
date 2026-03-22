@@ -27,12 +27,12 @@
 <reloadableImage type="playlist7" mode="commonlayout" alpha="0" x="center" y="center" yOrigin="center" xOrigin="center" height="210" width="1610" layer="18">
 <onIdle > 
 <set duration="0.7">
-                <animate type="xoffset"to ="0" algorithm="easeinquadratic"/>
-                <animate type="yoffset"to ="0" algorithm="easeinquadratic"/>
+                <animate type="xoffset" to ="0" algorithm="easeinquadratic"/>
+                <animate type="yoffset" to ="0" algorithm="easeinquadratic"/>
 </set>            
 <set duration="0.30">
-                <animate type="xoffset"to ="-50" algorithm="easeinquadratic"/>
-                <animate type="yoffset"to ="0" algorithm="easeinquadratic"/>
+                <animate type="xoffset" to ="-50" algorithm="easeinquadratic"/>
+                <animate type="yoffset" to ="0" algorithm="easeinquadratic"/>
                 <animate type="alpha" to="0" algorithm="easeinquadratic"/>
 </set>        
 </onIdle >  
