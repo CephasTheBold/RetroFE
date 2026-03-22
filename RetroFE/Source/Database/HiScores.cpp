@@ -627,12 +627,19 @@ void HiScores::loadHighScores(const std::string& zipPath, const std::string& ove
 				std::string gameName = file.path().stem().string();
 				std::ifstream fileStream(file.path(), std::ios::binary);
 				std::vector<char> buffer((std::istreambuf_iterator<char>(fileStream)), std::istreambuf_iterator<char>());
+				// Extra byte appended so the XOR deobfuscation produces a deterministic trailing
+				// byte rather than leaving the key-cycling position undefined.
 				buffer.push_back('\0');
 
 				// Deobfuscate the buffer if necessary
 				std::string deobfuscatedContent = Utils::deobfuscate(std::string(buffer.begin(), buffer.end()));
 				std::vector<char> deobfuscatedBuffer(deobfuscatedContent.begin(), deobfuscatedContent.end());
-				deobfuscatedBuffer.push_back('\0');  // Null-terminate for parsing
+				// Files created by runHi2Txt contain an embedded '\0' (from xmlContent.push_back('\0'))
+				// that, after deobfuscation, acts as the end-of-input sentinel for pugixml's parser
+				// (pugixml stops at the first '\0' it encounters in the data, even when using
+				// size-based load_buffer).  This extra trailing '\0' is a safety boundary that
+				// handles any file that was not produced by runHi2Txt and therefore has no embedded null.
+				deobfuscatedBuffer.push_back('\0');
 
 				loadFromFile(gameName, file.path().string(), deobfuscatedBuffer);
 			}
@@ -669,9 +676,13 @@ void HiScores::loadFromZip(const std::string& zipPath) {
 				// Deobfuscate content before parsing
 				std::string deobfuscatedContent = Utils::removeNullCharacters(Utils::deobfuscate(std::string(buffer.begin(), buffer.end())));
 
-				// Load deobfuscated data into pugixml
+				// Load deobfuscated data into pugixml.
+				// pugixml::load_buffer uses the supplied size but also treats the first '\0'
+				// in the data as end-of-input; the trailing '\0' here ensures the parser
+				// terminates cleanly at the intended boundary even if there is any
+				// unexpected content after the closing XML tag.
 				std::vector<char> xmlBuffer(deobfuscatedContent.begin(), deobfuscatedContent.end());
-				xmlBuffer.push_back('\0');  // Null-terminate the buffer
+				xmlBuffer.push_back('\0');
 
 				std::string gameName = std::filesystem::path(fileName).stem().string();
 				loadFromFile(gameName, fileName, xmlBuffer);  // Parse and load XML
@@ -848,21 +859,26 @@ bool HiScores::runHi2Txt(const std::string& gameName) {
 	}
 #endif
 
-	// Null-terminate and process the buffer
+	// Strip any null characters from the hi2txt output, then re-append a single '\0'.
+	// This '\0' is intentionally preserved in the obfuscated file: when loadHighScores
+	// later deobfuscates the file, the '\0' reappears and acts as the end-of-input
+	// sentinel for pugixml's parser (pugixml stops at the first '\0' in the data).
 	buffer.push_back('\0');
 	std::string xmlContent(buffer.begin(), buffer.end());
 
 	xmlContent = Utils::removeNullCharacters(xmlContent);
-	xmlContent.push_back('\0');  // Ensure null-termination
+	xmlContent.push_back('\0');  // Terminator preserved in the obfuscated file (see above)
 
 	// Check if xmlContent starts with <hi2txt>
 	if (xmlContent.find("<hi2txt>") != 0) {
 		LOG_WARNING("HiScores", "Invalid XML content received from hi2txt for game " + gameName);
 		return false;
 	}
-	// Parse the XML content to update the cache
+	// Parse the XML content to update the cache.
+	// The '\0' already in xmlContent is the parse sentinel; the extra one below is a
+	// belt-and-braces guard in case of any unexpected trailing bytes.
 	std::vector<char> xmlBuffer(xmlContent.begin(), xmlContent.end());
-	xmlBuffer.push_back('\0');  // Null-terminate the buffer
+	xmlBuffer.push_back('\0');
 	loadFromFile(gameName, gameName + ".xml", xmlBuffer);
 
 	// Obfuscate the XML content before saving

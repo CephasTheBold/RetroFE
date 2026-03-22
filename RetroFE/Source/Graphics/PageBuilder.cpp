@@ -121,6 +121,13 @@ Page* PageBuilder::buildPage(const std::string& collectionName, bool /* defaultT
 		}
 	}
 
+	// Each iteration parses one XML file into a short-lived xml_document.
+	// pugixml::load_buffer copies the file data into the document's own memory,
+	// so the read buffer may be released immediately after the call.
+	// The xml_document (and all xml_node handles derived from it) is destroyed at
+	// the end of each iteration — after buildComponents() returns — which is safe
+	// because buildComponents() copies all string values it needs into std::string
+	// members of the long-lived Page and Component objects.
 	for (unsigned int layoutIndex = 0; layoutIndex < layouts.size(); ++layoutIndex) {
 		const std::string& currentLayoutName = layouts[layoutIndex];
 		auto doc = std::make_unique<xml_document>();
@@ -323,7 +330,9 @@ Page* PageBuilder::buildPage(const std::string& collectionName, bool /* defaultT
 			}
 
 			// Process controls
-			if (controls && controls.value() && controls.value()[0] != '\0') {
+			// Note: pugixml attribute.value() always returns a valid C-string (never nullptr),
+			// so only the existence check and the non-empty string check are needed.
+			if (controls && controls.value()[0] != '\0') {
 				std::string controlLayout = controls.value();
 				LOG_INFO("Layout", "Layout set custom control type " + controlLayout);
 				page->setControlsType(controlLayout);

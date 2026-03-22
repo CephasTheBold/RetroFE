@@ -245,8 +245,7 @@ namespace {
 
     static bool hasNonEmptyText(pugi::xml_node n) {
         if (!n) return false;
-        const char* v = n.child_value();
-        if (!v) return false;
+        const char* v = n.child_value(); // always returns "" (never nullptr) in pugixml
         const char* s = v;
         while (*s && std::isspace((unsigned char)*s)) ++s;
         if (*s == '\0') return false;
@@ -271,8 +270,7 @@ namespace {
     static bool isMissingOrEmpty(pugi::xml_node n, bool treatEmptyAsMissing) {
         if (!n) return true;
         if (!treatEmptyAsMissing) return false;
-        const char* v = n.child_value();
-        if (!v) return true;
+        const char* v = n.child_value(); // always returns "" (never nullptr) in pugixml
         const char* s = v;
         while (*s && std::isspace((unsigned char)*s)) ++s;
         if (*s == '\0') return true;
@@ -436,7 +434,9 @@ namespace {
             LOG_ERROR("Metadata", "merge: cannot open for write: " + outPath.string());
             return false;
         }
-        ldoc.save(ofs);
+        // Use format_no_declaration to match the original rapidxml::print() output,
+        // which did not prepend an <?xml?> declaration.
+        ldoc.save(ofs, "\t", pugi::format_indent | pugi::format_no_declaration);
         ofs.flush();
         ofs.close();
 
