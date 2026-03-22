@@ -179,6 +179,7 @@ set(RETROFE_INCLUDE_DIRS
     "${JSON_ROOT}"
     "${CURL_ROOT}/include"
     "${SQLITE3_ROOT}"
+    "${QRCODEGEN_ROOT}"
     "${PACDRIVE_ROOT}"
     "${KISSFFT_ROOT}"
     "/opt/homebrew/lib/glib-2.0/include"
