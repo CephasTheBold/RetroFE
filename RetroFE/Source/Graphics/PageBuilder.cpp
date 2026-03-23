@@ -1167,15 +1167,15 @@ FontManager* PageBuilder::addFont(const xml_node component, const xml_node defau
 	return fontCache_->getFont(fontName, fontSize, fontColor, fontGradient, fontOutline, monitor);
 }
 
-void PageBuilder::loadTweens(Component* c, xml_node componentXml) {
+void PageBuilder::loadTweens(Component* c, pugi::xml_node componentXml) {
 	buildViewInfo(componentXml, c->baseViewInfo);
-
 	c->setTweens(createTweenInstance(componentXml));
 }
 
 std::shared_ptr<AnimationEvents> PageBuilder::createTweenInstance(pugi::xml_node componentXml) {
 	auto tweens = std::make_shared<AnimationEvents>();
 
+	// Mapping XML tags to internal event names
 	buildTweenSet(tweens.get(), componentXml, "onEnter", "enter");
 	buildTweenSet(tweens.get(), componentXml, "onExit", "exit");
 	buildTweenSet(tweens.get(), componentXml, "onIdle", "idle");
@@ -1200,14 +1200,12 @@ std::shared_ptr<AnimationEvents> PageBuilder::createTweenInstance(pugi::xml_node
 	buildTweenSet(tweens.get(), componentXml, "onAttract", "attract");
 	buildTweenSet(tweens.get(), componentXml, "onAttractExit", "attractExit");
 	buildTweenSet(tweens.get(), componentXml, "onJukeboxJump", "jukeboxJump");
-
 	buildTweenSet(tweens.get(), componentXml, "onGameInfoEnter", "gameInfoEnter");
 	buildTweenSet(tweens.get(), componentXml, "onGameInfoExit", "gameInfoExit");
 	buildTweenSet(tweens.get(), componentXml, "onCollectionInfoEnter", "collectionInfoEnter");
 	buildTweenSet(tweens.get(), componentXml, "onCollectionInfoExit", "collectionInfoExit");
 	buildTweenSet(tweens.get(), componentXml, "onBuildInfoEnter", "buildInfoEnter");
 	buildTweenSet(tweens.get(), componentXml, "onBuildInfoExit", "buildInfoExit");
-
 	buildTweenSet(tweens.get(), componentXml, "onMenuActionInputEnter", "menuActionInputEnter");
 	buildTweenSet(tweens.get(), componentXml, "onMenuActionInputExit", "menuActionInputExit");
 	buildTweenSet(tweens.get(), componentXml, "onMenuActionSelectEnter", "menuActionSelectEnter");
@@ -1218,19 +1216,21 @@ std::shared_ptr<AnimationEvents> PageBuilder::createTweenInstance(pugi::xml_node
 }
 
 
-void PageBuilder::buildTweenSet(AnimationEvents* tweens, xml_node componentXml, const std::string& tagName, const std::string& tweenName) {
-	for (componentXml = componentXml.child(tagName.c_str()); componentXml; componentXml = componentXml.next_sibling(tagName.c_str())) {
-		xml_attribute indexXml = componentXml.attribute("menuIndex");
+void PageBuilder::buildTweenSet(AnimationEvents* tweens, pugi::xml_node componentXml, const std::string& tagName, const std::string& tweenName) {
+	for (pugi::xml_node tweenNode : componentXml.children(tagName.c_str())) {
+		pugi::xml_attribute indexAttr = tweenNode.attribute("menuIndex");
 
-		if (indexXml) {
-			std::string indexs = indexXml.value();
+		if (indexAttr) {
+			std::string indexs = indexAttr.value();
+			if (indexs.empty()) continue;
+
 			if (indexs[0] == '!') {
 				indexs.erase(0, 1);
 				int index = Utils::convertInt(indexs);
 				for (int i = 0; i < MENU_INDEX_HIGH - 1; i++) {
 					if (i != index) {
 						auto animation = std::make_shared<Animation>();
-						getTweenSet(componentXml, animation.get());
+						getTweenSet(tweenNode, animation.get());
 						tweens->setAnimation(tweenName, i, std::move(animation));
 					}
 				}
@@ -1241,7 +1241,7 @@ void PageBuilder::buildTweenSet(AnimationEvents* tweens, xml_node componentXml, 
 				for (int i = 0; i < MENU_INDEX_HIGH - 1; i++) {
 					if (i < index) {
 						auto animation = std::make_shared<Animation>();
-						getTweenSet(componentXml, animation.get());
+						getTweenSet(tweenNode, animation.get());
 						tweens->setAnimation(tweenName, i, std::move(animation));
 					}
 				}
@@ -1252,30 +1252,31 @@ void PageBuilder::buildTweenSet(AnimationEvents* tweens, xml_node componentXml, 
 				for (int i = 0; i < MENU_INDEX_HIGH - 1; i++) {
 					if (i > index) {
 						auto animation = std::make_shared<Animation>();
-						getTweenSet(componentXml, animation.get());
+						getTweenSet(tweenNode, animation.get());
 						tweens->setAnimation(tweenName, i, std::move(animation));
 					}
 				}
 			}
 			else if (indexs[0] == 'i') {
 				auto animation = std::make_shared<Animation>();
-				getTweenSet(componentXml, animation.get());
+				getTweenSet(tweenNode, animation.get());
 				tweens->setAnimation(tweenName, MENU_INDEX_HIGH, std::move(animation));
 			}
 			else {
-			int index = indexXml.as_int();
+				int index = indexAttr.as_int();
 				auto animation = std::make_shared<Animation>();
-				getTweenSet(componentXml, animation.get());
+				getTweenSet(tweenNode, animation.get());
 				tweens->setAnimation(tweenName, index, std::move(animation));
 			}
 		}
 		else {
 			auto animation = std::make_shared<Animation>();
-			getTweenSet(componentXml, animation.get());
+			getTweenSet(tweenNode, animation.get());
 			tweens->setAnimation(tweenName, -1, std::move(animation));
 		}
 	}
 }
+
 
 ScrollingList* PageBuilder::buildMenu(xml_node menuXml, Page& page, int monitor) {
 	ScrollingList* menu = nullptr;
@@ -1746,192 +1747,130 @@ void PageBuilder::buildViewInfo(xml_node componentXml, ViewInfo& info, xml_node 
 	}
 }
 
-void PageBuilder::getTweenSet(const xml_node node, Animation* animation) {
+void PageBuilder::getTweenSet(pugi::xml_node node, Animation* animation) {
 	if (node) {
-		for (xml_node set = node.child("set"); set; set = set.next_sibling("set")) {
-			// Create a shared_ptr to manage the TweenSet instance.
+		for (pugi::xml_node set : node.children("set")) {
 			auto ts = std::make_shared<TweenSet>();
 			getAnimationEvents(set, *ts);
-
-			// Use the shared_ptr to transfer ownership of the TweenSet instance to the Animation instance.
 			animation->Push(ts);
 		}
 	}
 }
 
-void PageBuilder::getAnimationEvents(const xml_node node, TweenSet& tweens) {
-	xml_attribute durationXml = node.attribute("duration");
+void PageBuilder::getAnimationEvents(pugi::xml_node node, TweenSet& tweens) {
+	pugi::xml_attribute durationAttr = node.attribute("duration");
+	if (!durationAttr) {
+		LOG_ERROR("Layout", "Animation set tag missing \"duration\" attribute");
+		return;
+	}
+
 	std::string actionSetting;
 	config_.getProperty(OPTION_ACTION, actionSetting);
 
-	if (!durationXml) {
-		LOG_ERROR("Layout", "Animation set tag missing \"duration\" attribute");
-	}
-	else {
-		for (xml_node animate = node.child("animate"); animate; animate = animate.next_sibling("animate")) {
-			xml_attribute type = animate.attribute("type");
-			xml_attribute from = animate.attribute("from");
-			xml_attribute to = animate.attribute("to");
-			xml_attribute algorithmXml = animate.attribute("algorithm");
-			xml_attribute setting = animate.attribute("setting");
-			xml_attribute playlist = animate.attribute("playlist");
+	for (pugi::xml_node animate : node.children("animate")) {
+		pugi::xml_attribute typeAttr = animate.attribute("type");
+		pugi::xml_attribute fromAttr = animate.attribute("from");
+		pugi::xml_attribute toAttr = animate.attribute("to");
 
-			std::string animateType;
-			if (type) {
-				animateType = type.value();
-			}
-
-			if (!type) {
-				LOG_ERROR("Layout", "Animate tag missing \"type\" attribute");
-			}
-			else if (!to && (animateType != "nop" && animateType != "restart")) {
-				LOG_ERROR("Layout", "Animate tag missing \"to\" attribute");
-			}
-			else {
-				// if in settings action="<something>" and the action has setting="<something>" then perform animation
-				if (setting && setting.value() != actionSetting) {
-					continue;
-				}
-
-				float fromValue = 0.0f;
-				bool fromDefined = true;
-				if (from) {
-					std::string fromStr = from.value();
-					if (fromStr == "left" || fromStr == "top") {
-						fromValue = 0.0f;
-					}
-					else if (fromStr == "center") {
-						fromValue = (animateType == "width")
-							? static_cast<float>(layoutWidth_) / 2
-							: static_cast<float>(layoutHeight_) / 2;
-					}
-					else if (fromStr == "right" || fromStr == "stretch") {
-						fromValue = static_cast<float>(layoutWidth_);
-					}
-					else if (fromStr == "bottom") {
-						fromValue = static_cast<float>(layoutHeight_);
-					}
-					else if (!fromStr.empty() && fromStr.back() == '%') {
-						float percent = Utils::convertFloat(fromStr.substr(0, fromStr.size() - 1));
-						if (animateType == "width") {
-							fromValue = layoutWidth_ * (percent / 100.0f);
-						}
-						else if (animateType == "height") {
-							fromValue = layoutHeight_ * (percent / 100.0f);
-						}
-						else {
-							LOG_ERROR("Layout", "Invalid animateType for percentage calculation: " + animateType);
-							fromValue = 0.0f; // or another default/fallback value
-						}
-					}
-					else {
-						fromValue = Utils::convertFloat(fromStr);
-					}
-				}
-				else {
-					fromDefined = false;
-				}
-
-				float toValue = 0.0f;
-				if (to) {
-					std::string toStr = to.value();
-					if (toStr == "left" || toStr == "top") {
-						toValue = 0.0f;
-					}
-					else if (toStr == "center") {
-						toValue = (animateType == "width")
-							? static_cast<float>(layoutWidth_) / 2
-							: static_cast<float>(layoutHeight_) / 2;
-					}
-					else if (toStr == "right" || toStr == "stretch") {
-						toValue = static_cast<float>(layoutWidth_);
-					}
-					else if (toStr == "bottom") {
-						toValue = static_cast<float>(layoutHeight_);
-					}
-					else if (!toStr.empty() && toStr.back() == '%') {
-						float percent = Utils::convertFloat(toStr.substr(0, toStr.size() - 1));
-						if (animateType == "width") {
-							toValue = static_cast<float>(layoutWidth_) * (percent / 100.0f);
-						}
-						else if (animateType == "height") {
-							toValue = static_cast<float>(layoutHeight_) * (percent / 100.0f);
-						}
-						else {
-							LOG_ERROR("Layout", "Invalid animateType for percentage calculation: " + animateType);
-							toValue = 0.0f; // or another default/fallback value
-						}
-					}
-					else {
-						toValue = Utils::convertFloat(toStr);
-					}
-				}
-
-			float durationValue = durationXml.as_float();
-
-				TweenAlgorithm algorithm = LINEAR;
-
-				if (algorithmXml) {
-					algorithm = Tween::getTweenType(algorithmXml.value());
-				}
-
-				if (auto optProperty = Tween::getTweenProperty(animateType)) {
-					const TweenProperty property = *optProperty; // <-- Get the value and make it const.
-
-					switch (property) {
-						case TWEEN_PROPERTY_WIDTH:
-						case TWEEN_PROPERTY_X:
-						case TWEEN_PROPERTY_X_OFFSET:
-						case TWEEN_PROPERTY_CONTAINER_X:
-						case TWEEN_PROPERTY_CONTAINER_WIDTH:
-						fromValue = getHorizontalAlignment(from, 0);
-						toValue = getHorizontalAlignment(to, 0);
-						break;
-
-						// x origin gets translated to a percent
-						case TWEEN_PROPERTY_X_ORIGIN:
-						fromValue = getHorizontalAlignment(from, 0) / layoutWidth_;
-						toValue = getHorizontalAlignment(to, 0) / layoutWidth_;
-						break;
-
-						case TWEEN_PROPERTY_HEIGHT:
-						case TWEEN_PROPERTY_Y:
-						case TWEEN_PROPERTY_Y_OFFSET:
-						case TWEEN_PROPERTY_FONT_SIZE:
-						case TWEEN_PROPERTY_CONTAINER_Y:
-						case TWEEN_PROPERTY_CONTAINER_HEIGHT:
-						fromValue = getVerticalAlignment(from, 0);
-						toValue = getVerticalAlignment(to, 0);
-						break;
-
-						// y origin gets translated to a percent
-						case TWEEN_PROPERTY_Y_ORIGIN:
-						fromValue = getVerticalAlignment(from, 0) / layoutHeight_;
-						toValue = getVerticalAlignment(to, 0) / layoutHeight_;
-						break;
-
-						case TWEEN_PROPERTY_MAX_WIDTH:
-						case TWEEN_PROPERTY_MAX_HEIGHT:
-						fromValue = getVerticalAlignment(from, FLT_MAX);
-						toValue = getVerticalAlignment(to, FLT_MAX);
-						break;
-						default:
-						break;
-					}
-
-					// if in layout action has playlist="<current playlist name>" then perform action
-					std::string playlistFilter = playlist && playlist.value() ? playlist.value() : "";
-					auto t = std::make_unique<Tween>(property, algorithm, fromValue, toValue, durationValue, playlistFilter);
-					if (!fromDefined)
-						t->startDefined = false;
-					tweens.push(std::move(t));
-				}
-				else {
-					std::stringstream ss;
-					ss << "Unsupported tween type attribute \"" << type.value() << "\"";
-					LOG_ERROR("Layout", ss.str());
-				}
-			}
+		if (!typeAttr) {
+			LOG_ERROR("Layout", "Animate tag missing \"type\" attribute");
+			continue;
 		}
+
+		std::string animateType = typeAttr.value();
+
+		if (!toAttr && animateType != "nop" && animateType != "restart") {
+			LOG_ERROR("Layout", "Animate tag missing \"to\" attribute");
+			continue;
+		}
+
+		// Action filter
+		if (auto settingAttr = animate.attribute("setting")) {
+			if (std::string(settingAttr.value()) != actionSetting) continue;
+		}
+
+		float fromValue = 0.0f;
+		bool fromDefined = (fromAttr != nullptr);
+
+		// Helper for raw animation values (standard string or percent)
+		auto parseAnimateValue = [&](pugi::xml_attribute attr, bool isHorizontal) -> float {
+			if (!attr) return 0.0f;
+			std::string s = attr.value();
+			if (s == "left" || s == "top") return 0.0f;
+			if (s == "center") return isHorizontal ? (float)layoutWidth_ / 2.0f : (float)layoutHeight_ / 2.0f;
+			if (s == "right" || s == "stretch") return (float)layoutWidth_;
+			if (s == "bottom") return (float)layoutHeight_;
+
+			if (!s.empty() && s.back() == '%') {
+				float pct = Utils::convertFloat(s.substr(0, s.length() - 1)) / 100.0f;
+				return isHorizontal ? (float)layoutWidth_ * pct : (float)layoutHeight_ * pct;
+			}
+			return Utils::convertFloat(s);
+			};
+
+		// Get property type
+		auto optProperty = Tween::getTweenProperty(animateType);
+		if (!optProperty) {
+			LOG_ERROR("Layout", "Unsupported tween type: " + animateType);
+			continue;
+		}
+
+		TweenProperty property = *optProperty;
+		float toValue = 0.0f;
+
+		// Perform layout scaling based on property type
+		switch (property) {
+			case TWEEN_PROPERTY_WIDTH:
+			case TWEEN_PROPERTY_X:
+			case TWEEN_PROPERTY_X_OFFSET:
+			case TWEEN_PROPERTY_CONTAINER_X:
+			case TWEEN_PROPERTY_CONTAINER_WIDTH:
+			fromValue = getHorizontalAlignment(fromAttr, 0);
+			toValue = getHorizontalAlignment(toAttr, 0);
+			break;
+
+			case TWEEN_PROPERTY_X_ORIGIN:
+			fromValue = getHorizontalAlignment(fromAttr, 0) / (float)layoutWidth_;
+			toValue = getHorizontalAlignment(toAttr, 0) / (float)layoutWidth_;
+			break;
+
+			case TWEEN_PROPERTY_HEIGHT:
+			case TWEEN_PROPERTY_Y:
+			case TWEEN_PROPERTY_Y_OFFSET:
+			case TWEEN_PROPERTY_FONT_SIZE:
+			case TWEEN_PROPERTY_CONTAINER_Y:
+			case TWEEN_PROPERTY_CONTAINER_HEIGHT:
+			fromValue = getVerticalAlignment(fromAttr, 0);
+			toValue = getVerticalAlignment(toAttr, 0);
+			break;
+
+			case TWEEN_PROPERTY_Y_ORIGIN:
+			fromValue = getVerticalAlignment(fromAttr, 0) / (float)layoutHeight_;
+			toValue = getVerticalAlignment(toAttr, 0) / (float)layoutHeight_;
+			break;
+
+			case TWEEN_PROPERTY_MAX_WIDTH:
+			case TWEEN_PROPERTY_MAX_HEIGHT:
+			fromValue = getVerticalAlignment(fromAttr, FLT_MAX);
+			toValue = getVerticalAlignment(toAttr, FLT_MAX);
+			break;
+
+			default:
+			// For properties like alpha, rotation, volume: no special alignment logic
+			fromValue = fromAttr ? Utils::convertFloat(fromAttr.value()) : 0.0f;
+			toValue = toAttr ? Utils::convertFloat(toAttr.value()) : 0.0f;
+			break;
+		}
+
+		float durationValue = durationAttr.as_float();
+		TweenAlgorithm algorithm = LINEAR;
+		if (auto algoAttr = animate.attribute("algorithm")) {
+			algorithm = Tween::getTweenType(algoAttr.value());
+		}
+
+		std::string playlistFilter = animate.attribute("playlist").as_string("");
+		auto t = std::make_unique<Tween>(property, algorithm, fromValue, toValue, durationValue, playlistFilter);
+		t->startDefined = fromDefined;
+		tweens.push(std::move(t));
 	}
 }
