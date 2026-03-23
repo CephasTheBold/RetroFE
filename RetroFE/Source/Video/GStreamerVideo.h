@@ -130,14 +130,12 @@ private:
 	std::string currentFile_{};
 	int numLoops_{ 0 };
 	float volume_{ 0.0f };
-	double currentVolume_{ 0.0 };
 	int monitor_;
-	double lastSetVolume_{ -1.0 };
-	bool lastSetMuteState_{ false };
 	bool softOverlay_;
 	int perspectiveCorners_[8]{ 0 };
 	bool hasPerspective_{ false };
 	std::atomic<bool> pipeLineReady_{ false };
+
 
 	// === GStreamer and SDL resource pointers ===
 	GstElement* pipeline_{ nullptr };   // top-level pipeline
@@ -192,7 +190,6 @@ private:
 	void setupCallbacksForSession(uint64_t sessionId);
 	static GstPadProbeReturn padProbeCallback(GstPad* pad, GstPadProbeInfo* info, gpointer user_data);
 	static void initializePlugins();
-	static gboolean on_dimensions_idle(gpointer user_data);
 	void createSdlTexture();
 	void initializeUpdateFunction();
 	bool updateTextureFromFrameIYUV(SDL_Texture*, GstVideoFrame*) const;
