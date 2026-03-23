@@ -588,8 +588,7 @@ bool GStreamerVideo::stop() {
 	playCount_ = 0; numLoops_ = 0;
 	loopsFinished_.store(false, std::memory_order_release);
 	hasVideoStream_.store(true, std::memory_order_release);
-	volume_ = currentVolume_ = 0.0f;
-	lastSetVolume_ = -1.0f; lastSetMuteState_ = true;
+	volume_ = 0.0f;
 
 	LOG_INFO("GStreamerVideo", "stop(): Instance for " +
 		(currentFileForLog.empty() ? "previous video" : currentFileForLog) +
@@ -816,7 +815,7 @@ bool GStreamerVideo::createPipelineIfNeeded() {
 	gst_object_unref(sys);
 
 	// Set playbin flags and properties.
-	gint flags = GST_PLAY_FLAG_VIDEO | GST_PLAY_FLAG_AUDIO | GST_PLAY_FLAG_SOFT_VOLUME;
+	gint flags = GST_PLAY_FLAG_VIDEO | GST_PLAY_FLAG_AUDIO;
 	g_object_set(playbin_, "flags", flags, "instant-uri", TRUE, nullptr);
 	g_object_set(pipeline_, "async-handling", TRUE, nullptr);
 
@@ -1047,9 +1046,8 @@ bool GStreamerVideo::play(const std::string& file) {
 			: "PAUSED immediately"));
 
 		// Start muted/0.0; unmute later in resume()
-		gst_stream_volume_set_volume(GST_STREAM_VOLUME(playbin_), GST_STREAM_VOLUME_FORMAT_LINEAR, 0.0);
-		gst_stream_volume_set_mute(GST_STREAM_VOLUME(playbin_), TRUE);
-		lastSetMuteState_ = true;
+		gst_stream_volume_set_volume(GST_STREAM_VOLUME(playbin_), GST_STREAM_VOLUME_FORMAT_LINEAR, 1.0);
+		gst_stream_volume_set_mute(GST_STREAM_VOLUME(playbin_), FALSE);
 
 		return true;
 		}, G_PRIORITY_HIGH);
@@ -1352,72 +1350,19 @@ void GStreamerVideo::createSdlTexture() {
 }
 
 void GStreamerVideo::volumeUpdate() {
-	if (!pipeLineReady_.load(std::memory_order_acquire) || !playbin_) {
-		return;
+	if (!videoSourceId_) return; // Safety check
+
+	// Determine final gain based on UI volume and global mute
+	float finalGain = std::clamp(volume_, 0.0f, 1.0f);
+
+	if (Configuration::MuteVideo || finalGain < 0.01f) {
+		finalGain = 0.0f;
 	}
 
-	// Clamp volume_ to valid range on calling thread
-	volume_ = std::clamp(volume_, 0.0f, 1.0f);
-
-	// Gradually adjust currentVolume_ towards volume_ (thread-safe)
-	if (currentVolume_ > volume_ || currentVolume_ + 0.005f >= volume_) {
-		currentVolume_ = volume_;
-	}
-	else {
-		currentVolume_ += 0.005f;
-	}
-
-	// Determine mute state
-	const bool shouldMute = (currentVolume_ < 0.1f) || Configuration::MuteVideo;
-	const float volumeToSet = currentVolume_;
-
-	// Only invoke GLib thread if volume or mute state needs to change
-	if ((!shouldMute && volumeToSet != lastSetVolume_) || (shouldMute != lastSetMuteState_)) {
-
-		const std::string fileForLog = currentFile_;
-
-		// Perform GStreamer volume operations on GLib thread
-		GlibLoop::instance().invoke([this, fileForLog, volumeToSet, shouldMute]() {
-			// Double-check pipeline is still valid
-			if (!playbin_ || !pipeLineReady_.load(std::memory_order_acquire)) {
-				LOG_DEBUG("GStreamerVideo", "VolumeUpdate: Pipeline not ready during GLib invoke for " + fileForLog);
-				return;
-			}
-
-			bool volumeChanged = false;
-			bool muteChanged = false;
-
-			// Update volume only if it has changed and is not muted
-			if (!shouldMute && volumeToSet != lastSetVolume_) {
-				gst_stream_volume_set_volume(
-					GST_STREAM_VOLUME(playbin_),
-					GST_STREAM_VOLUME_FORMAT_LINEAR,
-					volumeToSet);
-				lastSetVolume_ = volumeToSet;
-				volumeChanged = true;
-
-				LOG_DEBUG("GStreamerVideo", "VolumeUpdate: Set volume to " +
-					std::to_string(volumeToSet) + " for " + fileForLog);
-			}
-
-			// Update mute state only if it has changed
-			if (shouldMute != lastSetMuteState_) {
-				gst_stream_volume_set_mute(GST_STREAM_VOLUME(playbin_), shouldMute);
-				lastSetMuteState_ = shouldMute;
-				muteChanged = true;
-
-				LOG_DEBUG("GStreamerVideo", "VolumeUpdate: Set mute to " +
-					std::string(shouldMute ? "true" : "false") + " for " + fileForLog);
-			}
-
-			// Optional: Log when no changes were needed
-			if (!volumeChanged && !muteChanged) {
-				LOG_DEBUG("GStreamerVideo", "VolumeUpdate: No changes needed for " + fileForLog);
-			}
-
-			}, G_PRIORITY_DEFAULT); // Lower priority than user interactions
-	}
+	// Direct, lightweight update to the mixing bus
+	AudioBus::instance().setGain(videoSourceId_, finalGain);
 }
+
 void GStreamerVideo::draw() {
 	GstSample* sample = stagedSample_.exchange(nullptr, std::memory_order_acq_rel);
 	if (!sample) return;
