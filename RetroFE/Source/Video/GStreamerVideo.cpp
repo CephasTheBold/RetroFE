@@ -186,14 +186,15 @@ gboolean GStreamerVideo::busCallback(GstBus* /*bus*/, GstMessage* msg, gpointer 
 		LOG_ERROR("GStreamerVideo", "busCallback(): Callback invoked with null user_data.");
 		return TRUE;
 	}
+
+	// Check if playbin exists before processing, but we MUST unref the message regardless
 	if (!video->playbin_) {
-		LOG_WARNING("GStreamerVideo", "busCallback(): Callback invoked but playbin_ is null for file: " + video->currentFile_);
-		return TRUE; // Continue, but state is unusual.
+		gst_message_unref(msg);
+		return TRUE;
 	}
 
 	switch (GST_MESSAGE_TYPE(msg)) {
 		case GST_MESSAGE_ASYNC_START: {
-			// Any state transition (or flushing seek) kicked off
 			video->pipeLineReady_.store(false, std::memory_order_release);
 			break;
 		}
@@ -203,7 +204,6 @@ gboolean GStreamerVideo::busCallback(GstBus* /*bus*/, GstMessage* msg, gpointer 
 				GstState oldS, newS, pending;
 				gst_message_parse_state_changed(msg, &oldS, &newS, &pending);
 
-				// Only publish a settled state
 				if (pending == GST_STATE_VOID_PENDING) {
 					switch (newS) {
 						case GST_STATE_PLAYING:
@@ -223,9 +223,11 @@ gboolean GStreamerVideo::busCallback(GstBus* /*bus*/, GstMessage* msg, gpointer 
 						}
 						break;
 						default:
+						// READY and NULL states map to None
 						video->actualState_.store(IVideo::VideoState::None, std::memory_order_release);
 						video->pipeLineReady_.store(false, std::memory_order_release);
-						// NEW: one-shot notify if armed
+
+						// Signal that we have settled into a "stopped" state
 						if (video->notifyOnNone_.exchange(false, std::memory_order_acq_rel)) {
 							video->becameNone_.store(true, std::memory_order_release);
 						}
@@ -239,8 +241,6 @@ gboolean GStreamerVideo::busCallback(GstBus* /*bus*/, GstMessage* msg, gpointer 
 		case GST_MESSAGE_ASYNC_DONE: {
 			if (GST_MESSAGE_SRC(msg) == GST_OBJECT(video->pipeline_) &&
 				video->targetState_.load(std::memory_order_acquire) != IVideo::VideoState::None) {
-
-				// Check that we're actually in a usable state
 				GstState current, pending;
 				if (gst_element_get_state(video->pipeline_, &current, &pending, 0) == GST_STATE_CHANGE_SUCCESS) {
 					if (current == GST_STATE_PAUSED || current == GST_STATE_PLAYING) {
@@ -252,135 +252,75 @@ gboolean GStreamerVideo::busCallback(GstBus* /*bus*/, GstMessage* msg, gpointer 
 			}
 			break;
 		}
+
 		case GST_MESSAGE_STREAM_COLLECTION: {
 			if (GST_MESSAGE_SRC(msg) == GST_OBJECT(video->pipeline_)) {
 				GstStreamCollection* collection = nullptr;
 				gst_message_parse_stream_collection(msg, &collection);
-
 				int nVideo = 0;
-				int nAudio = 0;
-				int nText  = 0;
-
 				if (collection) {
 					const guint size = gst_stream_collection_get_size(collection);
 					for (guint i = 0; i < size; ++i) {
 						GstStream* stream = gst_stream_collection_get_stream(collection, i);
-						if (!stream) {
-							continue;
-						}
-
-						GstStreamType type = gst_stream_get_stream_type(stream);
-						if (type & GST_STREAM_TYPE_VIDEO) ++nVideo;
-						if (type & GST_STREAM_TYPE_AUDIO) ++nAudio;
-						if (type & GST_STREAM_TYPE_TEXT)  ++nText;
+						if (stream && (gst_stream_get_stream_type(stream) & GST_STREAM_TYPE_VIDEO))
+							++nVideo;
 					}
-
 					gst_object_unref(collection);
 				}
-
 				video->hasVideoStream_.store(nVideo > 0, std::memory_order_release);
-
-				LOG_DEBUG("GStreamerVideo",
-						  "Stream collection for " + video->currentFile_ +
-						  ": video=" + std::to_string(nVideo) +
-						  " audio=" + std::to_string(nAudio) +
-						  " text="  + std::to_string(nText));
 			}
 			break;
 		}
+
 		case GST_MESSAGE_EOS: {
 			if (GST_MESSAGE_SRC(msg) == GST_OBJECT(video->pipeline_)) {
-				uint64_t session = video->currentPlaySessionId_.load();
-				LOG_DEBUG("GStreamerVideo", "BusCallback: Received EOS for " + video->currentFile_ +
-					" (Session: " + std::to_string(session) + ")");
-
-				// Ignore EOS if we're already unloaded/stopping
-				if (video->targetState_.load(std::memory_order_acquire) == IVideo::VideoState::None) {
-					LOG_DEBUG("GStreamerVideo", "EOS ignored (unloaded) for session " + std::to_string(session));
-					break;
-				}
-
-				// Check if the video actually played for a meaningful duration
-				if (video->pipeline_ && video->getCurrent() > GST_SECOND / 2) {
-					video->playCount_++;
-
-					// Check if we need to loop more
-					if (!video->numLoops_ || video->numLoops_ > video->playCount_) {
-						LOG_DEBUG("GStreamerVideo", "BusCallback: Looping " + video->currentFile_ +
-							" (play " + std::to_string(video->playCount_ + 1) +
-							"/" + std::to_string(video->numLoops_) + ")");
-						video->loop();
-					}
-					else {
-						// All loops finished - prevent auto-resume
-						LOG_DEBUG("GStreamerVideo", "BusCallback: Finished all " +
-							std::to_string(video->numLoops_) + " loops for " + video->currentFile_);
-
-						// Mark loops as finished to block auto-resume in VideoComponent
-						video->loopsFinished_.store(true, std::memory_order_release);
-
-						// Update states to None
-						video->targetState_.store(IVideo::VideoState::None, std::memory_order_release);
-						video->actualState_.store(IVideo::VideoState::None, std::memory_order_release);
-
-						// Set pipeline to READY (stops playback without full teardown)
-						gst_element_set_state(video->pipeline_, GST_STATE_READY);
-
-						// Trigger becameNone notification if armed
-						if (video->notifyOnNone_.exchange(false, std::memory_order_acq_rel)) {
-							video->becameNone_.store(true, std::memory_order_release);
+				if (video->targetState_.load(std::memory_order_acquire) != IVideo::VideoState::None) {
+					if (video->pipeline_ && video->getCurrent() > GST_SECOND / 2) {
+						video->playCount_++;
+						if (!video->numLoops_ || video->numLoops_ > video->playCount_) {
+							video->loop();
 						}
-
-						// Reset play counter for next play() call
+						else {
+							video->loopsFinished_.store(true, std::memory_order_release);
+							video->targetState_.store(IVideo::VideoState::None, std::memory_order_release);
+							// We set the target state to None, then trigger the state change.
+							// The actualState_ update will happen via the switch case above.
+							gst_element_set_state(video->pipeline_, GST_STATE_READY);
+							video->playCount_ = 0;
+						}
+					}
+					else if (video->pipeline_) {
+						video->loopsFinished_.store(true, std::memory_order_release);
+						video->targetState_.store(IVideo::VideoState::None, std::memory_order_release);
+						gst_element_set_state(video->pipeline_, GST_STATE_READY);
 						video->playCount_ = 0;
 					}
 				}
-				else if (video->pipeline_) {
-					// EOS received very early - file might be corrupted or too short
-					LOG_WARNING("GStreamerVideo", "BusCallback: EOS received very early for " +
-						video->currentFile_ + " (position: " +
-						std::to_string(video->getCurrent() / GST_MSECOND) + "ms). Not looping.");
-
-					// Treat as finished to prevent looping broken files
-					video->loopsFinished_.store(true, std::memory_order_release);
-					video->targetState_.store(IVideo::VideoState::None, std::memory_order_release);
-					video->actualState_.store(IVideo::VideoState::None, std::memory_order_release);
-					gst_element_set_state(video->pipeline_, GST_STATE_READY);
-					video->playCount_ = 0;
-				}
 			}
 			break;
 		}
+
 		case GST_MESSAGE_ERROR: {
 			GError* err = nullptr; gchar* dbg = nullptr;
 			gst_message_parse_error(msg, &err, &dbg);
-
-			const bool unloading = (video->targetState_ == IVideo::VideoState::None);
-			if (unloading && err && err->domain == GST_STREAM_ERROR) {
-				LOG_DEBUG("GStreamerVideo", std::string("Ignoring stream error during unload: ") +
-					(err->message ? err->message : "n/a"));
-				if (err) g_error_free(err);
-				if (dbg) g_free(dbg);
-				break;
+			const bool unloading = (video->targetState_.load(std::memory_order_acquire) == IVideo::VideoState::None);
+			if (!unloading) {
+				video->hasError_.store(true, std::memory_order_release);
+				video->pipeLineReady_.store(false, std::memory_order_release);
+				video->targetState_.store(IVideo::VideoState::None, std::memory_order_release);
+				gst_element_set_state(video->pipeline_, GST_STATE_READY);
 			}
-
-			LOG_ERROR("GStreamerVideo", std::string("busCallback(): GStreamer ERROR received for ") +
-				video->currentFile_ + ": " +
-				(err && err->message ? err->message : "Unknown") +
-				(dbg ? (std::string(" | Debug: ") + dbg) : ""));
-			video->hasError_.store(true, std::memory_order_release);
-			video->pipeLineReady_.store(false, std::memory_order_release);
-			video->targetState_.store(IVideo::VideoState::None, std::memory_order_release);
 			if (err) g_error_free(err);
 			if (dbg) g_free(dbg);
 			break;
 		}
-		default:
-		break;
 
+		default: break;
 	}
 
-	return TRUE; // Keep the bus watch active
+	// CRITICAL: Unref the message to prevent memory leaks
+	gst_message_unref(msg);
+	return TRUE;
 }
 
 void GStreamerVideo::initializePlugins() {
@@ -600,75 +540,66 @@ bool GStreamerVideo::unload() {
 	const std::string fileForLog = currentFile_.empty() ? "unknown" : currentFile_;
 	LOG_DEBUG("GStreamerVideo", "Unload (async) called for " + fileForLog);
 
-	// Early exit if already unloaded
-	if (!playbin_ || actualState_.load(std::memory_order_acquire) == IVideo::VideoState::None) {
-		actualState_.store(IVideo::VideoState::None, std::memory_order_release);
-		if (notifyOnNone_.exchange(false, std::memory_order_acq_rel)) {
-			becameNone_.store(true, std::memory_order_release);
-		}
-		LOG_DEBUG("GStreamerVideo", "Unload: Already unloaded for " + fileForLog);
+	// Early exit if already in target state None
+	if (!playbin_ || targetState_.load(std::memory_order_acquire) == IVideo::VideoState::None) {
+		LOG_DEBUG("GStreamerVideo", "Unload: Already in target state None for " + fileForLog);
 		return true;
 	}
 
-	// Immediately set app-side gates to prevent new operations
+	// Immediately set app-side target to prevent new operations while transitioning
 	pipeLineReady_.store(false, std::memory_order_release);
 	targetState_.store(IVideo::VideoState::None, std::memory_order_release);
 
-	// Disable texture updates immediately
+	// Disable texture updates immediately but KEEP the texture pointer for potential reuse.
 	{
 		std::lock_guard<std::mutex> lk(updateFuncMutex_);
 		updateTextureFunc_ = [](SDL_Texture*, GstVideoFrame*) { return false; };
 	}
-	texture_ = nullptr;
 
-	// Clear any staged video sample immediately (thread-safe)
+	// Clear any staged video sample immediately
 	if (GstSample* s = stagedSample_.exchange(nullptr, std::memory_order_acq_rel)) {
 		gst_sample_unref(s);
 	}
 
-	// Remove AudioBus source immediately (thread-safe)
-	if (videoSourceId_ != 0) {
-		AudioBus::instance().removeSource(videoSourceId_);
-		videoSourceId_ = 0;
-	}
-
-	// Perform all GStreamer operations on the GLib thread
+	// Perform GStreamer teardown on GLib thread. 
+	// actualState_ will be updated by busCallback when it sees STATE_CHANGED -> READY.
 	(void)GlibLoop::instance().invokeAsync<bool>([this, fileForLog]() -> bool {
 		if (!pipeline_ || !playbin_) return true;
 
-		// Quiesce drains + flush (as you added)
 		detachAndDrainSink(videoSink_, &padProbeId_);
 		guint noProbe = 0;
 		detachAndDrainSink(audioSink_, &noProbe);
 
+		// 1. Initiate flush and drop to READY state.
+		// We do NOT flush the bus here because we WANT the busCallback to process 
+		// the STATE_CHANGED message that follows this call.
 		gst_element_send_event(pipeline_, gst_event_new_flush_start());
-
-		// Drop to READY (non-blocking; returns ASYNC or SUCCESS)
 		gst_element_set_state(pipeline_, GST_STATE_READY);
+
+		// 2. Clear the URI to release internal resources
+		g_object_set(G_OBJECT(playbin_), "uri", nullptr, NULL);
+
+		// 3. Complete the stream flush
 		gst_element_send_event(pipeline_, gst_event_new_flush_stop(TRUE));
 
-
-		// Free per-session ctx
+		// 4. Clean up per-session contexts
 		if (audioCtx_) { g_free(audioCtx_); audioCtx_ = nullptr; }
 		if (videoCtx_) { g_free(videoCtx_); videoCtx_ = nullptr; }
 
-		// allow future play() to re-arm; keep tearingDown_ true until play() begins
+		LOG_DEBUG("GStreamerVideo", "Unload: GStreamer pipeline teardown initiated for " + fileForLog);
 		return true;
 		}, G_PRIORITY_HIGH);
 
-	// Wait for GLib thread to complete the GStreamer operations
-
-	// Perform remaining cleanup on current thread (thread-safe operations)
-	currentFile_ = "[unloading]";
+	// Reset session metadata
+	currentFile_ = "";
 	playCount_ = 0;
 	numLoops_ = 0;
-	width_ = -1;
-	height_ = -1;
-
+	hasError_.store(false, std::memory_order_release);
+	hasVideoStream_.store(false, std::memory_order_release);
+	loopsFinished_.store(false, std::memory_order_release);
 
 	return true;
 }
-
 
 // Function to compute perspective transform from 4 arbitrary points
 static inline std::array<double, 9> computePerspectiveMatrixFromCorners(
