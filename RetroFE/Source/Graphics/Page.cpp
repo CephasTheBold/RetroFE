@@ -1772,6 +1772,16 @@ bool Page::isMenuScrolling() const {
 	return scrollActive_;
 }
 
+bool Page::isUserScrollInputActive() const
+{
+	return userScrollInputActive_;
+}
+
+void Page::setUserScrollInputActive(bool active)
+{
+	userScrollInputActive_ = active;
+}
+
 bool Page::isPlaylistScrolling() const {
 	return playlistScrollActive_;
 }

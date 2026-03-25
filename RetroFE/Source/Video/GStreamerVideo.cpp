@@ -184,6 +184,7 @@ gboolean GStreamerVideo::busCallback(GstBus* /*bus*/, GstMessage* msg, gpointer 
 
 	if (!video) {
 		LOG_ERROR("GStreamerVideo", "busCallback(): Callback invoked with null user_data.");
+		gst_message_unref(msg);
 		return TRUE;
 	}
 
@@ -577,7 +578,7 @@ bool GStreamerVideo::unload() {
 		gst_element_set_state(pipeline_, GST_STATE_READY);
 
 		// 2. Clear the URI to release internal resources
-		g_object_set(G_OBJECT(playbin_), "uri", nullptr, NULL);
+		//g_object_set(G_OBJECT(playbin_), "uri", nullptr, NULL);
 
 		// 3. Complete the stream flush
 		gst_element_send_event(pipeline_, gst_event_new_flush_stop(TRUE));
