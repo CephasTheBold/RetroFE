@@ -866,35 +866,43 @@ bool HiScores::runHi2Txt(const std::string& gameName) {
 	buffer.push_back('\0');
 	std::string xmlContent(buffer.begin(), buffer.end());
 
+	// Strip null characters and ensure a single null terminator for the parser
 	xmlContent = Utils::removeNullCharacters(xmlContent);
-	xmlContent.push_back('\0');  // Terminator preserved in the obfuscated file (see above)
+	xmlContent.push_back('\0');
 
-	// Check if xmlContent starts with <hi2txt>
-	if (xmlContent.find("<hi2txt>") != 0) {
-		LOG_WARNING("HiScores", "Invalid XML content received from hi2txt for game " + gameName);
+	// --- Robust XML Validation ---
+	pugi::xml_document doc;
+	pugi::xml_parse_result result = doc.load_string(xmlContent.c_str());
+
+	// Check 1: Is it well-formed XML?
+	// Check 2: Does it have the required <hi2txt> root element?
+	if (!result || !doc.child("hi2txt") || !doc.child("hi2txt").first_child()) {
+		LOG_WARNING("HiScores", "hi2txt output for " + gameName + " was invalid or empty. Skipping save. Parser error: " +
+			(result ? "No child data" : result.description()));
 		return false;
 	}
-	// Parse the XML content to update the cache.
-	// The '\0' already in xmlContent is the parse sentinel; the extra one below is a
-	// belt-and-braces guard in case of any unexpected trailing bytes.
+
+	// --- If we reach here, the XML is valid ---
+
+	// 1. Update the in-memory cache
 	std::vector<char> xmlBuffer(xmlContent.begin(), xmlContent.end());
-	xmlBuffer.push_back('\0');
 	loadFromFile(gameName, gameName + ".xml", xmlBuffer);
 
-	// Obfuscate the XML content before saving
+	// 2. Obfuscate the content for disk storage
 	std::string obfuscatedContent = Utils::obfuscate(xmlContent);
 
-	// Save obfuscated XML to the scores directory
+	// 3. Save to the scores directory
 	std::string xmlFilePath = Utils::combinePath(scoresDirectory_, gameName + ".xml");
 	std::ofstream outFile(xmlFilePath, std::ios::binary);
 	if (!outFile) {
-		LOG_ERROR("HiScores", "Error: Could not create XML file " + xmlFilePath);
+		LOG_ERROR("HiScores", "Could not create XML file " + xmlFilePath);
 		return false;
 	}
+
 	outFile.write(obfuscatedContent.c_str(), obfuscatedContent.size());
 	outFile.close();
 
-	LOG_INFO("HiScores", "Scores updated for " + gameName + " and saved to " + xmlFilePath);
+	LOG_INFO("HiScores", "Scores successfully updated and saved for: " + gameName);
 	return true;
 }
 
