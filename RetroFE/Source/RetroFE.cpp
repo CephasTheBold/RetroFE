@@ -3230,7 +3230,21 @@ RetroFE::RETROFE_STATE RetroFE::processUserInput(Page* page) {
 		}
 	}
 
+	const bool userScrolling =
+		input_.keystate(UserInput::KeyCodePageUp) ||
+		input_.keystate(UserInput::KeyCodePageDown) ||
+		input_.keystate(UserInput::KeyCodePlaylistUp) ||
+		input_.keystate(UserInput::KeyCodePlaylistDown) ||
+		input_.keystate(UserInput::KeyCodePlaylistLeft) ||
+		input_.keystate(UserInput::KeyCodePlaylistRight) ||
+		input_.keystate(UserInput::KeyCodeLetterUp) ||
+		input_.keystate(UserInput::KeyCodeLetterDown) ||
+		input_.keystate(UserInput::KeyCodeDown) ||
+		input_.keystate(UserInput::KeyCodeUp) || 
+		input_.keystate(UserInput::KeyCodeLeft) ||
+		input_.keystate(UserInput::KeyCodeRight);
 
+	page->setUserScrollInputActive(userScrolling);
 
 	if (screensaver && ssExitInputs[e.type])
 	{

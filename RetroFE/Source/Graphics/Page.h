@@ -154,6 +154,8 @@ public:
     void consumeDirtyPlaylistsForActiveCollection();
     void  reallocateMenuSpritePoints(bool updatePlaylistMenu = true) const;
     bool  isMenuScrolling() const;
+    bool  isUserScrollInputActive() const;
+    void  setUserScrollInputActive(bool active);
     bool isPlaylistScrolling() const;
     bool isGamesScrolling() const;
     bool  isPlaying() const;
@@ -231,6 +233,7 @@ private:
     bool scrollActive_;
     bool playlistScrollActive_;
     bool gameScrollActive_;
+    bool userScrollInputActive_ = false;
 
     Item *selectedItem_;
     Text *textStatusComponent_;
