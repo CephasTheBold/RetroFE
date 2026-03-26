@@ -574,14 +574,10 @@ bool GStreamerVideo::unload() {
 		// 1. Initiate flush and drop to READY state.
 		// We do NOT flush the bus here because we WANT the busCallback to process 
 		// the STATE_CHANGED message that follows this call.
-		gst_element_send_event(pipeline_, gst_event_new_flush_start());
 		gst_element_set_state(pipeline_, GST_STATE_READY);
 
 		// 2. Clear the URI to release internal resources
-		//g_object_set(G_OBJECT(playbin_), "uri", nullptr, NULL);
-
-		// 3. Complete the stream flush
-		gst_element_send_event(pipeline_, gst_event_new_flush_stop(TRUE));
+		g_object_set(G_OBJECT(playbin_), "uri", nullptr, NULL);
 
 		// 4. Clean up per-session contexts
 		if (audioCtx_) { g_free(audioCtx_); audioCtx_ = nullptr; }
