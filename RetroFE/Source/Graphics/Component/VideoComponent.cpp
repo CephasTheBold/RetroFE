@@ -134,7 +134,7 @@ bool VideoComponent::update(float dt) {
 	IVideo::VideoState desired = IVideo::VideoState::None;
 
 	if (visibleNow && !hasFinishedLoops()) {
-		if (currentPage_->isUserScrollInputActive()) {
+		if (currentPage_->isMenuFastScrolling()) {
 			// Rule: Keep playing if already active, stay paused if new
 			if (actual == IVideo::VideoState::Playing || target == IVideo::VideoState::Playing) {
 				desired = IVideo::VideoState::Playing;
