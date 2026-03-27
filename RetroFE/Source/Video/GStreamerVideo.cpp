@@ -40,7 +40,6 @@
 #include <sys/types.h>
 #include <vector>
 #include <array>
-#include <mutex>
 #include <algorithm>
 #include <utility>
 #include <memory>
@@ -551,12 +550,6 @@ bool GStreamerVideo::unload() {
 	pipeLineReady_.store(false, std::memory_order_release);
 	targetState_.store(IVideo::VideoState::None, std::memory_order_release);
 
-	// Disable texture updates immediately but KEEP the texture pointer for potential reuse.
-	{
-		std::lock_guard<std::mutex> lk(updateFuncMutex_);
-		updateTextureFunc_ = [](SDL_Texture*, GstVideoFrame*) { return false; };
-	}
-
 	// Clear any staged video sample immediately
 	if (GstSample* s = stagedSample_.exchange(nullptr, std::memory_order_acq_rel)) {
 		gst_sample_unref(s);
@@ -876,30 +869,6 @@ bool GStreamerVideo::createPipelineIfNeeded() {
 	return true;
 }
 
-void GStreamerVideo::initializeUpdateFunction() {
-	const auto session = currentPlaySessionId_.load(std::memory_order_acquire);
-	const auto fmt = sdlFormat_;
-
-	auto make_guard = [this, session, fmt](auto impl) {
-		return [this, session, fmt, impl](SDL_Texture* tex, GstVideoFrame* frame) -> bool {
-			if (currentPlaySessionId_.load(std::memory_order_acquire) != session) return false;
-			if (sdlFormat_ != fmt) return false;
-			if (!tex || !frame) return false;
-			return impl(tex, frame);
-			};
-		};
-
-	std::function<bool(SDL_Texture*, GstVideoFrame*)> f;
-	switch (sdlFormat_) {
-		case SDL_PIXELFORMAT_IYUV:     f = make_guard([this](auto t, auto f) { return updateTextureFromFrameIYUV(t, f); }); break;
-		case SDL_PIXELFORMAT_NV12:     f = make_guard([this](auto t, auto f) { return updateTextureFromFrameNV12(t, f); }); break;
-		case SDL_PIXELFORMAT_ABGR8888: f = make_guard([this](auto t, auto f) { return updateTextureFromFrameRGBA(t, f); }); break;
-		default:                       f = [](auto, auto) { return false; }; break;
-	}
-	std::lock_guard<std::mutex> lk(updateFuncMutex_);
-	updateTextureFunc_ = std::move(f);
-}
-
 bool GStreamerVideo::play(const std::string& file) {
 	if (!initialized_) {
 		LOG_ERROR("GStreamerVideo", "Play called but GStreamer not initialized for file: " + file);
@@ -943,8 +912,6 @@ bool GStreamerVideo::play(const std::string& file) {
 			gst_element_set_state(pipeline_, GST_STATE_READY);
 			gst_element_send_event(pipeline_, gst_event_new_flush_stop(TRUE));
 		}
-
-		initializeUpdateFunction();
 
 		gchar* uri = gst_filename_to_uri(file.c_str(), nullptr);
 		if (!uri) {
@@ -1324,22 +1291,19 @@ void GStreamerVideo::draw() {
 		return;
 	}
 
-	// Snapshot the updater
-	std::function<bool(SDL_Texture*, GstVideoFrame*)> updater;
-	{
-		std::lock_guard<std::mutex> lk(updateFuncMutex_);
-		updater = updateTextureFunc_;
-	}
-
-	bool ok = false;
-
 	// Pick a write slot
 	int write = videoWriteIdx_;
 	if (write == videoDrawIdx_) write = (write + 1) % videoRingCount_;
 	SDL_Texture* t = videoTexRing_[write];
 
-	if (t && updater) {
-		ok = updater(t, &frame);
+	bool ok = false;
+	if (t) {
+		switch (sdlFormat_) {
+			case SDL_PIXELFORMAT_IYUV:     ok = updateTextureFromFrameIYUV(t, &frame); break;
+			case SDL_PIXELFORMAT_NV12:     ok = updateTextureFromFrameNV12(t, &frame); break;
+			case SDL_PIXELFORMAT_ABGR8888: ok = updateTextureFromFrameRGBA(t, &frame); break;
+			default: break;
+		}
 	}
 
 	// Clean up the copied buffer
