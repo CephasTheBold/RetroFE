@@ -23,9 +23,7 @@
 #include "IVideo.h"
 #include <atomic>
 #include <string>
-#include <mutex>
 #include <vector>
-#include <functional>
 
 extern "C" {
 #if (__APPLE__)
@@ -118,7 +116,6 @@ private:
 	std::atomic<uint64_t> currentPlaySessionId_{ 0 };
 	static std::atomic<uint64_t> nextUniquePlaySessionId_;
 	std::atomic<bool> hasError_{ false };              // Set by pad probe, read main
-	std::mutex updateFuncMutex_;
 
 	// === Main-thread only ===
 	std::atomic<IVideo::VideoState> targetState_{ IVideo::VideoState::None };
@@ -151,8 +148,6 @@ private:
 	guint padProbeId_{ 0 };
 	GValueArray* gva_{ nullptr };
 	GValueArray* perspective_gva_{ nullptr };
-	std::function<bool(SDL_Texture*, GstVideoFrame*)> updateTextureFunc_;
-
 	std::atomic<GstSample*> stagedSample_{ nullptr };
 
 	// === Static/shared ===
@@ -191,7 +186,6 @@ private:
 	static GstPadProbeReturn padProbeCallback(GstPad* pad, GstPadProbeInfo* info, gpointer user_data);
 	static void initializePlugins();
 	void createSdlTexture();
-	void initializeUpdateFunction();
 	bool updateTextureFromFrameIYUV(SDL_Texture*, GstVideoFrame*) const;
 	bool updateTextureFromFrameNV12(SDL_Texture*, GstVideoFrame*) const;
 	bool updateTextureFromFrameRGBA(SDL_Texture*, GstVideoFrame*) const;
