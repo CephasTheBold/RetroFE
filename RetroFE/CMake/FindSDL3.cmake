@@ -38,6 +38,11 @@ find_library(SDL3_LIBRARY
 )
 
 if(NOT SDL3_BUILDING_LIBRARY)
+  # Clear stale NOTFOUND from previous configure runs so find_library re-searches
+  # when the package has since been downloaded into the hint directory.
+  if(SDL3_ROOT AND IS_DIRECTORY "${SDL3_ROOT}/lib" AND NOT SDL3MAIN_LIBRARY)
+    unset(SDL3MAIN_LIBRARY CACHE)
+  endif()
   find_library(SDL3MAIN_LIBRARY
     NAMES SDL3main
     HINTS
@@ -63,7 +68,11 @@ if(SDL3_INCLUDE_DIR AND EXISTS "${SDL3_INCLUDE_DIR}/SDL3/SDL_version.h")
 endif()
 
 set(SDL3_INCLUDE_DIRS ${SDL3_INCLUDE_DIR})
-set(SDL3_LIBRARIES ${SDL3MAIN_LIBRARY} ${SDL3_LIBRARY})
+if(SDL3MAIN_LIBRARY)
+  set(SDL3_LIBRARIES ${SDL3MAIN_LIBRARY} ${SDL3_LIBRARY})
+else()
+  set(SDL3_LIBRARIES ${SDL3_LIBRARY})
+endif()
 
 include(FindPackageHandleStandardArgs)
 
