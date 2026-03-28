@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.12)
+cmake_minimum_required(VERSION 3.18)
 cmake_policy(SET CMP0144 NEW)
 
 project (retrofe)
@@ -35,6 +35,29 @@ set(KISSFFT_ROOT "${RETROFE_THIRD_PARTY_DIR}/kissfft-131.1.0")
 
 if(WIN32)
     if(MSVC)
+        # Auto-download SDL3 Windows VC packages into ThirdParty if not present.
+        macro(retrofe_ensure_sdl3_pkg pkg_name version dl_url)
+            set(_pkg_dir "${RETROFE_THIRD_PARTY_DIR}/${pkg_name}-${version}")
+            if(NOT EXISTS "${_pkg_dir}")
+                set(_pkg_zip "${RETROFE_THIRD_PARTY_DIR}/${pkg_name}-devel-${version}-VC.zip")
+                message(STATUS "Downloading ${pkg_name}-${version} into ThirdParty...")
+                file(DOWNLOAD "${dl_url}" "${_pkg_zip}"
+                    SHOW_PROGRESS
+                    TLS_VERIFY ON
+                )
+                file(ARCHIVE_EXTRACT INPUT "${_pkg_zip}"
+                    DESTINATION "${RETROFE_THIRD_PARTY_DIR}"
+                )
+                file(REMOVE "${_pkg_zip}")
+                message(STATUS "${pkg_name}-${version} ready.")
+            endif()
+        endmacro()
+
+        retrofe_ensure_sdl3_pkg(SDL3       3.2.0 "https://github.com/libsdl-org/SDL/releases/download/release-3.2.0/SDL3-devel-3.2.0-VC.zip")
+        retrofe_ensure_sdl3_pkg(SDL3_image 3.2.0 "https://github.com/libsdl-org/SDL_image/releases/download/release-3.2.0/SDL3_image-devel-3.2.0-VC.zip")
+        retrofe_ensure_sdl3_pkg(SDL3_mixer 3.2.0 "https://github.com/libsdl-org/SDL_mixer/releases/download/release-3.2.0/SDL3_mixer-devel-3.2.0-VC.zip")
+        retrofe_ensure_sdl3_pkg(SDL3_ttf   3.2.0 "https://github.com/libsdl-org/SDL_ttf/releases/download/release-3.2.0/SDL3_ttf-devel-3.2.0-VC.zip")
+
         set(SDL3_ROOT "${RETROFE_THIRD_PARTY_DIR}/SDL3-3.2.0")
         set(SDL3_IMAGE_ROOT "${RETROFE_THIRD_PARTY_DIR}/SDL3_image-3.2.0")
         set(SDL3_MIXER_ROOT "${RETROFE_THIRD_PARTY_DIR}/SDL3_mixer-3.2.0")
