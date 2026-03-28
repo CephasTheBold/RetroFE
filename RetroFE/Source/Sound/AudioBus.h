@@ -66,7 +66,7 @@ private:
         std::atomic<float> gain{ 1.0f };
         // NEW: Fade-in state for handling DISCONT
         std::atomic<int> fadeSamplesLeft{ 0 };
-        static constexpr int kMaxFadeSamples = 256;  // ~5.3ms at 48kHz — adjustable
+        static constexpr int kMaxFadeSamples = 256;  // ~5.3ms at 48kHz ï¿½ adjustable
 
         explicit Source(size_t cap, size_t align) : ring(cap, align) {}
     };
@@ -93,7 +93,7 @@ private:
     std::unordered_map<SourceId, std::shared_ptr<Source>> sources_;
 
     SourceId        nextId_{ 1 };
-    SDL_AudioFormat devFmt_{ SDL_AUDIO_S16 };
+    SDL_AudioFormat devFmt_{ SDL_AUDIO_S16LE };
     int             devRate_{ 48000 };
     int             devChans_{ 2 };
 };

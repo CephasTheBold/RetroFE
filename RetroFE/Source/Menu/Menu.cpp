@@ -67,7 +67,7 @@ std::string Menu::getKey() const
             switch (event.type) {
                 case SDL_EVENT_KEY_DOWN:
                     if ( return_value.empty() )
-                        return_value = SDL_GetKeyName( event.key.keysym.sym);
+                        return_value = SDL_GetKeyName( event.key.key);
                     break;
                 case SDL_EVENT_JOYSTICK_BUTTON_DOWN:
                     if ( return_value.empty() )

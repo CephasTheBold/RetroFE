@@ -146,9 +146,10 @@ AudioBus::~AudioBus() {
 }
 
 void AudioBus::configureFromMixer() {
-    int freq = 48000, chans = 2, fmtInt = static_cast<int>(SDL_AUDIO_S16);
-    (void)Mix_QuerySpec(&freq, &fmtInt, &chans);
-    devFmt_ = static_cast<SDL_AudioFormat>(fmtInt); devRate_ = freq; devChans_ = chans;
+    int freq = 48000, chans = 2;
+    SDL_AudioFormat fmt = SDL_AUDIO_S16LE;
+    (void)Mix_QuerySpec(&freq, &fmt, &chans);
+    devFmt_ = fmt; devRate_ = freq; devChans_ = chans;
 }
 
 AudioBus::SourceId AudioBus::addSource(const char* name, size_t ring_kb) {
