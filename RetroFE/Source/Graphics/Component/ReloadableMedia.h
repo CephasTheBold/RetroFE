@@ -3,7 +3,7 @@
 #include "ReloadableText.h"
 #include "../../Video/IVideo.h"
 #include "../../Collection/Item.h"
-#include <SDL2/SDL.h>
+#include <SDL.h>
 #include <string>
 #include <string_view>   // <-- add
 #include <vector>        // <-- add

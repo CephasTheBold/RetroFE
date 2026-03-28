@@ -127,6 +127,13 @@ private:
 	std::string currentFile_{};
 	int numLoops_{ 0 };
 	float volume_{ 0.0f };
+	
+	// Tracked allocation state to avoid redundant SDL_QueryTexture calls
+	int allocatedWidth_{ 0 };
+	int allocatedHeight_{ 0 };
+	SDL_PixelFormatEnum allocatedFormat_{ SDL_PIXELFORMAT_UNKNOWN };
+	int allocatedRingCount_{ 0 };
+	
 	int monitor_;
 	bool softOverlay_;
 	int perspectiveCorners_[8]{ 0 };
@@ -186,6 +193,7 @@ private:
 	static GstPadProbeReturn padProbeCallback(GstPad* pad, GstPadProbeInfo* info, gpointer user_data);
 	static void initializePlugins();
 	void createSdlTexture();
+	void destroyTextures(); // Centralized cleanup
 	bool updateTextureFromFrameIYUV(SDL_Texture*, GstVideoFrame*) const;
 	bool updateTextureFromFrameNV12(SDL_Texture*, GstVideoFrame*) const;
 	bool updateTextureFromFrameRGBA(SDL_Texture*, GstVideoFrame*) const;

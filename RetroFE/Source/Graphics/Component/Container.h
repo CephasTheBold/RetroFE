@@ -16,7 +16,7 @@
 #pragma once
 
 #include "Component.h"
-#include <SDL2/SDL.h>
+#include <SDL.h>
 #include <string>
 
 class Container : public Component

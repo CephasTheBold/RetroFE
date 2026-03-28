@@ -1,6 +1,6 @@
 #pragma once
 #include "InputHandler.h"
-#include <SDL2/SDL_events.h>
+#include <SDL_events.h>
 
 class TouchDragHandler : public InputHandler {
 public:

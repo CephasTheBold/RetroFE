@@ -15,7 +15,7 @@
  */
 #pragma once
 
-#include <SDL2/SDL.h>
+#include <SDL.h>
 #include <string>
 #include <gst/video/video.h>
 

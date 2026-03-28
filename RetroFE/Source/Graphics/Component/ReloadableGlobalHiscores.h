@@ -18,7 +18,7 @@
 #include <vector>
 #include <string>
 #include <cstdint>
-#include <SDL2/SDL.h>
+#include <SDL.h>
 
 #include "Component.h"
 

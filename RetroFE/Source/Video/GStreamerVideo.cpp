@@ -27,7 +27,7 @@
 #include "../SDL.h"
 #include "../Utility/Log.h"
 #include "../Utility/Utils.h"
-#include <SDL2/SDL.h>
+#include <SDL.h>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -318,8 +318,6 @@ gboolean GStreamerVideo::busCallback(GstBus* /*bus*/, GstMessage* msg, gpointer 
 		default: break;
 	}
 
-	// CRITICAL: Unref the message to prevent memory leaks
-	gst_message_unref(msg);
 	return TRUE;
 }
 
@@ -447,6 +445,22 @@ namespace {
 	}
 }
 
+void GStreamerVideo::destroyTextures() {
+	const int cap = static_cast<int>(std::size(videoTexRing_));
+	for (int i = 0; i < cap; ++i) {
+		if (videoTexRing_[i]) {
+			SDL_DestroyTexture(videoTexRing_[i]);
+			videoTexRing_[i] = nullptr;
+		}
+	}
+	texture_ = nullptr;
+	videoDrawIdx_ = -1;
+	allocatedWidth_ = 0;
+	allocatedHeight_ = 0;
+	allocatedFormat_ = SDL_PIXELFORMAT_UNKNOWN;
+	allocatedRingCount_ = 0;
+}
+
 bool GStreamerVideo::stop() {
 	const std::string currentFileForLog = currentFile_;
 	LOG_INFO("GStreamerVideo", "Stop (full cleanup) called for " +
@@ -514,10 +528,7 @@ bool GStreamerVideo::stop() {
 		LOG_DEBUG("GStreamerVideo", "stop(): No pipeline_ was active to stop and unref.");
 	}
 
-	texture_ = nullptr;
-	for (size_t i = 0; i < std::size(videoTexRing_); ++i) {
-		if (videoTexRing_[i]) { SDL_DestroyTexture(videoTexRing_[i]); videoTexRing_[i] = nullptr; }
-	}
+	destroyTextures();
 
 	if (GstSample* s = stagedSample_.exchange(nullptr, std::memory_order_acq_rel)) gst_sample_unref(s);
 	if (perspective_gva_) { g_value_array_free(perspective_gva_); perspective_gva_ = nullptr; }
@@ -569,10 +580,7 @@ bool GStreamerVideo::unload() {
 		// the STATE_CHANGED message that follows this call.
 		gst_element_set_state(pipeline_, GST_STATE_READY);
 
-		// 2. Clear the URI to release internal resources
-		g_object_set(G_OBJECT(playbin_), "uri", nullptr, NULL);
-
-		// 4. Clean up per-session contexts
+			// 4. Clean up per-session contexts
 		if (audioCtx_) { g_free(audioCtx_); audioCtx_ = nullptr; }
 		if (videoCtx_) { g_free(videoCtx_); videoCtx_ = nullptr; }
 
@@ -584,6 +592,9 @@ bool GStreamerVideo::unload() {
 	currentFile_ = "";
 	playCount_ = 0;
 	numLoops_ = 0;
+	width_ = -1;       // Force draw() to re-check on next video
+	height_ = -1;
+	videoDrawIdx_ = -1; // Prevent showing the last frame of the old video
 	hasError_.store(false, std::memory_order_release);
 	hasVideoStream_.store(false, std::memory_order_release);
 	loopsFinished_.store(false, std::memory_order_release);
@@ -941,8 +952,8 @@ bool GStreamerVideo::play(const std::string& file) {
 			: "PAUSED immediately"));
 
 		// Start muted/0.0; unmute later in resume()
-		gst_stream_volume_set_volume(GST_STREAM_VOLUME(playbin_), GST_STREAM_VOLUME_FORMAT_LINEAR, 1.0);
-		gst_stream_volume_set_mute(GST_STREAM_VOLUME(playbin_), FALSE);
+		//gst_stream_volume_set_volume(GST_STREAM_VOLUME(playbin_), GST_STREAM_VOLUME_FORMAT_LINEAR, 1.0);
+		//gst_stream_volume_set_mute(GST_STREAM_VOLUME(playbin_), FALSE);
 
 		return true;
 		}, G_PRIORITY_HIGH);
@@ -1180,59 +1191,48 @@ GstFlowReturn GStreamerVideo::on_audio_new_sample(GstAppSink* sink, gpointer use
 
 	return GST_FLOW_OK;
 }
+
 void GStreamerVideo::createSdlTexture() {
 	if (targetState_.load(std::memory_order_acquire) == IVideo::VideoState::None || !playbin_) {
 		return;
 	}
 
-	const int cap = static_cast<int>(std::size(videoTexRing_));       // actual capacity (3)
-	int n = std::min(videoRingCount_, cap);                           // clamp requested ring count
+	const int cap = static_cast<int>(std::size(videoTexRing_));
+	const int n = std::min(videoRingCount_, cap);
 
-	auto destroy_all = [&]() {
-		for (int i = 0; i < cap; ++i) {
-			if (videoTexRing_[i]) { SDL_DestroyTexture(videoTexRing_[i]); videoTexRing_[i] = nullptr; }
-		}
-		videoDrawIdx_ = -1;
-		};
+	// Check if any slot mismatches expected size/format using tracked variables
+	bool needsRecreate = (allocatedWidth_ != width_ ||
+		allocatedHeight_ != height_ ||
+		allocatedFormat_ != sdlFormat_ ||
+		allocatedRingCount_ != n);
 
-	if (width_ <= 0 || height_ <= 0) {
-		destroy_all();
-		return;
-	}
-
-	// Check if any slot mismatches expected size/format
-	bool needsRecreate = false;
-	for (int i = 0; i < n; ++i) {
-		if (!videoTexRing_[i]) { needsRecreate = true; break; }
-		int texW = 0, texH = 0, access = 0; Uint32 fmt = 0;
-		if (SDL_QueryTexture(videoTexRing_[i], &fmt, &access, &texW, &texH) != 0 ||
-			texW != width_ || texH != height_ || fmt != sdlFormat_ || access != SDL_TEXTUREACCESS_STREAMING) {
-			needsRecreate = true; break;
+	if (!needsRecreate) {
+		// Quick safety check for null textures
+		for (int i = 0; i < n; ++i) {
+			if (!videoTexRing_[i]) { needsRecreate = true; break; }
 		}
 	}
 
 	if (!needsRecreate) return;
 
-	// Destroy old
-	destroy_all();
-
-	if (videoRingCount_ > cap) {
-		LOG_WARNING("GStreamerVideo", "Requested ring slots (" + std::to_string(videoRingCount_) +
-			") exceed capacity (" + std::to_string(cap) + "); clamping.");
+	if (width_ <= 0 || height_ <= 0) {
+		destroyTextures();
+		return;
 	}
 
-	LOG_INFO("GStreamerVideo", "Creating/recreating SDL video texture RING: " +
+	destroyTextures();
+
+	LOG_INFO("GStreamerVideo", "Creating SDL video texture RING: " +
 		std::to_string(width_) + "x" + std::to_string(height_) +
 		" fmt=" + std::string(SDL_GetPixelFormatName(sdlFormat_)) +
 		" slots=" + std::to_string(n));
 
-	// Create ring
 	for (int i = 0; i < n; ++i) {
 		SDL_Texture* t = SDL_CreateTexture(
 			SDL::getRenderer(monitor_), sdlFormat_, SDL_TEXTUREACCESS_STREAMING, width_, height_);
 		if (!t) {
 			LOG_ERROR("GStreamerVideo", std::string("SDL_CreateTexture failed: ") + SDL_GetError());
-			destroy_all();
+			destroyTextures();
 			return;
 		}
 		SDL_SetTextureBlendMode(t, softOverlay_ ? softOverlayBlendMode : SDL_BLENDMODE_BLEND);
@@ -1240,10 +1240,15 @@ void GStreamerVideo::createSdlTexture() {
 		videoTexRing_[i] = t;
 	}
 
-	videoWriteIdx_ = 0;
-	videoDrawIdx_ = -1; // publish on first good frame
-}
+	// Update tracked state
+	allocatedWidth_ = width_;
+	allocatedHeight_ = height_;
+	allocatedFormat_ = sdlFormat_;
+	allocatedRingCount_ = n;
 
+	videoWriteIdx_ = 0;
+	videoDrawIdx_ = -1;
+}
 void GStreamerVideo::volumeUpdate() {
 	if (!videoSourceId_) return; // Safety check
 
@@ -1274,8 +1279,9 @@ void GStreamerVideo::draw() {
 	if (frameW <= 0 || frameH <= 0) { gst_sample_unref(sample); return; }
 
 	if (frameW != width_ || frameH != height_) {
-		width_ = frameW; height_ = frameH;
-		createSdlTexture();
+		width_ = frameW;
+		height_ = frameH;
+		createSdlTexture(); // This will either REUSE or RECREATE
 	}
 
 	// Ref buffer so we can use it after unreffing sample

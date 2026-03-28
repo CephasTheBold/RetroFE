@@ -23,7 +23,7 @@
 #include "../Page.h"
 #include "../ViewInfo.h"
 #include "../../Database/Configuration.h"
-#include <SDL2/SDL.h>
+#include <SDL.h>
 
 template<typename T>
 class RotatableView {

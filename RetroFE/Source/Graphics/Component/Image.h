@@ -24,10 +24,10 @@
 #include <cstdint>
 
 #include "Component.h"
-#include <SDL2/SDL.h>
+#include <SDL.h>
 
-#if __has_include(<SDL2/SDL_image.h>)
-#include <SDL2/SDL_image.h>
+#if __has_include(<SDL_image.h>)
+#include <SDL_image.h>
 #elif __has_include(<SDL2_image/SDL_image.h>)
 #include <SDL2_image/SDL_image.h>
 #else

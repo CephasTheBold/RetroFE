@@ -9,7 +9,7 @@
 #include "../Utility/Utils.h"
 #include "../Utility/Log.h"
 #include "../Collection/Item.h" 
-#include "SDL2/SDL.h"
+#include "SDL.h"
 #include "SDL_image.h"
 #include "minizip/unzip.h"
 #include "qrcodegen.hpp"

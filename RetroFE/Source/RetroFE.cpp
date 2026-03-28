@@ -50,8 +50,8 @@
 #include <cmath>
 #include <cstdint>
 #include <curl/curl.h>
-#if __has_include(<SDL2/SDL_ttf.h>)
-#include <SDL2/SDL_ttf.h>
+#if __has_include(<SDL_ttf.h>)
+#include <SDL_ttf.h>
 #elif __has_include(<SDL2_ttf/SDL_ttf.h>)
 #include <SDL2_ttf/SDL_ttf.h>
 #else
@@ -71,8 +71,8 @@
 #endif
 
 #ifdef WIN32
-#include <SDL2/SDL_syswm.h>
-#include <SDL2/SDL_thread.h>
+#include <SDL_syswm.h>
+#include <SDL_thread.h>
 #include <Windows.h>
 #include "StdAfx.h"
 #endif
