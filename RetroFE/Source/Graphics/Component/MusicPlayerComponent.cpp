@@ -559,18 +559,18 @@ void MusicPlayerComponent::updateVolumeBarTexture() {
 		int activeSegments = (volumeRaw * totalSegments_) / 128;
 
 		for (int i = 0; i < totalSegments_; ++i) {
-			SDL_Rect rect = {
-				i * segmentWidth,
-				0,
-				segmentWidth,
-				volumeBarHeight_
+			SDL_FRect rect = {
+				(float)(i * segmentWidth),
+				0.0f,
+				(float)segmentWidth,
+				(float)volumeBarHeight_
 			};
 
 			if (i < activeSegments) {
-				SDL_RenderCopy(renderer_, volumeFullTexture_, &rect, &rect);
+				SDL_RenderTexture(renderer_, volumeFullTexture_, &rect, &rect);
 			}
 			else {
-				SDL_RenderCopy(renderer_, volumeEmptyTexture_, &rect, &rect);
+				SDL_RenderTexture(renderer_, volumeEmptyTexture_, &rect, &rect);
 			}
 		}
 	}
@@ -579,15 +579,15 @@ void MusicPlayerComponent::updateVolumeBarTexture() {
 		int visibleWidth = (volumeBarWidth_ * volumeRaw) / 128;
 
 		if (visibleWidth > 0) {
-			SDL_Rect src = { 0, 0, visibleWidth, volumeBarHeight_ };
-			SDL_Rect dst = { 0, 0, visibleWidth, volumeBarHeight_ };
-			SDL_RenderCopy(renderer_, volumeFullTexture_, &src, &dst);
+			SDL_FRect src = { 0.0f, 0.0f, (float)visibleWidth, (float)volumeBarHeight_ };
+			SDL_FRect dst = { 0.0f, 0.0f, (float)visibleWidth, (float)volumeBarHeight_ };
+			SDL_RenderTexture(renderer_, volumeFullTexture_, &src, &dst);
 		}
 
 		if (visibleWidth < volumeBarWidth_) {
-			SDL_Rect src = { visibleWidth, 0, volumeBarWidth_ - visibleWidth, volumeBarHeight_ };
-			SDL_Rect dst = { visibleWidth, 0, volumeBarWidth_ - visibleWidth, volumeBarHeight_ };
-			SDL_RenderCopy(renderer_, volumeEmptyTexture_, &src, &dst);
+			SDL_FRect src = { (float)visibleWidth, 0.0f, (float)(volumeBarWidth_ - visibleWidth), (float)volumeBarHeight_ };
+			SDL_FRect dst = { (float)visibleWidth, 0.0f, (float)(volumeBarWidth_ - visibleWidth), (float)volumeBarHeight_ };
+			SDL_RenderTexture(renderer_, volumeEmptyTexture_, &src, &dst);
 		}
 	}
 

@@ -103,8 +103,9 @@ bool SDL::initialize(Configuration& config) {
 
 	SDL_SetHint(SDL_HINT_RENDER_BATCHING, "1"); // For all renderers
 
-	if (config.getProperty(OPTION_HIDEMOUSE, hideMouse))
-		SDL_ShowCursor(hideMouse ? SDL_FALSE : SDL_TRUE);
+	if (config.getProperty(OPTION_HIDEMOUSE, hideMouse)) {
+		if (hideMouse) SDL_HideCursor(); else SDL_ShowCursor();
+	}
 
 	// --- Configuration for hardware/video/audio ---
 	bool HardwareVideoAccel = false;
@@ -515,7 +516,7 @@ bool SDL::initialize(Configuration& config) {
 				MusicPlayer* mp;   // nullptr if music player disabled
 			};
 
-			// … during init …
+			// ï¿½ during init ï¿½
 			bool musicPlayerEnabled = false;
 			config.getProperty("musicPlayer.enabled", musicPlayerEnabled);
 
@@ -558,7 +559,7 @@ bool SDL::deInitialize(bool fullShutdown) { // The 'fullShutdown' parameter is k
 	if (!window_.empty() && window_[0])
 	{
 #ifdef __APPLE__
-		SDL_SetRelativeMouseMode(SDL_FALSE);
+		SDL_SetWindowRelativeMouseMode(window_[0], false);
 #endif
 		SDL_WarpMouseInWindow(window_[0], windowWidth_[0] / 2, windowHeight_[0] / 2);
 	}
@@ -1451,7 +1452,7 @@ bool SDL::renderCopy(SDL_Texture* texture, float alpha, SDL_Rect const* src, SDL
 		if (dstRect.w <= 0.f || dstRect.h <= 0.f || srcRect.w <= 0 || srcRect.h <= 0)
 			return true;
 
-		// Local container (don’t mutate viewInfo)
+		// Local container (donï¿½t mutate viewInfo)
 		SDL_FRect container{};
 		bool hasContainer = (viewInfo.ContainerWidth > 0.0f && viewInfo.ContainerHeight > 0.0f);
 		const int rot = (rotation_[m] & 3);

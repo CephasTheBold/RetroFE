@@ -22,7 +22,7 @@
 #include "../../Utility/Log.h"
 #include "../../Utility/Utils.h"
 #include "../../SDL.h"
-#include "SDL_image.h"
+#include <SDL3_image/SDL_image.h>
 #include "../Font.h"
 
 #include <algorithm>
@@ -168,7 +168,7 @@ void ReloadableGlobalHiscores::snapshotPrevPage_(SDL_Renderer* r, int compositeW
     // Copy current composite (which includes QRs) into prev
     SDL_Texture* oldRT = SDL_GetRenderTarget(r);
     SDL_SetRenderTarget(r, prevCompositeTexture_);
-    SDL_RenderCopy(r, intermediateTexture_, nullptr, nullptr);
+    SDL_RenderTexture(r, intermediateTexture_, nullptr, nullptr);
     SDL_SetRenderTarget(r, oldRT);
 
     // Transition from SnapshotPending → Crossfading
@@ -579,7 +579,7 @@ void ReloadableGlobalHiscores::draw() {
                 SDL_Texture* oldRT = SDL_GetRenderTarget(renderer);
                 SDL_SetRenderTarget(renderer, crossfadeTexture_);
                 setAlphaIfChanged_(intermediateTexture_, newPageAlphaCache_, aNew);
-                SDL_RenderCopy(renderer, intermediateTexture_, nullptr, nullptr);
+                SDL_RenderTexture(renderer, intermediateTexture_, nullptr, nullptr);
                 SDL_SetRenderTarget(renderer, oldRT);
 
                 SDL::renderCopyF(crossfadeTexture_, baseAlpha, nullptr, &rect, baseViewInfo, layoutW, layoutH);
@@ -590,7 +590,7 @@ void ReloadableGlobalHiscores::draw() {
                 SDL_Texture* oldRT = SDL_GetRenderTarget(renderer);
                 SDL_SetRenderTarget(renderer, crossfadeTexture_);
                 setAlphaIfChanged_(prevCompositeTexture_, prevPageAlphaCache_, aPrev);
-                SDL_RenderCopy(renderer, prevCompositeTexture_, nullptr, nullptr);
+                SDL_RenderTexture(renderer, prevCompositeTexture_, nullptr, nullptr);
                 SDL_SetRenderTarget(renderer, oldRT);
 
                 SDL::renderCopyF(crossfadeTexture_, baseAlpha, nullptr, &rect, baseViewInfo, layoutW, layoutH);
@@ -607,10 +607,10 @@ void ReloadableGlobalHiscores::draw() {
             SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
 
             setAlphaIfChanged_(prevCompositeTexture_, prevPageAlphaCache_, aPrev);
-            SDL_RenderCopy(renderer, prevCompositeTexture_, nullptr, nullptr);
+            SDL_RenderTexture(renderer, prevCompositeTexture_, nullptr, nullptr);
 
             setAlphaIfChanged_(intermediateTexture_, newPageAlphaCache_, aNew);
-            SDL_RenderCopy(renderer, intermediateTexture_, nullptr, nullptr);
+            SDL_RenderTexture(renderer, intermediateTexture_, nullptr, nullptr);
 
             SDL_SetRenderTarget(renderer, oldRT);
 
@@ -1547,7 +1547,7 @@ void ReloadableGlobalHiscores::reloadTexture() {
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
 
     if (tableTexture_) {
-        SDL_RenderCopy(renderer, tableTexture_, nullptr, nullptr);
+        SDL_RenderTexture(renderer, tableTexture_, nullptr, nullptr);
     }
 
     // Add QRs on top (if QR phase allows)

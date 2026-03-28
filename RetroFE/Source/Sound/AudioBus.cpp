@@ -71,7 +71,7 @@ int AudioBus::SpscRing::write(const uint8_t* data, int bytes) {
     if ((size_t)bytes > free) {
         size_t need = (size_t)bytes - free;
         need = align_up(need, align_);          // drop whole frames
-        if (need > used) need = used;           // don’t jump past head
+        if (need > used) need = used;           // donï¿½t jump past head
         tail_.store(t + need, std::memory_order_release);
         t += need;
     }
@@ -231,7 +231,7 @@ void AudioBus::push(SourceId id, const void* data, int bytes) {
 
     // ========== 1. APPLY FADE-IN FIRST (if active) ==========
     int fadeLeft = sp->fadeSamplesLeft.load(std::memory_order_acquire);
-    if (fadeLeft > 0 && devFmt_ == AUDIO_S16SYS) {
+    if (fadeLeft > 0 && devFmt_ == SDL_AUDIO_S16) {
         int16_t* samples = reinterpret_cast<int16_t*>(temp_buffer.data());
         int total_samples = bytes / sizeof(int16_t);
         int samples_to_fade = std::min(fadeLeft, total_samples);

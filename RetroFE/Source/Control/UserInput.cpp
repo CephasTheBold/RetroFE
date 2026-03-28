@@ -369,7 +369,7 @@ bool UserInput::update(SDL_Event& e) {
     if (sdlGameController_) {
         // Handle adding a game controller
         if (e.type == SDL_EVENT_GAMEPAD_ADDED) {
-            SDL_GameController* controller = SDL_OpenGamepad(e.gdevice.which);
+            SDL_Gamepad* controller = SDL_OpenGamepad(e.gdevice.which);
             if (!controller) {
                 LOG_ERROR("Input", "Failed to open game controller: " << SDL_GetError());
             } else {
@@ -399,7 +399,7 @@ bool UserInput::update(SDL_Event& e) {
                     break;
                 }
             }
-            SDL_GameController* controller = SDL_GetGamepadFromID(e.gdevice.which);
+            SDL_Gamepad* controller = SDL_GetGamepadFromID(e.gdevice.which);
             if (controller) {
                 SDL_CloseGamepad(controller);
             }

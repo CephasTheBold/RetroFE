@@ -10,7 +10,7 @@
 #include "../Utility/Log.h"
 #include "../Collection/Item.h" 
 #include "SDL.h"
-#include "SDL_image.h"
+#include <SDL3_image/SDL_image.h>
 #include "minizip/unzip.h"
 #include "qrcodegen.hpp"
 #include "rapidxml.hpp"

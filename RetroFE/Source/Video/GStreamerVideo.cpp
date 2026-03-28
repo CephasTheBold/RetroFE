@@ -111,48 +111,34 @@ static bool IsIntelGPU() {
 // Utility: SDL_AudioFormat -> GStreamer audio/x-raw format string
 // SDL_AudioFormat -> GStreamer audio/x-raw "format" string
 // Returns nullptr if unknown.
-static const char* sdl_to_gst_fmt(Uint16 fmt) {
+static const char* sdl_to_gst_fmt(SDL_AudioFormat fmt) {
 	switch (fmt) {
 		// 8-bit
-		case AUDIO_U8:  return "U8";
-		case AUDIO_S8:  return "S8";
+		case SDL_AUDIO_U8:  return "U8";
+		case SDL_AUDIO_S8:  return "S8";
 
 			// 16-bit
-#if defined(AUDIO_U16LSB)
-		case AUDIO_U16LSB: return "U16LE";
+#if defined(SDL_AUDIO_S16LE)
+		case SDL_AUDIO_S16LE: return "S16LE";
 #endif
-#if defined(AUDIO_U16MSB)
-		case AUDIO_U16MSB: return "U16BE";
-#endif
-#if defined(AUDIO_S16LSB)
-		case AUDIO_S16LSB: return "S16LE";
-#endif
-#if defined(AUDIO_S16MSB)
-		case AUDIO_S16MSB: return "S16BE";
-#endif
-
-			// 24-bit (packed 3 bytes)  if your SDL build exposes these
-#if defined(AUDIO_S24LSB)
-		case AUDIO_S24LSB: return "S24LE";
-#endif
-#if defined(AUDIO_S24MSB)
-		case AUDIO_S24MSB: return "S24BE";
+#if defined(SDL_AUDIO_S16BE)
+		case SDL_AUDIO_S16BE: return "S16BE";
 #endif
 
 			// 32-bit integer
-#if defined(AUDIO_S32LSB)
-		case AUDIO_S32LSB: return "S32LE";
+#if defined(SDL_AUDIO_S32LE)
+		case SDL_AUDIO_S32LE: return "S32LE";
 #endif
-#if defined(AUDIO_S32MSB)
-		case AUDIO_S32MSB: return "S32BE";
+#if defined(SDL_AUDIO_S32BE)
+		case SDL_AUDIO_S32BE: return "S32BE";
 #endif
 
 			// 32-bit float
-#if defined(AUDIO_F32LSB)
-		case AUDIO_F32LSB: return "F32LE";
+#if defined(SDL_AUDIO_F32LE)
+		case SDL_AUDIO_F32LE: return "F32LE";
 #endif
-#if defined(AUDIO_F32MSB)
-		case AUDIO_F32MSB: return "F32BE";
+#if defined(SDL_AUDIO_F32BE)
+		case SDL_AUDIO_F32BE: return "F32BE";
 #endif
 	}
 	return nullptr;
@@ -714,7 +700,7 @@ bool GStreamerVideo::createPipelineIfNeeded() {
 	// Pull the actual device spec SDL_mixer opened
 	int rate = AudioBus::instance().dev_rate();
 	int channels = AudioBus::instance().dev_channels();
-	Uint16 fmt = AudioBus::instance().dev_fmt();
+	SDL_AudioFormat fmt = AudioBus::instance().dev_fmt();
 
 	const char* gstFmt = sdl_to_gst_fmt(fmt);
 	if (!gstFmt) {

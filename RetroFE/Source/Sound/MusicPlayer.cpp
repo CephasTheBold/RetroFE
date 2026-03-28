@@ -260,7 +260,7 @@ MusicPlayer::MusicPlayer()
     , hasVuMeter_(false)
     , sampleSize_(2) {
 
-    uint64_t seed = SDL_GetTicks64();
+    uint64_t seed = SDL_GetTicks();
     std::seed_seq seq{
         static_cast<uint32_t>(seed & 0xFFFFFFFF),
         static_cast<uint32_t>((seed >> 32) & 0xFFFFFFFF)
@@ -385,7 +385,7 @@ void MusicPlayer::pump() {
     }
 
     if (musicFade_.active) {
-        const uint64_t now = SDL_GetTicks64();
+        const uint64_t now = SDL_GetTicks();
         const uint64_t elapsed = now - musicFade_.startTimeMs;
         int currentLogical = 0;
 
@@ -449,7 +449,7 @@ void MusicPlayer::pump() {
     }
 
     if (isVolumeFading_) {
-        uint64_t now = SDL_GetTicks64();
+        uint64_t now = SDL_GetTicks();
         uint64_t elapsed = now - volumeFadeStartTime_;
 
         if (elapsed >= static_cast<uint64_t>(volumeFadeDuration_)) {
@@ -930,7 +930,7 @@ bool MusicPlayer::previousTrack(int customFadeMs) {
 // -------------------------------------------------------------------------
 
 void MusicPlayer::changeVolume(bool increase) {
-    Uint64 now = SDL_GetTicks64();
+    Uint64 now = SDL_GetTicks();
     if (now - lastVolumeChangeTime_ < volumeChangeIntervalMs_) return;
     lastVolumeChangeTime_ = now;
 
@@ -980,7 +980,7 @@ void MusicPlayer::fadeToVolume(int targetLogical, int customFadeMs) {
     volumeFadeStartVal_ = getLogicalVolume();
     volumeFadeTargetVal_ = targetLogical;
     volumeFadeDuration_ = duration;
-    volumeFadeStartTime_ = SDL_GetTicks64();
+    volumeFadeStartTime_ = SDL_GetTicks();
     isVolumeFading_ = true;
 }
 
@@ -1018,7 +1018,7 @@ void MusicPlayer::beginFadeOutToAction(FinishEvent action, int index, double see
 
     musicFade_.active = true;
     musicFade_.fadingOut = true;
-    musicFade_.startTimeMs = SDL_GetTicks64();
+    musicFade_.startTimeMs = SDL_GetTicks();
     musicFade_.durationMs = duration;
     musicFade_.startVol = getLogicalVolume();
     musicFade_.targetVol = 0;
@@ -1035,7 +1035,7 @@ void MusicPlayer::beginFadeInToSteadyVolume(int fadeInMs) {
 
     musicFade_.active = true;
     musicFade_.fadingOut = false;
-    musicFade_.startTimeMs = SDL_GetTicks64();
+    musicFade_.startTimeMs = SDL_GetTicks();
     musicFade_.durationMs = duration;
     musicFade_.startVol = 0;
     musicFade_.targetVol = target;
@@ -1052,12 +1052,12 @@ int MusicPlayer::steadyMusicVolume() const {
 void MusicPlayer::addVisualizerListener(MusicPlayerComponent* listener) {
     std::lock_guard<std::mutex> lock(visualizerMutex_);
 
-    int f; Uint16 fmt; int c;
-    if (Mix_QuerySpec(&f, &fmt, &c) == 1) {
+    int f; SDL_AudioFormat fmt; int c;
+    if (Mix_QuerySpec(&f, (int*)&fmt, &c) == 1) {
         audioChannels_ = c;
         audioSampleRate_ = f;
-        if (fmt == AUDIO_U8 || fmt == AUDIO_S8) sampleSize_ = 1;
-        else if (fmt == AUDIO_U16LSB || fmt == AUDIO_S16LSB || fmt == AUDIO_U16MSB || fmt == AUDIO_S16MSB) sampleSize_ = 2;
+        if (fmt == SDL_AUDIO_U8 || fmt == SDL_AUDIO_S8) sampleSize_ = 1;
+        else if (fmt == SDL_AUDIO_S16LE || fmt == SDL_AUDIO_S16BE) sampleSize_ = 2;
         else sampleSize_ = 4;
         audioLevels_.resize(audioChannels_, 0.0f);
     }
