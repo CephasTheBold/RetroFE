@@ -47,11 +47,6 @@ if(WIN32)
     # Set PacDrive paths
     set(PACDRIVE_ROOT "${RETROFE_THIRD_PARTY_DIR}/PacDrive")
     include_directories("${PACDRIVE_ROOT}")
-    
-    # Set paths for libwebp on Windows
-    set(WEBP_ROOT "${RETROFE_THIRD_PARTY_DIR}/libwebp")
-    set(WEBP_LIB "${WEBP_ROOT}/lib/libwebp_dll.lib")
-    include_directories("${WEBP_ROOT}/include")
 
     set(LIBSERIALPORT_ROOT "${RETROFE_THIRD_PARTY_DIR}/libserialport")
     include_directories("${LIBSERIALPORT_ROOT}")
@@ -94,8 +89,6 @@ else()
     pkg_search_module(SDL2_TTF REQUIRED SDL2_ttf)
     pkg_search_module(ZLIB REQUIRED zlib)
     pkg_search_module(MINIZIP REQUIRED minizip)
-    pkg_search_module(WEBP REQUIRED libwebp)
-    pkg_check_modules(WEBP_DEMUX REQUIRED libwebpdemux)
     pkg_check_modules(GSTREAMER REQUIRED gstreamer-1.0 gstreamer-video-1.0 gstreamer-audio-1.0 gstreamer-app-1.0)
     pkg_check_modules(Glib2 REQUIRED glib-2.0 gobject-2.0 gthread-2.0 gmodule-2.0)
     pkg_search_module(LIBUSB REQUIRED libusb-1.0)
@@ -113,7 +106,6 @@ else()
         ${SDL2_TTF_INCLUDE_DIRS}
         ${ZLIB_INCLUDE_DIRS}
         ${MINIZIP_INCLUDE_DIRS}
-        ${WEBP_INCLUDE_DIRS}
         ${GSTREAMER_INCLUDE_DIRS}
         ${GLIB2_INCLUDE_DIRS}
         ${Threads_INCLUDE_DIRS}
@@ -133,7 +125,6 @@ else()
         ${SDL2_TTF_LIBRARY_DIRS}
         ${ZLIB_LIBRARY_DIRS}
         ${MINIZIP_LIBRARY_DIRS}
-        ${WEBP_LIBRARY_DIRS}
         ${GSTREAMER_LIBRARY_DIRS}
         ${GLIB2_LIBRARY_DIRS}
         ${LIBUSB_LIBRARY_DIRS}
@@ -151,8 +142,6 @@ else()
         ${SDL2_TTF_LIBRARIES}
         ${ZLIB_LIBRARIES}
         ${MINIZIP_LIBRARIES}
-        ${WEBP_LIBRARIES}
-        ${WEBP_DEMUX_LIBRARIES}
         ${GSTREAMER_LIBRARIES}
         ${GLIB2_LIBRARIES}
         ${CMAKE_DL_LIBS}
@@ -174,7 +163,6 @@ set(RETROFE_INCLUDE_DIRS
     "${SDL2_MIXER_INCLUDE_DIRS}"
     "${SDL2_TTF_INCLUDE_DIRS}"
     "${ZLIB_INCLUDE_DIRS}"
-    "${WEBP_INCLUDE_DIRS}"
     "${QRCODEGEN_ROOT}"
     "${JSON_ROOT}"
     "${CURL_ROOT}/include"
@@ -196,11 +184,7 @@ if(WIN32)
     ${ZLIB_LIBRARIES}
 )
     list(APPEND RETROFE_LIBRARIES "${PACDRIVE_ROOT}/PacDrive64.lib")
-	    # Add libwebp, libwebpdecoder, and libwebpdemux to the libraries to be linked on Windows
     list(APPEND RETROFE_LIBRARIES 
-        "${WEBP_LIB}"
-        "${WEBP_ROOT}/lib/libwebpdecoder_dll.lib"
-        "${WEBP_ROOT}/lib/libwebpdemux_dll.lib"
         "${ZLIB_ROOT}/lib/minizip.lib"
         "${LIBSERIALPORT_ROOT}/lib/libserialport.lib"
         "dxgi.lib"
@@ -384,36 +368,10 @@ set_source_files_properties("${SQLITE3_ROOT}/sqlite3.c" PROPERTIES COMPILE_FLAGS
 add_executable(retrofe  ${RETROFE_SOURCES} ${RETROFE_HEADERS})
 add_dependencies(retrofe GenerateVersioningHeader)
 
-find_library(WEBPDEMUX_LIBRARY
-    NAMES webpdemux
-    HINTS /opt/homebrew/lib /usr/lib /usr/local/lib
-)
-
-find_library(WEBP_LIBRARY
-    NAMES webp
-    HINTS /opt/homebrew/lib /usr/lib /usr/local/lib
-)
-
 find_library(MINIZIP_LIBRARY
     NAMES minizip
     HINTS /opt/homebrew/lib /usr/lib /usr/local/lib
 )
-
-if(WEBPDEMUX_LIBRARY)
-    message(STATUS "Found webpdemux: ${WEBPDEMUX_LIBRARY}")
-    set(HAVE_WEBPDEMUX TRUE)
-else()
-    message(WARNING "webpdemux not found; assuming it's bundled in libwebp")
-    set(HAVE_WEBPDEMUX FALSE)
-endif()
-
-if(WEBP_LIBRARY)
-    message(STATUS "Found webp: ${WEBP_LIBRARY}")
-    set(HAVE_WEBP TRUE)
-else()
-    message(WARNING "webp not found; assuming it's bundled in libwebp")
-    set(HAVE_WEBP FALSE)
-endif()
 
 if(MINIZIP_LIBRARY)
     message(STATUS "Found minizip: ${MINIZIP_LIBRARY}")
@@ -421,14 +379,6 @@ if(MINIZIP_LIBRARY)
 else()
     message(WARNING "minizip not found")
     set(HAVE_MINIZIP FALSE)
-endif()
-
-if(HAVE_WEBPDEMUX)
-    target_link_libraries(retrofe ${WEBPDEMUX_LIBRARY})
-endif()
-
-if(HAVE_WEBP)
-    target_link_libraries(retrofe ${WEBP_LIBRARY})
 endif()
 
 if(HAVE_MINIZIP)
