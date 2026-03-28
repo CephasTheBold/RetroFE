@@ -1557,6 +1557,7 @@ bool SDL::renderCopy(SDL_Texture* texture, float alpha, SDL_Rect const* src, SDL
 			}
 
 			// Convert to pixel space (culling already done earlier)
+			SDL_FRect srcPx = { (float)srcRect.x, (float)srcRect.y, (float)srcRect.w, (float)srcRect.h };
 			SDL_FRect dstPx = { dstRect.x * scaleX, dstRect.y * scaleY, dstRect.w * scaleX, dstRect.h * scaleY };
 
 			// Set alpha modulation
@@ -1569,7 +1570,7 @@ bool SDL::renderCopy(SDL_Texture* texture, float alpha, SDL_Rect const* src, SDL
 			SDL_SetTextureAlphaMod(texture, alpha8);
 
 			// Render directly
-			bool success = SDL_RenderTexture(renderer_[m], texture, nullptr, &dstPx) == 0;
+			bool success = SDL_RenderTexture(renderer_[m], texture, &srcPx, &dstPx) == 0;
 
 			// Reset alpha mod if needed (optional, depending on usage)
 			// SDL_SetTextureAlphaMod(texture, 255);

@@ -1052,8 +1052,9 @@ int MusicPlayer::steadyMusicVolume() const {
 void MusicPlayer::addVisualizerListener(MusicPlayerComponent* listener) {
     std::lock_guard<std::mutex> lock(visualizerMutex_);
 
-    int f; SDL_AudioFormat fmt; int c;
-    if (Mix_QuerySpec(&f, (int*)&fmt, &c) == 1) {
+    int f; int fmtInt = 0; int c;
+    if (Mix_QuerySpec(&f, &fmtInt, &c) == 1) {
+        SDL_AudioFormat fmt = static_cast<SDL_AudioFormat>(fmtInt);
         audioChannels_ = c;
         audioSampleRate_ = f;
         if (fmt == SDL_AUDIO_U8 || fmt == SDL_AUDIO_S8) sampleSize_ = 1;
