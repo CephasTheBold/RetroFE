@@ -124,7 +124,7 @@ InputDetectionResult InputMonitor::checkInputEvents() {
 InputDetectionResult InputMonitor::pollJoystickSDL_() {
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
-        if (e.type == SDL_JOYBUTTONDOWN) {
+        if (e.type == SDL_EVENT_JOYSTICK_BUTTON_DOWN) {
             int buttonIdx = e.jbutton.button;
 
             if (singleQuitButtonIndices_.count(buttonIdx) > 0) {
@@ -188,7 +188,7 @@ InputDetectionResult InputMonitor::pollJoystickSDL_() {
                 return InputDetectionResult::PlayInput;
             }
         }
-        else if (e.type == SDL_JOYBUTTONUP) {
+        else if (e.type == SDL_EVENT_JOYSTICK_BUTTON_UP) {
             joystickButtonState_[e.jbutton.which][e.jbutton.button] = false;
         }
     }

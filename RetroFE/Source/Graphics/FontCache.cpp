@@ -18,13 +18,7 @@
 #include "../SDL.h"
 #include "../Utility/Log.h"
 #include "Font.h"
-#if __has_include(<SDL_ttf.h>)
-#include <SDL_ttf.h>
-#elif __has_include(<SDL2_ttf/SDL_ttf.h>)
-#include <SDL2_ttf/SDL_ttf.h>
-#else
-#error "Cannot find SDL_ttf header"
-#endif
+#include <SDL3_ttf/SDL_ttf.h>
 #include <sstream>
 #include <memory>
 

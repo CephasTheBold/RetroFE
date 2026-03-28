@@ -94,7 +94,7 @@ void Image::clearInstanceResourcesForRetry() {
     if (!animatedSurfaces_.empty()) {
         if (!isUsingCachedSurfaces_) {
             for (auto* s : animatedSurfaces_) {
-                if (s) SDL_FreeSurface(s);
+                if (s) SDL_DestroySurface(s);
             }
         }
         animatedSurfaces_.clear();
@@ -195,14 +195,14 @@ void Image::allocateGraphicsMemory() {
         }
 
         // Miss (or caching disabled): load from disk.
-        SDL_RWops* rw = SDL_RWFromFile(filePath.c_str(), "rb");
+        SDL_IOStream* rw = SDL_IOFromFile(filePath.c_str(), "rb");
         if (!rw) return false;
 
         // RAII for file rw unless we hand ownership to SDL_image with freesrc=1.
-        struct RWCloser {
-            void operator()(SDL_RWops* p) const noexcept { if (p) SDL_RWclose(p); }
+        struct IOCloser {
+            void operator()(SDL_IOStream* p) const noexcept { if (p) SDL_CloseIO(p); }
         };
-        std::unique_ptr<SDL_RWops, RWCloser> rwFile(rw);
+        std::unique_ptr<SDL_IOStream, IOCloser> rwFile(rw);
 
         bool success = false;
 
@@ -223,20 +223,20 @@ void Image::allocateGraphicsMemory() {
                     success = loadAnimatedWebP(buffer, ctx);
                 }
                 else {
-                    SDL_RWops* memRw = SDL_RWFromConstMem(buffer.data(), (int)buffer.size());
+                    SDL_IOStream* memRw = SDL_IOFromConstMem(buffer.data(), (int)buffer.size());
                     success = loadStaticImage(memRw, ctx); // frees memRw via freesrc=1
                 }
             }
             // rwFile closes automatically
         }
         else if (IMG_isGIF(rwFile.get())) {
-            // Hand ownership to IMG_LoadAnimation_RW by releasing unique_ptr and using freesrc=1 inside loader
-            SDL_RWops* raw = rwFile.release();
+            // Hand ownership to IMG_LoadAnimation_IO by releasing unique_ptr and using freesrc=1 inside loader
+            SDL_IOStream* raw = rwFile.release();
             success = loadAnimatedGIF(raw, ctx); // loader closes raw
         }
         else {
-            // Static (PNG/JPG/QOI/etc). Hand ownership to IMG_LoadTexture_RW by releasing and using freesrc=1.
-            SDL_RWops* raw = rwFile.release();
+            // Static (PNG/JPG/QOI/etc). Hand ownership to IMG_LoadTexture_IO by releasing and using freesrc=1.
+            SDL_IOStream* raw = rwFile.release();
             success = loadStaticImage(raw, ctx); // loader closes raw
         }
 
@@ -291,7 +291,7 @@ void Image::allocateGraphicsMemory() {
                     if (hasAnimatedToCache) {
                         // Destroy newly decoded surfaces from newCachedImage if we didn't adopt them.
                         for (auto* s : newCachedImage.animatedSurfaces) {
-                            if (s) SDL_FreeSurface(s);
+                            if (s) SDL_DestroySurface(s);
                         }
                         newCachedImage.animatedSurfaces.clear();
 
@@ -317,9 +317,9 @@ void Image::allocateGraphicsMemory() {
 
 // -------------------- Loading helpers --------------------
 
-bool Image::loadStaticImage(SDL_RWops* rw, LoadContext& ctx) {
-    // freesrc=1 => IMG_LoadTexture_RW closes rw
-    SDL_Texture* tex = IMG_LoadTexture_RW(SDL::getRenderer(baseViewInfo.Monitor), rw, 1);
+bool Image::loadStaticImage(SDL_IOStream* rw, LoadContext& ctx) {
+    // freesrc=1 => IMG_LoadTexture_IO closes rw
+    SDL_Texture* tex = IMG_LoadTexture_IO(SDL::getRenderer(baseViewInfo.Monitor), rw, 1);
     if (!tex) return false;
 
     int w = 0, h = 0;
@@ -341,11 +341,11 @@ bool Image::loadStaticImage(SDL_RWops* rw, LoadContext& ctx) {
     return true;
 }
 
-bool Image::loadAnimatedGIF(SDL_RWops* rw, LoadContext& ctx) {
+bool Image::loadAnimatedGIF(SDL_IOStream* rw, LoadContext& ctx) {
     resetAnimationState();
 
-    // freesrc=1 => IMG_LoadAnimation_RW closes rw
-    IMG_Animation* anim = IMG_LoadAnimation_RW(rw, 1);
+    // freesrc=1 => IMG_LoadAnimation_IO closes rw
+    IMG_Animation* anim = IMG_LoadAnimation_IO(rw, 1);
     if (!anim) return false;
 
     // Single-frame GIF: treat as static texture
@@ -377,7 +377,7 @@ bool Image::loadAnimatedGIF(SDL_RWops* rw, LoadContext& ctx) {
     decoded.reserve((size_t)anim->count);
 
     for (int i = 0; i < anim->count; ++i) {
-        SDL_Surface* s = SDL_ConvertSurfaceFormat(anim->frames[i], SDL_PIXELFORMAT_RGBA32, 0);
+        SDL_Surface* s = SDL_ConvertSurface(anim->frames[i], SDL_PIXELFORMAT_RGBA32);
         if (s) decoded.push_back(s);
     }
 
@@ -392,7 +392,7 @@ bool Image::loadAnimatedGIF(SDL_RWops* rw, LoadContext& ctx) {
     if (decoded.empty()) return false;
 
     if (!createAnimatedStreamingTexture(w, h)) {
-        for (auto* s : decoded) if (s) SDL_FreeSurface(s);
+        for (auto* s : decoded) if (s) SDL_DestroySurface(s);
         return false;
     }
 
@@ -474,20 +474,20 @@ bool Image::loadAnimatedWebP(const std::vector<uint8_t>& buffer, LoadContext& ct
                 prevRect = r;
             }
 
-            SDL_FreeSurface(fragment);
+            SDL_DestroySurface(fragment);
         }
 
         ok = (WebPDemuxNextFrame(&iter) != 0);
     }
 
     WebPDemuxReleaseIterator(&iter);
-    SDL_FreeSurface(canvas);
+    SDL_DestroySurface(canvas);
     WebPDemuxDelete(demux);
 
     if (decoded.empty()) return false;
 
     if (!createAnimatedStreamingTexture(width, height)) {
-        for (auto* s : decoded) if (s) SDL_FreeSurface(s);
+        for (auto* s : decoded) if (s) SDL_DestroySurface(s);
         return false;
     }
 
@@ -654,7 +654,7 @@ void Image::freeGraphicsMemory() {
     if (!animatedSurfaces_.empty()) {
         if (!isUsingCachedSurfaces_) {
             for (auto* s : animatedSurfaces_) {
-                if (s) SDL_FreeSurface(s);
+                if (s) SDL_DestroySurface(s);
             }
         }
         animatedSurfaces_.clear();
@@ -680,7 +680,7 @@ void Image::cleanupTextureCache() {
         }
 
         for (auto* s : entry.animatedSurfaces) {
-            if (s) SDL_FreeSurface(s);
+            if (s) SDL_DestroySurface(s);
         }
         entry.animatedSurfaces.clear();
         entry.frameDelay = 0;

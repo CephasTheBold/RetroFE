@@ -37,10 +37,10 @@ namespace {
 
 static inline int bytes_per_sample(SDL_AudioFormat f) noexcept {
     switch (f) {
-        case AUDIO_S8: case AUDIO_U8:                           return 1;
-        case AUDIO_S16LSB: case AUDIO_S16MSB:                   return 2;
-        case AUDIO_S32LSB: case AUDIO_S32MSB:                   return 4;
-        case AUDIO_F32LSB: case AUDIO_F32MSB:                   return 4;
+        case SDL_AUDIO_S8: case SDL_AUDIO_U8:                           return 1;
+        case SDL_AUDIO_S16LE: case SDL_AUDIO_S16BE:                   return 2;
+        case SDL_AUDIO_S32LE: case SDL_AUDIO_S32BE:                   return 4;
+        case SDL_AUDIO_F32LE: case SDL_AUDIO_F32BE:                   return 4;
         default:                                                return 2;
     }
 }
@@ -146,7 +146,7 @@ AudioBus::~AudioBus() {
 }
 
 void AudioBus::configureFromMixer() {
-    int freq = 48000, chans = 2; Uint16 fmt = AUDIO_S16SYS;
+    int freq = 48000, chans = 2; SDL_AudioFormat fmt = SDL_AUDIO_S16;
     (void)Mix_QuerySpec(&freq, &fmt, &chans);
     devFmt_ = fmt; devRate_ = freq; devChans_ = chans;
 }
@@ -248,7 +248,7 @@ void AudioBus::push(SourceId id, const void* data, int bytes) {
     // ========== 2. APPLY PER-SOURCE GAIN ==========
     float sourceGain = sp->gain.load(std::memory_order_relaxed);
 
-    if (devFmt_ == AUDIO_S16SYS) {
+    if (devFmt_ == SDL_AUDIO_S16) {
         int16_t* samples = reinterpret_cast<int16_t*>(temp_buffer.data());
         int num_samples = bytes / sizeof(int16_t);
 
@@ -256,7 +256,7 @@ void AudioBus::push(SourceId id, const void* data, int bytes) {
             samples[i] = static_cast<int16_t>(samples[i] * sourceGain);
         }
     }
-    else if (devFmt_ == AUDIO_F32LSB || devFmt_ == AUDIO_F32MSB) {
+    else if (devFmt_ == SDL_AUDIO_F32LE || devFmt_ == SDL_AUDIO_F32BE) {
         float* samples = reinterpret_cast<float*>(temp_buffer.data());
         int num_samples = bytes / sizeof(float);
 
@@ -264,7 +264,7 @@ void AudioBus::push(SourceId id, const void* data, int bytes) {
             samples[i] *= sourceGain;
         }
     }
-    else if (devFmt_ == AUDIO_S32LSB || devFmt_ == AUDIO_S32MSB) {
+    else if (devFmt_ == SDL_AUDIO_S32LE || devFmt_ == SDL_AUDIO_S32BE) {
         int32_t* samples = reinterpret_cast<int32_t*>(temp_buffer.data());
         int num_samples = bytes / sizeof(int32_t);
 
@@ -275,7 +275,7 @@ void AudioBus::push(SourceId id, const void* data, int bytes) {
 
     // ========== 3. OPTIONAL: SOFT LIMITER instead of de-clicker ==========
     // This prevents hard clipping while preserving dynamics better
-    if (devFmt_ == AUDIO_S16SYS) {
+    if (devFmt_ == SDL_AUDIO_S16) {
         int16_t* samples = reinterpret_cast<int16_t*>(temp_buffer.data());
         int num_samples = bytes / sizeof(int16_t);
 
@@ -402,31 +402,31 @@ void AudioBus::mixInto(Uint8* dst, int lenBytes) {
 
     switch (devFmt_) {
         // -------- float32 --------
-#if defined(AUDIO_F32LSB)
-        case AUDIO_F32LSB:
+#if defined(SDL_AUDIO_F32LE)
+        case SDL_AUDIO_F32LE:
 #endif
-#if defined(AUDIO_F32MSB)
-        case AUDIO_F32MSB:
+#if defined(SDL_AUDIO_F32BE)
+        case SDL_AUDIO_F32BE:
 #endif
         mixInto_f32(dst, lenBytes);
         break;
 
         // -------- signed 32-bit int --------
-#if defined(AUDIO_S32LSB)
-        case AUDIO_S32LSB:
+#if defined(SDL_AUDIO_S32LE)
+        case SDL_AUDIO_S32LE:
 #endif
-#if defined(AUDIO_S32MSB)
-        case AUDIO_S32MSB:
+#if defined(SDL_AUDIO_S32BE)
+        case SDL_AUDIO_S32BE:
 #endif
         mixInto_s32(dst, lenBytes);
         break;
 
         // -------- signed 16-bit int --------
-#if defined(AUDIO_S16LSB)
-        case AUDIO_S16LSB:
+#if defined(SDL_AUDIO_S16LE)
+        case SDL_AUDIO_S16LE:
 #endif
-#if defined(AUDIO_S16MSB)
-        case AUDIO_S16MSB:
+#if defined(SDL_AUDIO_S16BE)
+        case SDL_AUDIO_S16BE:
 #endif
         mixInto_s16(dst, lenBytes);
         break;

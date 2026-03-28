@@ -24,7 +24,7 @@ void TouchDragHandler::reset() {
 }
 
 bool TouchDragHandler::update(SDL_Event& e) {
-    if (e.type == SDL_FINGERDOWN) {
+    if (e.type == SDL_EVENT_FINGER_DOWN) {
         if (!isTracking_) {
             isTracking_ = true;
             trackingFingerId_ = e.tfinger.fingerId;
@@ -33,14 +33,14 @@ bool TouchDragHandler::update(SDL_Event& e) {
             accumulator_ = 0.0f;
         }
     }
-    else if (e.type == SDL_FINGERMOTION) {
+    else if (e.type == SDL_EVENT_FINGER_MOTION) {
         if (isTracking_ && e.tfinger.fingerId == trackingFingerId_) {
             // Motion events just update the finger's current position.
             currentX_ = e.tfinger.x;
             currentY_ = e.tfinger.y;
         }
     }
-    else if (e.type == SDL_FINGERUP) {
+    else if (e.type == SDL_EVENT_FINGER_UP) {
         if (isTracking_ && e.tfinger.fingerId == trackingFingerId_) {
             isTracking_ = false;
             accumulator_ = 0.0f;

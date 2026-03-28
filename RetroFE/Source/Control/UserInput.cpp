@@ -216,7 +216,7 @@ bool UserInput::HandleInputMapping(const std::string& token, KeyCode_E key, cons
                 ss << Utils::replace(joydesc, "button", "");
                 ss >> button;
                 if (sdlGameController_) {
-                    keyHandlers_.push_back(std::pair<InputHandler*, KeyCode_E>(new GameControllerButtonHandler(joynum, static_cast<SDL_GameControllerButton>(button)), key));
+                    keyHandlers_.push_back(std::pair<InputHandler*, KeyCode_E>(new GameControllerButtonHandler(joynum, static_cast<SDL_GamepadButton>(button)), key));
                     LOG_INFO("Input", "Binding game controller button " + ss.str());
                 } else {
                     keyHandlers_.push_back(std::pair<InputHandler*, KeyCode_E>(new JoyButtonHandler(joynum, button), key));
@@ -234,13 +234,13 @@ bool UserInput::HandleInputMapping(const std::string& token, KeyCode_E key, cons
 
                 if (sdlGameController_) {
                     // In game controller mode, D-pad directions map to individual buttons
-                    SDL_GameControllerButton dpadButton = SDL_CONTROLLER_BUTTON_INVALID;
-                    if (joydesc == "up")         dpadButton = SDL_CONTROLLER_BUTTON_DPAD_UP;
-                    else if (joydesc == "down")  dpadButton = SDL_CONTROLLER_BUTTON_DPAD_DOWN;
-                    else if (joydesc == "left")  dpadButton = SDL_CONTROLLER_BUTTON_DPAD_LEFT;
-                    else if (joydesc == "right") dpadButton = SDL_CONTROLLER_BUTTON_DPAD_RIGHT;
+                    SDL_GamepadButton dpadButton = SDL_GAMEPAD_BUTTON_INVALID;
+                    if (joydesc == "up")         dpadButton = SDL_GAMEPAD_BUTTON_DPAD_UP;
+                    else if (joydesc == "down")  dpadButton = SDL_GAMEPAD_BUTTON_DPAD_DOWN;
+                    else if (joydesc == "left")  dpadButton = SDL_GAMEPAD_BUTTON_DPAD_LEFT;
+                    else if (joydesc == "right") dpadButton = SDL_GAMEPAD_BUTTON_DPAD_RIGHT;
 
-                    if (dpadButton != SDL_CONTROLLER_BUTTON_INVALID) {
+                    if (dpadButton != SDL_GAMEPAD_BUTTON_INVALID) {
                         keyHandlers_.push_back(std::pair<InputHandler*, KeyCode_E>(new GameControllerButtonHandler(joynum, dpadButton), key));
                         LOG_INFO("Input", "Binding game controller D-pad " + joydesc);
                         found = true;
@@ -295,7 +295,7 @@ bool UserInput::HandleInputMapping(const std::string& token, KeyCode_E key, cons
                 ss >> axis;
                 if (sdlGameController_) {
                     LOG_INFO("Input", "Binding game controller axis " + ss.str());
-                    keyHandlers_.push_back(std::pair<InputHandler*, KeyCode_E>(new GameControllerAxisHandler(joynum, static_cast<SDL_GameControllerAxis>(axis), min, max), key));
+                    keyHandlers_.push_back(std::pair<InputHandler*, KeyCode_E>(new GameControllerAxisHandler(joynum, static_cast<SDL_GamepadAxis>(axis), min, max), key));
                 } else {
                     LOG_INFO("Input", "Binding joypad axis " + ss.str());
                     keyHandlers_.push_back(std::pair<InputHandler*, KeyCode_E>(new JoyAxisHandler(joynum, axis, min, max), key));
@@ -368,12 +368,12 @@ void UserInput::resetStates()
 bool UserInput::update(SDL_Event& e) {
     if (sdlGameController_) {
         // Handle adding a game controller
-        if (e.type == SDL_CONTROLLERDEVICEADDED) {
-            SDL_GameController* controller = SDL_GameControllerOpen(e.cdevice.which);
+        if (e.type == SDL_EVENT_GAMEPAD_ADDED) {
+            SDL_GameController* controller = SDL_OpenGamepad(e.gdevice.which);
             if (!controller) {
                 LOG_ERROR("Input", "Failed to open game controller: " << SDL_GetError());
             } else {
-                SDL_JoystickID id = SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(controller));
+                SDL_JoystickID id = SDL_GetGamepadID(controller);
                 bool added = false;
                 for (unsigned int i = 0; i < cMaxJoy; i++) {
                     if (gameControllers_[i] == -1) {
@@ -385,49 +385,49 @@ bool UserInput::update(SDL_Event& e) {
                 }
                 if (!added) {
                     LOG_WARNING("Input", "Maximum number of game controllers (" << cMaxJoy << ") reached; new controller ignored");
-                    SDL_GameControllerClose(controller);
+                    SDL_CloseGamepad(controller);
                 }
             }
         }
 
         // Handle removing a game controller
-        if (e.type == SDL_CONTROLLERDEVICEREMOVED) {
+        if (e.type == SDL_EVENT_GAMEPAD_REMOVED) {
             for (unsigned int i = 0; i < cMaxJoy; i++) {
-                if (gameControllers_[i] == e.cdevice.which) {
+                if (gameControllers_[i] == e.gdevice.which) {
                     gameControllers_[i] = -1;
                     LOG_INFO("Input", "Game controller disconnected from slot " << i);
                     break;
                 }
             }
-            SDL_GameController* controller = SDL_GameControllerFromInstanceID(e.cdevice.which);
+            SDL_GameController* controller = SDL_GetGamepadFromID(e.gdevice.which);
             if (controller) {
-                SDL_GameControllerClose(controller);
+                SDL_CloseGamepad(controller);
             }
             // Reset all handler pressed states so no input remains "stuck" after disconnect
             resetStates();
         }
 
         // Remap game controller events: replace instance ID with slot index
-        if (e.type == SDL_CONTROLLERBUTTONUP   ||
-            e.type == SDL_CONTROLLERBUTTONDOWN ||
-            e.type == SDL_CONTROLLERAXISMOTION) {
+        if (e.type == SDL_EVENT_GAMEPAD_BUTTON_UP   ||
+            e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN ||
+            e.type == SDL_EVENT_GAMEPAD_AXIS_MOTION) {
             for (unsigned int i = 0; i < cMaxJoy; i++) {
-                if (gameControllers_[i] == e.cbutton.which) {
-                    e.cdevice.which  = i;
-                    e.cbutton.which  = i;
-                    e.caxis.which    = i;
+                if (gameControllers_[i] == e.gbutton.which) {
+                    e.gdevice.which  = i;
+                    e.gbutton.which  = i;
+                    e.gaxis.which    = i;
                     break;
                 }
             }
         }
     } else {
         // Handle adding a joystick
-        if (e.type == SDL_JOYDEVICEADDED) {
-            SDL_Joystick* joy = SDL_JoystickOpen(e.jdevice.which);
+        if (e.type == SDL_EVENT_JOYSTICK_ADDED) {
+            SDL_Joystick* joy = SDL_OpenJoystick(e.jdevice.which);
             if (!joy) {
                 LOG_ERROR("Input", "Failed to open joystick: " << SDL_GetError());
             } else {
-                SDL_JoystickID id = SDL_JoystickInstanceID(joy);
+                SDL_JoystickID id = SDL_GetJoystickID(joy);
                 bool added = false;
                 for (unsigned int i = 0; i < cMaxJoy; i++) {
                     if (joysticks_[i] == -1) {
@@ -439,13 +439,13 @@ bool UserInput::update(SDL_Event& e) {
                 }
                 if (!added) {
                     LOG_WARNING("Input", "Maximum number of joysticks (" << cMaxJoy << ") reached; new joystick ignored");
-                    SDL_JoystickClose(joy);
+                    SDL_CloseJoystick(joy);
                 }
             }
         }
 
         // Handle removing a joystick
-        if (e.type == SDL_JOYDEVICEREMOVED) {
+        if (e.type == SDL_EVENT_JOYSTICK_REMOVED) {
             for (unsigned int i = 0; i < cMaxJoy; i++) {
                 if (joysticks_[i] == e.jdevice.which) {
                     joysticks_[i] = -1;
@@ -453,19 +453,19 @@ bool UserInput::update(SDL_Event& e) {
                     break;
                 }
             }
-            SDL_Joystick* joy = SDL_JoystickFromInstanceID(e.jdevice.which);
+            SDL_Joystick* joy = SDL_GetJoystickFromID(e.jdevice.which);
             if (joy) {
-                SDL_JoystickClose(joy);
+                SDL_CloseJoystick(joy);
             }
             // Reset all handler pressed states so no input remains "stuck" after disconnect
             resetStates();
         }
 
         // Remap joystick events
-        if (e.type == SDL_JOYAXISMOTION ||
-            e.type == SDL_JOYBUTTONUP ||
-            e.type == SDL_JOYBUTTONDOWN ||
-            e.type == SDL_JOYHATMOTION) {
+        if (e.type == SDL_EVENT_JOYSTICK_AXIS_MOTION ||
+            e.type == SDL_EVENT_JOYSTICK_BUTTON_UP ||
+            e.type == SDL_EVENT_JOYSTICK_BUTTON_DOWN ||
+            e.type == SDL_EVENT_JOYSTICK_HAT_MOTION) {
             for (unsigned int i = 0; i < cMaxJoy; i++) {
                 if (joysticks_[i] == e.jdevice.which) {
                     e.jdevice.which = i;

@@ -889,7 +889,7 @@ void ReloadableGlobalHiscores::reloadTexture() {
                             src.w * k,
                             src.h * k
                         };
-                        SDL_RenderCopyF(r, outlineTex, &src, &dst);
+                        SDL_RenderTexture(r, outlineTex, &src, &dst);
                         penX += g.advance * k;
                     }
                     prev = ch;
@@ -919,7 +919,7 @@ void ReloadableGlobalHiscores::reloadTexture() {
                             g.fillW * k,
                             g.fillH * k
                         };
-                        SDL_RenderCopyF(r, fillTex, &srcFill, &dst);
+                        SDL_RenderTexture(r, fillTex, &srcFill, &dst);
                         penX += g.advance * k;
                     }
                     prev = ch;
@@ -1203,7 +1203,7 @@ void ReloadableGlobalHiscores::reloadTexture() {
                     cachedQrTextures_[i] = tex;
                     cachedQrSizes_[i] = { surf->w, surf->h };
                 }
-                SDL_FreeSurface(surf);
+                SDL_DestroySurface(surf);
             }
         }
 
@@ -1565,7 +1565,7 @@ void ReloadableGlobalHiscores::reloadTexture() {
             const auto& L = cachedTableLayouts_[t];
             // QR dst rect is cached; no per-frame math
             SDL_SetTextureAlphaMod(tex, qrAlpha); // (optional) add per-QR alpha cache to skip repeats
-            SDL_RenderCopyF(renderer, tex, nullptr, &L.qrDst);
+            SDL_RenderTexture(renderer, tex, nullptr, &L.qrDst);
         }
     }
 

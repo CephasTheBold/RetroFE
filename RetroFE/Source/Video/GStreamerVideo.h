@@ -131,7 +131,7 @@ private:
 	// Tracked allocation state to avoid redundant SDL_QueryTexture calls
 	int allocatedWidth_{ 0 };
 	int allocatedHeight_{ 0 };
-	SDL_PixelFormatEnum allocatedFormat_{ SDL_PIXELFORMAT_UNKNOWN };
+	SDL_PixelFormat allocatedFormat_{ SDL_PIXELFORMAT_UNKNOWN };
 	int allocatedRingCount_{ 0 };
 	
 	int monitor_;
@@ -149,7 +149,7 @@ private:
 	int lastPerspectiveW_{ -1 };
 	int lastPerspectiveH_{ -1 };
 	SDL_Texture* texture_{ nullptr };
-	SDL_PixelFormatEnum sdlFormat_{ SDL_PIXELFORMAT_UNKNOWN };
+	SDL_PixelFormat sdlFormat_{ SDL_PIXELFORMAT_UNKNOWN };
 	guint elementSetupHandlerId_{ 0 };
 	guint busWatchId_{ 0 };
 	guint padProbeId_{ 0 };

@@ -153,17 +153,17 @@ static void bakeAlphaMaskFromPNG_(SDL_Surface* qr, const std::string& maskPath) 
 		LOG_WARNING("HiScores", std::string("QR mask load failed: ") + IMG_GetError());
 		return;
 	}
-	SDL_Surface* mask = SDL_ConvertSurfaceFormat(raw, SDL_PIXELFORMAT_ARGB8888, 0);
-	SDL_FreeSurface(raw);
+	SDL_Surface* mask = SDL_ConvertSurface(raw, SDL_PIXELFORMAT_ARGB8888);
+	SDL_DestroySurface(raw);
 	if (!mask) return;
 
 	// Scale if sizes differ
 	if (mask->w != qr->w || mask->h != qr->h) {
 		SDL_Surface* scaled = SDL_CreateRGBSurfaceWithFormat(0, qr->w, qr->h, 32, SDL_PIXELFORMAT_ARGB8888);
-		if (!scaled) { SDL_FreeSurface(mask); return; }
+		if (!scaled) { SDL_DestroySurface(mask); return; }
 		SDL_Rect dst{ 0, 0, qr->w, qr->h };
 		SDL_BlitScaled(mask, nullptr, scaled, &dst);
-		SDL_FreeSurface(mask);
+		SDL_DestroySurface(mask);
 		mask = scaled;
 	}
 
@@ -186,7 +186,7 @@ static void bakeAlphaMaskFromPNG_(SDL_Surface* qr, const std::string& maskPath) 
 	SDL_UnlockSurface(mask);
 	SDL_UnlockSurface(qr);
 
-	SDL_FreeSurface(mask);
+	SDL_DestroySurface(mask);
 }
 
 static inline bool isScaledScoreMode_(GlobalSort m) {
@@ -533,11 +533,11 @@ static void ensureAllQrPngsAsync_(std::vector<std::string> ids) {
 					++failed;
 					LOG_WARNING("HiScores", std::string("QR: IMG_SavePNG failed for ")
 						+ gid + " : " + IMG_GetError());
-					SDL_FreeSurface(surf);
+					SDL_DestroySurface(surf);
 					continue;
 				}
 
-				SDL_FreeSurface(surf);
+				SDL_DestroySurface(surf);
 				++made;
 			}
 

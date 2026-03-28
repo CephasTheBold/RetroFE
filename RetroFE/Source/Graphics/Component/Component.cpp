@@ -75,7 +75,7 @@ void Component::allocateGraphicsMemory()
 
         backgroundTexture_ = SDL_CreateTextureFromSurface(SDL::getRenderer(baseViewInfo.Monitor), surface);
 
-        SDL_FreeSurface(surface);
+        SDL_DestroySurface(surface);
         SDL_SetTextureBlendMode(backgroundTexture_, SDL_BLENDMODE_BLEND);
     }
 }

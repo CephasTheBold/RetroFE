@@ -21,13 +21,7 @@
 #include "Utility/Log.h"
 #include "Sound/AudioBus.h"
 #include "Sound/MusicPlayer.h"
-#if __has_include(<SDL_mixer.h>)
-#include <SDL_mixer.h>
-#elif __has_include(<SDL2_mixer/SDL_mixer.h>)
-#include <SDL2_mixer/SDL_mixer.h>
-#else
-#error "Cannot find SDL_mixer header"
-#endif
+#include <SDL3_mixer/SDL_mixer.h>
 #include "Utility/Utils.h"
 
 std::vector<SDL_Window*>    SDL::window_;
@@ -46,10 +40,6 @@ int                         SDL::screenCount_;
 
 // Initialize SDL
 bool SDL::initialize(Configuration& config) {
-	int audioRate = 48000;
-	Uint16 audioFormat = MIX_DEFAULT_FORMAT; // 16-bit stereo
-	int audioChannels = 2;
-	int audioBuffers = 4096;
 	bool hideMouse;
 
 	SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI, "1");
@@ -66,7 +56,7 @@ bool SDL::initialize(Configuration& config) {
 	if (SDL_WasInit(0) == 0) {
 		// First-time startup: Initialize everything.
 		LOG_INFO("SDL", "Performing first-time full initialization of all SDL subsystems.");
-		if (SDL_Init(SDL_INIT_TIMER | SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) != 0)
+		if (SDL_Init(SDL_INIT_TIMER | SDL_INIT_VIDEO | SDL_INIT_GAMEPAD) != 0)
 		{
 			std::string error = SDL_GetError();
 			LOG_ERROR("SDL", "Initial SDL_Init failed: " + error);
@@ -98,7 +88,7 @@ bool SDL::initialize(Configuration& config) {
 #ifdef WIN32
 	std::string SDLRenderDriver = "direct3d11";
 	config.getProperty(OPTION_SDLRENDERDRIVER, SDLRenderDriver);
-	if (SDL_SetHint(SDL_HINT_RENDER_DRIVER, SDLRenderDriver.c_str()) != SDL_TRUE)
+	if (!SDL_SetHint(SDL_HINT_RENDER_DRIVER, SDLRenderDriver.c_str()))
 	{
 		LOG_ERROR("SDL", "Error setting renderer to " + SDLRenderDriver + ". Available: direct3d, direct3d11, direct3d12, opengl, opengles2, opengles, metal, and software");
 	}
@@ -191,7 +181,9 @@ bool SDL::initialize(Configuration& config) {
 		}
 	}
 
-	int numDisplays = SDL_GetNumVideoDisplays();
+	int numDisplays = 0;
+	SDL_DisplayID* sdlDisplayIDs = SDL_GetDisplays(&numDisplays);
+	SDL_free(sdlDisplayIDs);
 	if (numDisplays < 1) {
 		LOG_ERROR("SDL", "No SDL video displays detected.");
 		return false;
@@ -222,7 +214,12 @@ bool SDL::initialize(Configuration& config) {
 	for (int logicalScreen = 0; logicalScreen < screenCount_; ++logicalScreen)
 	{
 		int physicalDisplay = screenOrder[logicalScreen];
-		SDL_DisplayMode mode;
+		// In SDL3, display IDs start at 1. Get actual display IDs.
+		int numAvailDisplays = 0;
+		SDL_DisplayID* availDisplayIDs = SDL_GetDisplays(&numAvailDisplays);
+		SDL_DisplayID physicalDisplayID = (availDisplayIDs && physicalDisplay < numAvailDisplays)
+			? availDisplayIDs[physicalDisplay] : 1;
+		SDL_free(availDisplayIDs);
 		bool windowBorder = false;
 		bool windowResize = false;
 		Uint32 windowFlags = SDL_WINDOW_OPENGL;
@@ -234,7 +231,8 @@ bool SDL::initialize(Configuration& config) {
 		if (windowResize)
 			windowFlags |= SDL_WINDOW_RESIZABLE;
 
-		if (SDL_GetCurrentDisplayMode(physicalDisplay, &mode) != 0)
+		const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(physicalDisplayID);
+		if (!mode)
 		{
 			if (logicalScreen == 0)
 			{
@@ -254,8 +252,8 @@ bool SDL::initialize(Configuration& config) {
 			}
 		}
 
-		windowWidth_.push_back(mode.w);
-		displayWidth_.push_back(mode.w);
+		windowWidth_.push_back(mode->w);
+		displayWidth_.push_back(mode->w);
 		std::string hString = "";
 		if (logicalScreen == 0)
 			config.getProperty(OPTION_HORIZONTAL, hString);
@@ -286,8 +284,8 @@ bool SDL::initialize(Configuration& config) {
 			return false;
 		}
 
-		windowHeight_.push_back(mode.h);
-		displayHeight_.push_back(mode.h);
+		windowHeight_.push_back(mode->h);
+		displayHeight_.push_back(mode->h);
 		std::string vString = "";
 		if (logicalScreen == 0)
 			config.getProperty(OPTION_VERTICAL, vString);
@@ -330,7 +328,7 @@ bool SDL::initialize(Configuration& config) {
 		if (fullscreen_[logicalScreen])
 		{
 #ifdef WIN32
-			windowFlags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
+			windowFlags |= SDL_WINDOW_FULLSCREEN;
 #elif defined(__APPLE__)
 			windowFlags |= SDL_WINDOW_BORDERLESS;
 #else
@@ -344,7 +342,7 @@ bool SDL::initialize(Configuration& config) {
 #elif defined(__APPLE__)
 			windowFlags |= SDL_WINDOW_BORDERLESS;
 #else
-			windowFlags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
+			windowFlags |= SDL_WINDOW_FULLSCREEN;
 #endif
 		}
 
@@ -372,8 +370,12 @@ bool SDL::initialize(Configuration& config) {
 		if (!window_[logicalScreen])
 		{
 			window_[logicalScreen] = SDL_CreateWindow(retrofeTitle.c_str(),
-				SDL_WINDOWPOS_CENTERED_DISPLAY(physicalDisplay), SDL_WINDOWPOS_CENTERED_DISPLAY(physicalDisplay),
 				windowWidth_[logicalScreen], windowHeight_[logicalScreen], windowFlags);
+			if (window_[logicalScreen]) {
+				SDL_SetWindowPosition(window_[logicalScreen],
+					SDL_WINDOWPOS_CENTERED_DISPLAY(physicalDisplayID),
+					SDL_WINDOWPOS_CENTERED_DISPLAY(physicalDisplayID));
+			}
 		}
 
 		if (window_[logicalScreen] == NULL)
@@ -398,20 +400,17 @@ bool SDL::initialize(Configuration& config) {
 #else
 				SDL_WarpMouseInWindow(window_[logicalScreen], windowWidth_[logicalScreen] / 2, windowHeight_[logicalScreen] / 2);
 #endif
-				SDL_SetRelativeMouseMode(SDL_TRUE);
+				SDL_SetWindowRelativeMouseMode(window_[logicalScreen], true);
 			}
 			bool vSync = false;
 			config.getProperty(OPTION_VSYNC, vSync);
 			if (!renderer_[logicalScreen])
 			{
-				if (vSync)
+				renderer_[logicalScreen] = SDL_CreateRenderer(window_[logicalScreen], NULL);
+				if (renderer_[logicalScreen] && vSync)
 				{
-					renderer_[logicalScreen] = SDL_CreateRenderer(window_[logicalScreen], -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+					SDL_SetRenderVSync(renderer_[logicalScreen], 1);
 					LOG_INFO("SDL", "vSync Enabled");
-				}
-				else
-				{
-					renderer_[logicalScreen] = SDL_CreateRenderer(window_[logicalScreen], -1, SDL_RENDERER_ACCELERATED);
 				}
 			}
 			if (renderer_[logicalScreen] == NULL)
@@ -455,37 +454,29 @@ bool SDL::initialize(Configuration& config) {
 					}
 				}
 
-				SDL_RendererInfo info;
-				if (SDL_GetRendererInfo(renderer_[logicalScreen], &info) == 0)
 				{
-					std::string screenIndexStr = std::to_string(logicalScreen);
-					std::string logMessage = "Current rendering backend for renderer " + screenIndexStr + ": ";
-					logMessage += info.name;
-					LOG_INFO("SDL", logMessage);
-
-					// Log the supported pixel formats
-					logMessage = "Supported pixel formats for renderer " + screenIndexStr + ":";
-					for (Uint32 i = 0; i < info.num_texture_formats; ++i)
+					const char* rendName = SDL_GetRendererName(renderer_[logicalScreen]);
+					if (rendName)
 					{
-						const char* formatName = SDL_GetPixelFormatName(info.texture_formats[i]);
-						logMessage += "\n  - " + std::string(formatName);
-					}
-					LOG_INFO("SDL", logMessage);
+						std::string screenIndexStr = std::to_string(logicalScreen);
+						std::string logMessage = "Current rendering backend for renderer " + screenIndexStr + ": ";
+						logMessage += rendName;
+						LOG_INFO("SDL", logMessage);
 
-					if (strcmp(info.name, "opengl") == 0)
-					{
-						int GlSwapInterval = 1;
-						config.getProperty(OPTION_GLSWAPINTERVAL, GlSwapInterval);
-						if (SDL_GL_SetSwapInterval(GlSwapInterval) < 0)
+						if (strcmp(rendName, "opengl") == 0)
 						{
-							LOG_ERROR("SDL", "Unable to set OpenGL swap interval: " + std::string(SDL_GetError()));
+							int GlSwapInterval = 1;
+							config.getProperty(OPTION_GLSWAPINTERVAL, GlSwapInterval);
+							if (SDL_GL_SetSwapInterval(GlSwapInterval) < 0)
+							{
+								LOG_ERROR("SDL", "Unable to set OpenGL swap interval: " + std::string(SDL_GetError()));
+							}
 						}
 					}
-				}
-
-				else
-				{
-					LOG_ERROR("SDL", "Could not retrieve renderer info for renderer " + screenIndex + " Error: " + SDL_GetError());
+					else
+					{
+						LOG_ERROR("SDL", "Could not retrieve renderer info for renderer " + screenIndex + " Error: " + SDL_GetError());
+					}
 				}
 			}
 		}
@@ -501,7 +492,7 @@ bool SDL::initialize(Configuration& config) {
 
 	if (num_audio_devices_open == 0) {
 		// No audio device is open, so initialize it and the decoders.
-		if (Mix_OpenAudio(audioRate, audioFormat, audioChannels, audioBuffers) == -1)
+		if (Mix_OpenAudio(0, NULL) == -1)
 		{
 			std::string error = Mix_GetError();
 			LOG_WARNING("SDL", "Audio initialize failed: " + error);
@@ -599,7 +590,7 @@ bool SDL::deInitialize(bool fullShutdown) { // The 'fullShutdown' parameter is k
 	// Step 2: Decide which subsystems to shut down.
 	if (fullShutdown)
 	{
-		SDL_ShowCursor(SDL_TRUE);
+		SDL_ShowCursor();
 		// This is the final application exit. Shut down everything.
 		LOG_INFO("SDL", "Performing full de-initialization of all SDL subsystems.");
 		Mix_CloseAudio();
@@ -641,12 +632,12 @@ std::string SDL::getRendererBackend(int index) {
 		return "Invalid renderer index";
 	}
 
-	SDL_RendererInfo info;
-	if (SDL_GetRendererInfo(renderer, &info) != 0) {
-		return std::string("Error getting renderer info: ") + SDL_GetError();
+	const char* name = SDL_GetRendererName(renderer);
+	if (!name) {
+		return std::string("Error getting renderer name: ") + SDL_GetError();
 	}
 
-	return std::string(info.name);
+	return std::string(name);
 }
 
 // Get the window
@@ -809,11 +800,19 @@ bool SDL::renderCopy(SDL_Texture* texture, float alpha, SDL_Rect const* src, SDL
 			if (srcRect.h > 0 && srcRect.w > 0) {
 				dstRect.y += windowHeight_[viewInfo.Monitor] / 2;
 				SDL_SetTextureAlphaMod(texture, static_cast<char>(alpha * 255));
-				SDL_RenderCopyEx(renderer_[viewInfo.Monitor], texture, &srcRect, &dstRect, angle, nullptr, SDL_FLIP_NONE);
+				{
+    SDL_FRect fsrc = {(float)srcRect.x, (float)srcRect.y, (float)srcRect.w, (float)srcRect.h};
+    SDL_FRect fdst = {(float)dstRect.x, (float)dstRect.y, (float)dstRect.w, (float)dstRect.h};
+    SDL_RenderTextureRotated(renderer_[viewInfo.Monitor], texture, &fsrc, &fdst, angle, nullptr, SDL_FLIP_NONE);
+};
 				dstRect.x = windowWidth_[viewInfo.Monitor] - dstRect.x - dstRect.w;
 				dstRect.y = windowHeight_[viewInfo.Monitor] - dstRect.y - dstRect.h;
 				angle += 180;
-				SDL_RenderCopyEx(renderer_[viewInfo.Monitor], texture, &srcRect, &dstRect, angle, nullptr, SDL_FLIP_NONE);
+				{
+    SDL_FRect fsrc = {(float)srcRect.x, (float)srcRect.y, (float)srcRect.w, (float)srcRect.h};
+    SDL_FRect fdst = {(float)dstRect.x, (float)dstRect.y, (float)dstRect.w, (float)dstRect.h};
+    SDL_RenderTextureRotated(renderer_[viewInfo.Monitor], texture, &fsrc, &fdst, angle, nullptr, SDL_FLIP_NONE);
+};
 			}
 		}
 		else {
@@ -823,11 +822,19 @@ bool SDL::renderCopy(SDL_Texture* texture, float alpha, SDL_Rect const* src, SDL
 				dstRect.y = tmp - dstRect.h / 2 + dstRect.w / 2;
 				angle += 90;
 				SDL_SetTextureAlphaMod(texture, static_cast<char>(alpha * 255));
-				SDL_RenderCopyEx(renderer_[viewInfo.Monitor], texture, &srcRect, &dstRect, angle, nullptr, SDL_FLIP_NONE);
+				{
+    SDL_FRect fsrc = {(float)srcRect.x, (float)srcRect.y, (float)srcRect.w, (float)srcRect.h};
+    SDL_FRect fdst = {(float)dstRect.x, (float)dstRect.y, (float)dstRect.w, (float)dstRect.h};
+    SDL_RenderTextureRotated(renderer_[viewInfo.Monitor], texture, &fsrc, &fdst, angle, nullptr, SDL_FLIP_NONE);
+};
 				dstRect.x = windowWidth_[viewInfo.Monitor] - dstRect.x - dstRect.w;
 				dstRect.y = windowHeight_[viewInfo.Monitor] - dstRect.y - dstRect.h;
 				angle += 180;
-				SDL_RenderCopyEx(renderer_[viewInfo.Monitor], texture, &srcRect, &dstRect, angle, nullptr, SDL_FLIP_NONE);
+				{
+    SDL_FRect fsrc = {(float)srcRect.x, (float)srcRect.y, (float)srcRect.w, (float)srcRect.h};
+    SDL_FRect fdst = {(float)dstRect.x, (float)dstRect.y, (float)dstRect.w, (float)dstRect.h};
+    SDL_RenderTextureRotated(renderer_[viewInfo.Monitor], texture, &fsrc, &fdst, angle, nullptr, SDL_FLIP_NONE);
+};
 			}
 		}
 	}
@@ -852,7 +859,11 @@ bool SDL::renderCopy(SDL_Texture* texture, float alpha, SDL_Rect const* src, SDL
 
 		if (srcRect.h > 0 && srcRect.w > 0) {
 			SDL_SetTextureAlphaMod(texture, static_cast<char>(alpha * 255));
-			SDL_RenderCopyEx(renderer_[viewInfo.Monitor], texture, &srcRect, &dstRect, angle, nullptr, SDL_FLIP_NONE);
+			{
+    SDL_FRect fsrc = {(float)srcRect.x, (float)srcRect.y, (float)srcRect.w, (float)srcRect.h};
+    SDL_FRect fdst = {(float)dstRect.x, (float)dstRect.y, (float)dstRect.w, (float)dstRect.h};
+    SDL_RenderTextureRotated(renderer_[viewInfo.Monitor], texture, &fsrc, &fdst, angle, nullptr, SDL_FLIP_NONE);
+};
 		}
 	}
 
@@ -929,11 +940,19 @@ bool SDL::renderCopy(SDL_Texture* texture, float alpha, SDL_Rect const* src, SDL
 				if (srcRect.h > 0 && srcRect.w > 0) {
 					dstRect.y += windowHeight_[viewInfo.Monitor] / 2;
 					SDL_SetTextureAlphaMod(texture, static_cast<char>(viewInfo.ReflectionAlpha * alpha * 255));
-					SDL_RenderCopyEx(renderer_[viewInfo.Monitor], texture, &srcRect, &dstRect, angle, nullptr, SDL_FLIP_VERTICAL);
+					{
+    SDL_FRect fsrc = {(float)srcRect.x, (float)srcRect.y, (float)srcRect.w, (float)srcRect.h};
+    SDL_FRect fdst = {(float)dstRect.x, (float)dstRect.y, (float)dstRect.w, (float)dstRect.h};
+    SDL_RenderTextureRotated(renderer_[viewInfo.Monitor], texture, &fsrc, &fdst, angle, nullptr, SDL_FLIP_VERTICAL);
+};
 					dstRect.x = windowWidth_[viewInfo.Monitor] - dstRect.x - dstRect.w;
 					dstRect.y = windowHeight_[viewInfo.Monitor] - dstRect.y - dstRect.h;
 					angle += 180;
-					SDL_RenderCopyEx(renderer_[viewInfo.Monitor], texture, &srcRect, &dstRect, angle, nullptr, SDL_FLIP_VERTICAL);
+					{
+    SDL_FRect fsrc = {(float)srcRect.x, (float)srcRect.y, (float)srcRect.w, (float)srcRect.h};
+    SDL_FRect fdst = {(float)dstRect.x, (float)dstRect.y, (float)dstRect.w, (float)dstRect.h};
+    SDL_RenderTextureRotated(renderer_[viewInfo.Monitor], texture, &fsrc, &fdst, angle, nullptr, SDL_FLIP_VERTICAL);
+};
 				}
 			}
 			else {
@@ -943,11 +962,19 @@ bool SDL::renderCopy(SDL_Texture* texture, float alpha, SDL_Rect const* src, SDL
 					dstRect.y = tmp - dstRect.h / 2 + dstRect.w / 2;
 					angle += 90;
 					SDL_SetTextureAlphaMod(texture, static_cast<char>(viewInfo.ReflectionAlpha * alpha * 255));
-					SDL_RenderCopyEx(renderer_[viewInfo.Monitor], texture, &srcRect, &dstRect, angle, nullptr, SDL_FLIP_VERTICAL);
+					{
+    SDL_FRect fsrc = {(float)srcRect.x, (float)srcRect.y, (float)srcRect.w, (float)srcRect.h};
+    SDL_FRect fdst = {(float)dstRect.x, (float)dstRect.y, (float)dstRect.w, (float)dstRect.h};
+    SDL_RenderTextureRotated(renderer_[viewInfo.Monitor], texture, &fsrc, &fdst, angle, nullptr, SDL_FLIP_VERTICAL);
+};
 					dstRect.x = windowWidth_[viewInfo.Monitor] - dstRect.x - dstRect.w;
 					dstRect.y = windowHeight_[viewInfo.Monitor] - dstRect.y - dstRect.h;
 					angle += 180;
-					SDL_RenderCopyEx(renderer_[viewInfo.Monitor], texture, &srcRect, &dstRect, angle, nullptr, SDL_FLIP_VERTICAL);
+					{
+    SDL_FRect fsrc = {(float)srcRect.x, (float)srcRect.y, (float)srcRect.w, (float)srcRect.h};
+    SDL_FRect fdst = {(float)dstRect.x, (float)dstRect.y, (float)dstRect.w, (float)dstRect.h};
+    SDL_RenderTextureRotated(renderer_[viewInfo.Monitor], texture, &fsrc, &fdst, angle, nullptr, SDL_FLIP_VERTICAL);
+};
 				}
 			}
 		}
@@ -971,7 +998,11 @@ bool SDL::renderCopy(SDL_Texture* texture, float alpha, SDL_Rect const* src, SDL
 			}
 			if (srcRect.h > 0 && srcRect.w > 0) {
 				SDL_SetTextureAlphaMod(texture, static_cast<char>(viewInfo.ReflectionAlpha * alpha * 255));
-				SDL_RenderCopyEx(renderer_[viewInfo.Monitor], texture, &srcRect, &dstRect, angle, nullptr, SDL_FLIP_VERTICAL);
+				{
+    SDL_FRect fsrc = {(float)srcRect.x, (float)srcRect.y, (float)srcRect.w, (float)srcRect.h};
+    SDL_FRect fdst = {(float)dstRect.x, (float)dstRect.y, (float)dstRect.w, (float)dstRect.h};
+    SDL_RenderTextureRotated(renderer_[viewInfo.Monitor], texture, &fsrc, &fdst, angle, nullptr, SDL_FLIP_VERTICAL);
+};
 			}
 		}
 	}
@@ -1044,11 +1075,19 @@ bool SDL::renderCopy(SDL_Texture* texture, float alpha, SDL_Rect const* src, SDL
 				if (srcRect.h > 0 && srcRect.w > 0) {
 					dstRect.y += windowHeight_[viewInfo.Monitor] / 2;
 					SDL_SetTextureAlphaMod(texture, static_cast<char>(viewInfo.ReflectionAlpha * alpha * 255));
-					SDL_RenderCopyEx(renderer_[viewInfo.Monitor], texture, &srcRect, &dstRect, angle, nullptr, SDL_FLIP_VERTICAL);
+					{
+    SDL_FRect fsrc = {(float)srcRect.x, (float)srcRect.y, (float)srcRect.w, (float)srcRect.h};
+    SDL_FRect fdst = {(float)dstRect.x, (float)dstRect.y, (float)dstRect.w, (float)dstRect.h};
+    SDL_RenderTextureRotated(renderer_[viewInfo.Monitor], texture, &fsrc, &fdst, angle, nullptr, SDL_FLIP_VERTICAL);
+};
 					dstRect.x = windowWidth_[viewInfo.Monitor] - dstRect.x - dstRect.w;
 					dstRect.y = windowHeight_[viewInfo.Monitor] - dstRect.y - dstRect.h;
 					angle += 180;
-					SDL_RenderCopyEx(renderer_[viewInfo.Monitor], texture, &srcRect, &dstRect, angle, nullptr, SDL_FLIP_VERTICAL);
+					{
+    SDL_FRect fsrc = {(float)srcRect.x, (float)srcRect.y, (float)srcRect.w, (float)srcRect.h};
+    SDL_FRect fdst = {(float)dstRect.x, (float)dstRect.y, (float)dstRect.w, (float)dstRect.h};
+    SDL_RenderTextureRotated(renderer_[viewInfo.Monitor], texture, &fsrc, &fdst, angle, nullptr, SDL_FLIP_VERTICAL);
+};
 				}
 			}
 			else {
@@ -1058,11 +1097,19 @@ bool SDL::renderCopy(SDL_Texture* texture, float alpha, SDL_Rect const* src, SDL
 					dstRect.y = tmp - dstRect.h / 2 + dstRect.w / 2;
 					angle += 90;
 					SDL_SetTextureAlphaMod(texture, static_cast<char>(viewInfo.ReflectionAlpha * alpha * 255));
-					SDL_RenderCopyEx(renderer_[viewInfo.Monitor], texture, &srcRect, &dstRect, angle, nullptr, SDL_FLIP_VERTICAL);
+					{
+    SDL_FRect fsrc = {(float)srcRect.x, (float)srcRect.y, (float)srcRect.w, (float)srcRect.h};
+    SDL_FRect fdst = {(float)dstRect.x, (float)dstRect.y, (float)dstRect.w, (float)dstRect.h};
+    SDL_RenderTextureRotated(renderer_[viewInfo.Monitor], texture, &fsrc, &fdst, angle, nullptr, SDL_FLIP_VERTICAL);
+};
 					dstRect.x = windowWidth_[viewInfo.Monitor] - dstRect.x - dstRect.w;
 					dstRect.y = windowHeight_[viewInfo.Monitor] - dstRect.y - dstRect.h;
 					angle += 180;
-					SDL_RenderCopyEx(renderer_[viewInfo.Monitor], texture, &srcRect, &dstRect, angle, nullptr, SDL_FLIP_VERTICAL);
+					{
+    SDL_FRect fsrc = {(float)srcRect.x, (float)srcRect.y, (float)srcRect.w, (float)srcRect.h};
+    SDL_FRect fdst = {(float)dstRect.x, (float)dstRect.y, (float)dstRect.w, (float)dstRect.h};
+    SDL_RenderTextureRotated(renderer_[viewInfo.Monitor], texture, &fsrc, &fdst, angle, nullptr, SDL_FLIP_VERTICAL);
+};
 				}
 			}
 		}
@@ -1086,7 +1133,11 @@ bool SDL::renderCopy(SDL_Texture* texture, float alpha, SDL_Rect const* src, SDL
 			}
 			if (srcRect.h > 0 && srcRect.w > 0) {
 				SDL_SetTextureAlphaMod(texture, static_cast<char>(viewInfo.ReflectionAlpha * alpha * 255));
-				SDL_RenderCopyEx(renderer_[viewInfo.Monitor], texture, &srcRect, &dstRect, angle, nullptr, SDL_FLIP_VERTICAL);
+				{
+    SDL_FRect fsrc = {(float)srcRect.x, (float)srcRect.y, (float)srcRect.w, (float)srcRect.h};
+    SDL_FRect fdst = {(float)dstRect.x, (float)dstRect.y, (float)dstRect.w, (float)dstRect.h};
+    SDL_RenderTextureRotated(renderer_[viewInfo.Monitor], texture, &fsrc, &fdst, angle, nullptr, SDL_FLIP_VERTICAL);
+};
 			}
 		}
 	}
@@ -1159,11 +1210,19 @@ bool SDL::renderCopy(SDL_Texture* texture, float alpha, SDL_Rect const* src, SDL
 				if (srcRect.h > 0 && srcRect.w > 0) {
 					dstRect.y += windowHeight_[viewInfo.Monitor] / 2;
 					SDL_SetTextureAlphaMod(texture, static_cast<char>(viewInfo.ReflectionAlpha * alpha * 255));
-					SDL_RenderCopyEx(renderer_[viewInfo.Monitor], texture, &srcRect, &dstRect, angle, nullptr, SDL_FLIP_HORIZONTAL);
+					{
+    SDL_FRect fsrc = {(float)srcRect.x, (float)srcRect.y, (float)srcRect.w, (float)srcRect.h};
+    SDL_FRect fdst = {(float)dstRect.x, (float)dstRect.y, (float)dstRect.w, (float)dstRect.h};
+    SDL_RenderTextureRotated(renderer_[viewInfo.Monitor], texture, &fsrc, &fdst, angle, nullptr, SDL_FLIP_HORIZONTAL);
+};
 					dstRect.x = windowWidth_[viewInfo.Monitor] - dstRect.x - dstRect.w;
 					dstRect.y = windowHeight_[viewInfo.Monitor] - dstRect.y - dstRect.h;
 					angle += 180;
-					SDL_RenderCopyEx(renderer_[viewInfo.Monitor], texture, &srcRect, &dstRect, angle, nullptr, SDL_FLIP_HORIZONTAL);
+					{
+    SDL_FRect fsrc = {(float)srcRect.x, (float)srcRect.y, (float)srcRect.w, (float)srcRect.h};
+    SDL_FRect fdst = {(float)dstRect.x, (float)dstRect.y, (float)dstRect.w, (float)dstRect.h};
+    SDL_RenderTextureRotated(renderer_[viewInfo.Monitor], texture, &fsrc, &fdst, angle, nullptr, SDL_FLIP_HORIZONTAL);
+};
 				}
 			}
 			else {
@@ -1173,11 +1232,19 @@ bool SDL::renderCopy(SDL_Texture* texture, float alpha, SDL_Rect const* src, SDL
 					dstRect.y = tmp - dstRect.h / 2 + dstRect.w / 2;
 					angle += 90;
 					SDL_SetTextureAlphaMod(texture, static_cast<char>(viewInfo.ReflectionAlpha * alpha * 255));
-					SDL_RenderCopyEx(renderer_[viewInfo.Monitor], texture, &srcRect, &dstRect, angle, nullptr, SDL_FLIP_HORIZONTAL);
+					{
+    SDL_FRect fsrc = {(float)srcRect.x, (float)srcRect.y, (float)srcRect.w, (float)srcRect.h};
+    SDL_FRect fdst = {(float)dstRect.x, (float)dstRect.y, (float)dstRect.w, (float)dstRect.h};
+    SDL_RenderTextureRotated(renderer_[viewInfo.Monitor], texture, &fsrc, &fdst, angle, nullptr, SDL_FLIP_HORIZONTAL);
+};
 					dstRect.x = windowWidth_[viewInfo.Monitor] - dstRect.x - dstRect.w;
 					dstRect.y = windowHeight_[viewInfo.Monitor] - dstRect.y - dstRect.h;
 					angle += 180;
-					SDL_RenderCopyEx(renderer_[viewInfo.Monitor], texture, &srcRect, &dstRect, angle, nullptr, SDL_FLIP_HORIZONTAL);
+					{
+    SDL_FRect fsrc = {(float)srcRect.x, (float)srcRect.y, (float)srcRect.w, (float)srcRect.h};
+    SDL_FRect fdst = {(float)dstRect.x, (float)dstRect.y, (float)dstRect.w, (float)dstRect.h};
+    SDL_RenderTextureRotated(renderer_[viewInfo.Monitor], texture, &fsrc, &fdst, angle, nullptr, SDL_FLIP_HORIZONTAL);
+};
 				}
 			}
 		}
@@ -1201,7 +1268,11 @@ bool SDL::renderCopy(SDL_Texture* texture, float alpha, SDL_Rect const* src, SDL
 			}
 			if (srcRect.h > 0 && srcRect.w > 0) {
 				SDL_SetTextureAlphaMod(texture, static_cast<char>(viewInfo.ReflectionAlpha * alpha * 255));
-				SDL_RenderCopyEx(renderer_[viewInfo.Monitor], texture, &srcRect, &dstRect, angle, nullptr, SDL_FLIP_HORIZONTAL);
+				{
+    SDL_FRect fsrc = {(float)srcRect.x, (float)srcRect.y, (float)srcRect.w, (float)srcRect.h};
+    SDL_FRect fdst = {(float)dstRect.x, (float)dstRect.y, (float)dstRect.w, (float)dstRect.h};
+    SDL_RenderTextureRotated(renderer_[viewInfo.Monitor], texture, &fsrc, &fdst, angle, nullptr, SDL_FLIP_HORIZONTAL);
+};
 			}
 		}
 	}
@@ -1274,11 +1345,19 @@ bool SDL::renderCopy(SDL_Texture* texture, float alpha, SDL_Rect const* src, SDL
 				if (srcRect.h > 0 && srcRect.w > 0) {
 					dstRect.y += windowHeight_[viewInfo.Monitor] / 2;
 					SDL_SetTextureAlphaMod(texture, static_cast<char>(viewInfo.ReflectionAlpha * alpha * 255));
-					SDL_RenderCopyEx(renderer_[viewInfo.Monitor], texture, &srcRect, &dstRect, angle, nullptr, SDL_FLIP_HORIZONTAL);
+					{
+    SDL_FRect fsrc = {(float)srcRect.x, (float)srcRect.y, (float)srcRect.w, (float)srcRect.h};
+    SDL_FRect fdst = {(float)dstRect.x, (float)dstRect.y, (float)dstRect.w, (float)dstRect.h};
+    SDL_RenderTextureRotated(renderer_[viewInfo.Monitor], texture, &fsrc, &fdst, angle, nullptr, SDL_FLIP_HORIZONTAL);
+};
 					dstRect.x = windowWidth_[viewInfo.Monitor] - dstRect.x - dstRect.w;
 					dstRect.y = windowHeight_[viewInfo.Monitor] - dstRect.y - dstRect.h;
 					angle += 180;
-					SDL_RenderCopyEx(renderer_[viewInfo.Monitor], texture, &srcRect, &dstRect, angle, nullptr, SDL_FLIP_HORIZONTAL);
+					{
+    SDL_FRect fsrc = {(float)srcRect.x, (float)srcRect.y, (float)srcRect.w, (float)srcRect.h};
+    SDL_FRect fdst = {(float)dstRect.x, (float)dstRect.y, (float)dstRect.w, (float)dstRect.h};
+    SDL_RenderTextureRotated(renderer_[viewInfo.Monitor], texture, &fsrc, &fdst, angle, nullptr, SDL_FLIP_HORIZONTAL);
+};
 				}
 			}
 			else {
@@ -1288,11 +1367,19 @@ bool SDL::renderCopy(SDL_Texture* texture, float alpha, SDL_Rect const* src, SDL
 					dstRect.y = tmp - dstRect.h / 2 + dstRect.w / 2;
 					angle += 90;
 					SDL_SetTextureAlphaMod(texture, static_cast<char>(viewInfo.ReflectionAlpha * alpha * 255));
-					SDL_RenderCopyEx(renderer_[viewInfo.Monitor], texture, &srcRect, &dstRect, angle, nullptr, SDL_FLIP_HORIZONTAL);
+					{
+    SDL_FRect fsrc = {(float)srcRect.x, (float)srcRect.y, (float)srcRect.w, (float)srcRect.h};
+    SDL_FRect fdst = {(float)dstRect.x, (float)dstRect.y, (float)dstRect.w, (float)dstRect.h};
+    SDL_RenderTextureRotated(renderer_[viewInfo.Monitor], texture, &fsrc, &fdst, angle, nullptr, SDL_FLIP_HORIZONTAL);
+};
 					dstRect.x = windowWidth_[viewInfo.Monitor] - dstRect.x - dstRect.w;
 					dstRect.y = windowHeight_[viewInfo.Monitor] - dstRect.y - dstRect.h;
 					angle += 180;
-					SDL_RenderCopyEx(renderer_[viewInfo.Monitor], texture, &srcRect, &dstRect, angle, nullptr, SDL_FLIP_HORIZONTAL);
+					{
+    SDL_FRect fsrc = {(float)srcRect.x, (float)srcRect.y, (float)srcRect.w, (float)srcRect.h};
+    SDL_FRect fdst = {(float)dstRect.x, (float)dstRect.y, (float)dstRect.w, (float)dstRect.h};
+    SDL_RenderTextureRotated(renderer_[viewInfo.Monitor], texture, &fsrc, &fdst, angle, nullptr, SDL_FLIP_HORIZONTAL);
+};
 				}
 			}
 		}
@@ -1316,7 +1403,11 @@ bool SDL::renderCopy(SDL_Texture* texture, float alpha, SDL_Rect const* src, SDL
 			}
 			if (srcRect.h > 0 && srcRect.w > 0) {
 				SDL_SetTextureAlphaMod(texture, static_cast<char>(viewInfo.ReflectionAlpha * alpha * 255));
-				SDL_RenderCopyEx(renderer_[viewInfo.Monitor], texture, &srcRect, &dstRect, angle, nullptr, SDL_FLIP_HORIZONTAL);
+				{
+    SDL_FRect fsrc = {(float)srcRect.x, (float)srcRect.y, (float)srcRect.w, (float)srcRect.h};
+    SDL_FRect fdst = {(float)dstRect.x, (float)dstRect.y, (float)dstRect.w, (float)dstRect.h};
+    SDL_RenderTextureRotated(renderer_[viewInfo.Monitor], texture, &fsrc, &fdst, angle, nullptr, SDL_FLIP_HORIZONTAL);
+};
 			}
 		}
 	}
@@ -1477,7 +1568,7 @@ bool SDL::renderCopy(SDL_Texture* texture, float alpha, SDL_Rect const* src, SDL
 			SDL_SetTextureAlphaMod(texture, alpha8);
 
 			// Render directly
-			bool success = SDL_RenderCopyF(renderer_[m], texture, &srcRect, &dstPx) == 0;
+			bool success = SDL_RenderTexture(renderer_[m], texture, nullptr, &dstPx) == 0;
 
 			// Reset alpha mod if needed (optional, depending on usage)
 			// SDL_SetTextureAlphaMod(texture, 255);

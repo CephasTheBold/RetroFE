@@ -113,7 +113,7 @@ static void renderTextOutlined(
                 const auto& g = it->second;
                 const SDL_Rect& src = g.rect;
                 SDL_FRect dst = { penX - g.fillX * k, ySnap - g.fillY * k, src.w * k, src.h * k };
-                SDL_RenderCopyF(r, outlineTex, &src, &dst);
+                SDL_RenderTexture(r, outlineTex, &src, &dst);
                 penX += g.advance * k;
             }
 
@@ -135,7 +135,7 @@ static void renderTextOutlined(
 
                 SDL_Rect srcFill{ g.rect.x + g.fillX, g.rect.y + g.fillY, g.fillW, g.fillH };
                 SDL_FRect dst{ penX, ySnap, g.fillW * k, g.fillH * k };
-                SDL_RenderCopyF(r, fillTex, &srcFill, &dst);
+                SDL_RenderTexture(r, fillTex, &srcFill, &dst);
 
                 penX += g.advance * k;
             }
@@ -638,7 +638,7 @@ void ReloadableHiscores::draw() {
 		cachedTotalTableWidth_,
 		static_cast<float>(headerTextureHeight_)
 	};
-	SDL_RenderCopyF(renderer, headerTexture_, nullptr, &destHeader);
+	SDL_RenderTexture(renderer, headerTexture_, nullptr, &destHeader);
 
 	// -- Draw table body --
 	float rowsAreaHeight = compositeHeight - headerTextureHeight_;
@@ -649,7 +649,7 @@ void ReloadableHiscores::draw() {
 		// NON-SCROLLING
 		SDL_Rect srcRows = { 0, 0, static_cast<int>(cachedTotalTableWidth_), tableRowsTextureHeight_ };
 		SDL_FRect destRows = { xOrigin, yOrigin + headerTextureHeight_, cachedTotalTableWidth_, static_cast<float>(tableRowsTextureHeight_) };
-		SDL_RenderCopyF(renderer, tableRowsTexture_, &srcRows, &destRows);
+		SDL_RenderTexture(renderer, tableRowsTexture_, &srcRows, &destRows);
 	}
 	else {
 		// SCROLLING
@@ -668,7 +668,7 @@ void ReloadableHiscores::draw() {
 					cachedTotalTableWidth_,
 					static_cast<float>(visibleSrcHeight)
 				};
-				SDL_RenderCopyF(renderer, tableRowsTexture_, &srcRows, &destRows);
+				SDL_RenderTexture(renderer, tableRowsTexture_, &srcRows, &destRows);
 			}
 		}
 	}	}

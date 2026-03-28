@@ -196,8 +196,8 @@ FontManager::~FontManager() { deInitialize(); }
 SDL_Surface* FontManager::applyVerticalGrayGradient(SDL_Surface* s, Uint8 topGray, Uint8 bottomGray) {
     if (!s) return nullptr;
     if (s->format->BytesPerPixel != 4) {
-        SDL_Surface* conv = SDL_ConvertSurfaceFormat(s, SDL_PIXELFORMAT_ARGB8888, 0);
-        SDL_FreeSurface(s);
+        SDL_Surface* conv = SDL_ConvertSurface(s, SDL_PIXELFORMAT_ARGB8888);
+        SDL_DestroySurface(s);
         if (!conv) return nullptr;
         s = conv;
     }
@@ -273,7 +273,7 @@ void FontManager::preloadGlyphRange(TTF_Font* font,
         if (!TTF_GlyphIsProvided32(font, ch)) continue;
 
         int minx, maxx, miny, maxy, adv;
-        if (TTF_GlyphMetrics(font, ch, &minx, &maxx, &miny, &maxy, &adv) != 0) continue;
+        if (TTF_GetGlyphMetrics(font, ch, &minx, &maxx, &miny, &maxy, &adv) != 0) continue;
 
         // Fill
         TTF_SetFontOutline(font, 0);
@@ -286,8 +286,8 @@ void FontManager::preloadGlyphRange(TTF_Font* font,
             if (!fill) continue;
         }
         else if (fill->format->BytesPerPixel != 4) {
-            SDL_Surface* conv = SDL_ConvertSurfaceFormat(fill, SDL_PIXELFORMAT_ARGB8888, 0);
-            SDL_FreeSurface(fill);
+            SDL_Surface* conv = SDL_ConvertSurface(fill, SDL_PIXELFORMAT_ARGB8888);
+            SDL_DestroySurface(fill);
             fill = conv;
             if (!fill) continue;
         }
@@ -301,10 +301,10 @@ void FontManager::preloadGlyphRange(TTF_Font* font,
             TTF_SetFontOutline(font, 0);
             if (outline) {
                 if (outline->format->BytesPerPixel != 4) {
-                    SDL_Surface* conv = SDL_ConvertSurfaceFormat(outline, SDL_PIXELFORMAT_ARGB8888, 0);
-                    SDL_FreeSurface(outline);
+                    SDL_Surface* conv = SDL_ConvertSurface(outline, SDL_PIXELFORMAT_ARGB8888);
+                    SDL_DestroySurface(outline);
                     outline = conv;
-                    if (!outline) { SDL_FreeSurface(fill); continue; }
+                    if (!outline) { SDL_DestroySurface(fill); continue; }
                 }
                 const int px = outlinePx_;
                 int minArea = 0, minW = 0, minH = 0;
@@ -444,7 +444,7 @@ bool FontManager::initialize() {
         if (outlinePx_ > 0) {
             atlasOutline = SDL_CreateRGBSurface(0, atlasWidth, atlasHeight, 32, rmask, gmask, bmask, amask);
             if (!atlasOutline) {
-                SDL_FreeSurface(atlasFill);
+                SDL_DestroySurface(atlasFill);
                 for (auto& p : temp_build) delete p.second;
                 delete mip;
                 float factor = (currentSize > SWITCH_THRESHOLD) ? DENSE_FACTOR : SPARSE_FACTOR;
@@ -467,8 +467,8 @@ bool FontManager::initialize() {
                 SDL_Rect dstFill{ dst.x + t.dx, dst.y + t.dy, t.fill->w, t.fill->h };
                 SDL_BlitSurface(t.fill, nullptr, atlasFill, &dstFill);
             }
-            if (t.fill)    SDL_FreeSurface(t.fill);
-            if (t.outline) SDL_FreeSurface(t.outline);
+            if (t.fill)    SDL_DestroySurface(t.fill);
+            if (t.outline) SDL_DestroySurface(t.outline);
         }
 
         // Create static atlas textures
@@ -490,8 +490,8 @@ bool FontManager::initialize() {
 
         mip->atlasW = atlasFill->w;
         mip->atlasH = atlasFill->h;
-        SDL_FreeSurface(atlasFill);
-        if (atlasOutline) SDL_FreeSurface(atlasOutline);
+        SDL_DestroySurface(atlasFill);
+        if (atlasOutline) SDL_DestroySurface(atlasOutline);
 
         // Dynamic atlases ? STREAMING
         mip->dynamicFillTexture = SDL_CreateTexture(
@@ -593,7 +593,7 @@ bool FontManager::loadGlyphOnDemand(Uint32 ch, MipLevel* mip) {
     TTF_Font* font = mip->font;
 
     int minx, maxx, miny, maxy, adv;
-    if (TTF_GlyphMetrics(font, ch, &minx, &maxx, &miny, &maxy, &adv) != 0) {
+    if (TTF_GetGlyphMetrics(font, ch, &minx, &maxx, &miny, &maxy, &adv) != 0) {
         return false;
     }
 
@@ -614,8 +614,8 @@ bool FontManager::loadGlyphOnDemand(Uint32 ch, MipLevel* mip) {
         if (!fill) return false;
     }
     else if (fill->format->BytesPerPixel != 4) {
-        SDL_Surface* conv = SDL_ConvertSurfaceFormat(fill, SDL_PIXELFORMAT_ARGB8888, 0);
-        SDL_FreeSurface(fill);
+        SDL_Surface* conv = SDL_ConvertSurface(fill, SDL_PIXELFORMAT_ARGB8888);
+        SDL_DestroySurface(fill);
         fill = conv;
         if (!fill) return false;
     }
@@ -628,10 +628,10 @@ bool FontManager::loadGlyphOnDemand(Uint32 ch, MipLevel* mip) {
         TTF_SetFontOutline(font, 0);
         if (outline) {
             if (outline->format->BytesPerPixel != 4) {
-                SDL_Surface* conv = SDL_ConvertSurfaceFormat(outline, SDL_PIXELFORMAT_ARGB8888, 0);
-                SDL_FreeSurface(outline);
+                SDL_Surface* conv = SDL_ConvertSurface(outline, SDL_PIXELFORMAT_ARGB8888);
+                SDL_DestroySurface(outline);
                 outline = conv;
-                if (!outline) { SDL_FreeSurface(fill); return false; }
+                if (!outline) { SDL_DestroySurface(fill); return false; }
             }
             const int px = outlinePx_;
             int minArea = 0, minW = 0, minH = 0;
@@ -658,8 +658,8 @@ bool FontManager::loadGlyphOnDemand(Uint32 ch, MipLevel* mip) {
     }
     if (mip->dynamicNextY + packedH + GLYPH_SPACING > DYNAMIC_ATLAS_SIZE) {
         LOG_WARNING("Font", "Dynamic atlas full; cannot load glyph U+" + std::to_string(ch));
-        SDL_FreeSurface(fill);
-        if (outline) SDL_FreeSurface(outline);
+        SDL_DestroySurface(fill);
+        if (outline) SDL_DestroySurface(outline);
         return false;
     }
 
@@ -710,8 +710,8 @@ bool FontManager::loadGlyphOnDemand(Uint32 ch, MipLevel* mip) {
     mip->dynamicNextX += packedW + GLYPH_SPACING;
     mip->dynamicRowHeight = std::max(mip->dynamicRowHeight, packedH);
 
-    SDL_FreeSurface(fill);
-    if (outline) SDL_FreeSurface(outline);
+    SDL_DestroySurface(fill);
+    if (outline) SDL_DestroySurface(outline);
     return true;
 }
 

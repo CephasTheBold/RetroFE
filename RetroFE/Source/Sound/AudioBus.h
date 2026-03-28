@@ -1,6 +1,6 @@
 #pragma once
-#include <SDL.h>
-#include <SDL_mixer.h>
+#include <SDL3/SDL.h>
+#include <SDL3_mixer/SDL_mixer.h>
 #include <atomic>
 #include <cstdint>
 #include <mutex>
@@ -93,7 +93,7 @@ private:
     std::unordered_map<SourceId, std::shared_ptr<Source>> sources_;
 
     SourceId        nextId_{ 1 };
-    SDL_AudioFormat devFmt_{ AUDIO_S16SYS };
+    SDL_AudioFormat devFmt_{ SDL_AUDIO_S16 };
     int             devRate_{ 48000 };
     int             devChans_{ 2 };
 };

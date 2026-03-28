@@ -34,10 +34,10 @@ set(KISSFFT_ROOT "${RETROFE_THIRD_PARTY_DIR}/kissfft-131.1.0")
 
 if(WIN32)
     if(MSVC)
-        set(SDL2_ROOT "${RETROFE_THIRD_PARTY_DIR}/SDL2-2.32.10")
-        set(SDL2_IMAGE_ROOT "${RETROFE_THIRD_PARTY_DIR}/SDL2_image-2.8.8")
-        set(SDL2_MIXER_ROOT "${RETROFE_THIRD_PARTY_DIR}/SDL2_mixer-2.8.1")
-        set(SDL2_TTF_ROOT "${RETROFE_THIRD_PARTY_DIR}/SDL2_ttf-2.24.0")
+        set(SDL3_ROOT "${RETROFE_THIRD_PARTY_DIR}/SDL3-3.2.0")
+        set(SDL3_IMAGE_ROOT "${RETROFE_THIRD_PARTY_DIR}/SDL3_image-3.2.0")
+        set(SDL3_MIXER_ROOT "${RETROFE_THIRD_PARTY_DIR}/SDL3_mixer-3.2.0")
+        set(SDL3_TTF_ROOT "${RETROFE_THIRD_PARTY_DIR}/SDL3_ttf-3.2.0")
     endif()
 
     set(ZLIB_ROOT "${RETROFE_THIRD_PARTY_DIR}/zlib13-dll")
@@ -61,19 +61,19 @@ endif()
 if(WIN32)
     find_package(Glib2 REQUIRED)
     find_package(GStreamer REQUIRED)
-    find_package(SDL2 REQUIRED)
-    find_package(SDL2_image REQUIRED)
-    find_package(SDL2_mixer REQUIRED)
-    find_package(SDL2_ttf REQUIRED)
+    find_package(SDL3 REQUIRED)
+    find_package(SDL3_image REQUIRED)
+    find_package(SDL3_mixer REQUIRED)
+    find_package(SDL3_ttf REQUIRED)
     find_package(ZLIB REQUIRED)
 
 elseif(APPLE)
     find_package(Glib2 REQUIRED)
     find_package(GStreamer REQUIRED)
-    find_package(SDL2 REQUIRED)
-    find_package(SDL2_image REQUIRED)
-    find_package(SDL2_mixer REQUIRED)
-    find_package(SDL2_ttf REQUIRED)
+    find_package(SDL3 REQUIRED)
+    find_package(SDL3_image REQUIRED)
+    find_package(SDL3_mixer REQUIRED)
+    find_package(SDL3_ttf REQUIRED)
     find_package(ZLIB REQUIRED)
     find_library(COREFOUNDATION CoreFoundation)
     find_library(IOKIT IOKit)
@@ -88,10 +88,10 @@ else()
     include(FindPkgConfig)
     
     # Find necessary libraries using pkg-config
-    pkg_search_module(SDL2 REQUIRED sdl2)
-    pkg_search_module(SDL2_IMAGE REQUIRED SDL2_image)
-    pkg_search_module(SDL2_MIXER REQUIRED SDL2_mixer)
-    pkg_search_module(SDL2_TTF REQUIRED SDL2_ttf)
+    pkg_search_module(SDL3 REQUIRED sdl3)
+    pkg_search_module(SDL3_IMAGE REQUIRED SDL3_image)
+    pkg_search_module(SDL3_MIXER REQUIRED SDL3_mixer)
+    pkg_search_module(SDL3_TTF REQUIRED SDL3_ttf)
     pkg_search_module(ZLIB REQUIRED zlib)
     pkg_search_module(MINIZIP REQUIRED minizip)
     pkg_search_module(WEBP REQUIRED libwebp)
@@ -107,10 +107,10 @@ else()
     
     # Include directories for all found libraries
     include_directories(
-        ${SDL2_INCLUDE_DIRS}
-        ${SDL2_IMAGE_INCLUDE_DIRS}
-        ${SDL2_MIXER_INCLUDE_DIRS}
-        ${SDL2_TTF_INCLUDE_DIRS}
+        ${SDL3_INCLUDE_DIRS}
+        ${SDL3_IMAGE_INCLUDE_DIRS}
+        ${SDL3_MIXER_INCLUDE_DIRS}
+        ${SDL3_TTF_INCLUDE_DIRS}
         ${ZLIB_INCLUDE_DIRS}
         ${MINIZIP_INCLUDE_DIRS}
         ${WEBP_INCLUDE_DIRS}
@@ -127,10 +127,10 @@ else()
     
     # Link directories (optional, mostly handled by pkg-config)
     link_directories(
-        ${SDL2_LIBRARY_DIRS}
-        ${SDL2_IMAGE_LIBRARY_DIRS}
-        ${SDL2_MIXER_LIBRARY_DIRS}
-        ${SDL2_TTF_LIBRARY_DIRS}
+        ${SDL3_LIBRARY_DIRS}
+        ${SDL3_IMAGE_LIBRARY_DIRS}
+        ${SDL3_MIXER_LIBRARY_DIRS}
+        ${SDL3_TTF_LIBRARY_DIRS}
         ${ZLIB_LIBRARY_DIRS}
         ${MINIZIP_LIBRARY_DIRS}
         ${WEBP_LIBRARY_DIRS}
@@ -145,10 +145,10 @@ else()
     
     # Append the necessary libraries to be linked
     list(APPEND RETROFE_LIBRARIES
-        ${SDL2_LIBRARIES}
-        ${SDL2_IMAGE_LIBRARIES}
-        ${SDL2_MIXER_LIBRARIES}
-        ${SDL2_TTF_LIBRARIES}
+        ${SDL3_LIBRARIES}
+        ${SDL3_IMAGE_LIBRARIES}
+        ${SDL3_MIXER_LIBRARIES}
+        ${SDL3_TTF_LIBRARIES}
         ${ZLIB_LIBRARIES}
         ${MINIZIP_LIBRARIES}
         ${WEBP_LIBRARIES}
@@ -169,10 +169,10 @@ else()
 set(RETROFE_INCLUDE_DIRS
     "${GLIB2_INCLUDE_DIRS}"
     "${GSTREAMER_INCLUDE_DIRS}"
-    "${SDL2_INCLUDE_DIRS}"
-    "${SDL2_IMAGE_INCLUDE_DIRS}"
-    "${SDL2_MIXER_INCLUDE_DIRS}"
-    "${SDL2_TTF_INCLUDE_DIRS}"
+    "${SDL3_INCLUDE_DIRS}"
+    "${SDL3_IMAGE_INCLUDE_DIRS}"
+    "${SDL3_MIXER_INCLUDE_DIRS}"
+    "${SDL3_TTF_INCLUDE_DIRS}"
     "${ZLIB_INCLUDE_DIRS}"
     "${WEBP_INCLUDE_DIRS}"
     "${QRCODEGEN_ROOT}"
@@ -189,10 +189,10 @@ if(WIN32)
     set(RETROFE_LIBRARIES
     ${GLIB2_LIBRARIES}
     ${GSTREAMER_LIBRARIES}
-    ${SDL2_LIBRARIES}
-    ${SDL2_IMAGE_LIBRARIES}
-    ${SDL2_MIXER_LIBRARIES}
-    ${SDL2_TTF_LIBRARIES}
+    ${SDL3_LIBRARIES}
+    ${SDL3_IMAGE_LIBRARIES}
+    ${SDL3_MIXER_LIBRARIES}
+    ${SDL3_TTF_LIBRARIES}
     ${ZLIB_LIBRARIES}
 )
     list(APPEND RETROFE_LIBRARIES "${PACDRIVE_ROOT}/PacDrive64.lib")
@@ -441,10 +441,10 @@ if(APPLE)
     target_link_libraries(retrofe
         ${COREFOUNDATION}
         ${IOKIT}
-        ${SDL2_LIBRARIES}
-        ${SDL2_IMAGE_LIBRARIES}
-        ${SDL2_MIXER_LIBRARIES}
-        ${SDL2_TTF_LIBRARIES}
+        ${SDL3_LIBRARIES}
+        ${SDL3_IMAGE_LIBRARIES}
+        ${SDL3_MIXER_LIBRARIES}
+        ${SDL3_TTF_LIBRARIES}
         ${LIBUSB_LIBRARY}
         ${GLIB2_LIBRARIES}
         ${GSTREAMER_LIBRARIES}

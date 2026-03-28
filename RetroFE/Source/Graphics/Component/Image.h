@@ -24,21 +24,15 @@
 #include <cstdint>
 
 #include "Component.h"
-#include <SDL.h>
+#include <SDL3/SDL.h>
 
-#if __has_include(<SDL_image.h>)
-#include <SDL_image.h>
-#elif __has_include(<SDL2_image/SDL_image.h>)
-#include <SDL2_image/SDL_image.h>
-#else
-#error "Cannot find SDL_image header"
-#endif
+#include <SDL3_image/SDL_image.h>
 
 #ifdef __APPLE__
 #include <webp/decode.h>
 #include <webp/demux.h>
 #elif defined(_WIN32)
-#include <SDL_image.h>
+#include <SDL3_image/SDL_image.h>
 #include <decode.h>
 #include <demux.h>
 #else
@@ -118,8 +112,8 @@ private:
 private:
     // Core loading helpers
     bool loadFromCache(const LoadContext& ctx);
-    bool loadStaticImage(SDL_RWops* rw, LoadContext& ctx);
-    bool loadAnimatedGIF(SDL_RWops* rw, LoadContext& ctx);
+    bool loadStaticImage(SDL_IOStream* rw, LoadContext& ctx);
+    bool loadAnimatedGIF(SDL_IOStream* rw, LoadContext& ctx);
     bool loadAnimatedWebP(const std::vector<uint8_t>& buffer, LoadContext& ctx);
 
     // WebP helpers
@@ -152,7 +146,7 @@ private:
 
     // Animation playback state
     size_t currentFrame_ = 0;
-    Uint32 lastFrameTime_ = 0;
+    Uint64 lastFrameTime_ = 0;
     int frameDelay_ = 0;
 
     bool useTextureCaching_ = false;

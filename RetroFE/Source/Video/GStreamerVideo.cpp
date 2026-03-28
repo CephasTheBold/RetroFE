@@ -27,7 +27,7 @@
 #include "../SDL.h"
 #include "../Utility/Log.h"
 #include "../Utility/Utils.h"
-#include <SDL.h>
+#include <SDL3/SDL.h>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>

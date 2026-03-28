@@ -50,13 +50,7 @@
 #include <cmath>
 #include <cstdint>
 #include <curl/curl.h>
-#if __has_include(<SDL_ttf.h>)
-#include <SDL_ttf.h>
-#elif __has_include(<SDL2_ttf/SDL_ttf.h>)
-#include <SDL2_ttf/SDL_ttf.h>
-#else
-#error "Cannot find SDL_ttf header"
-#endif
+#include <SDL3_ttf/SDL_ttf.h>
 
 #if defined(__linux) || defined(__APPLE__)
 #include <csignal>
@@ -71,8 +65,6 @@
 #endif
 
 #ifdef WIN32
-#include <SDL_syswm.h>
-#include <SDL_thread.h>
 #include <Windows.h>
 #include "StdAfx.h"
 #endif
@@ -212,8 +204,8 @@ void RetroFE::render() {
 
 		// Draw overlay into the render target (screen 0 only)
 		if (showFps_ && i == 0 && fpsOverlayTexture_) {
-			SDL_Rect dst{ 20, 20, fpsOverlayW_, fpsOverlayH_ };
-			SDL_RenderCopy(rr, fpsOverlayTexture_, nullptr, &dst);
+			SDL_FRect dst{ 20.0f, 20.0f, (float)fpsOverlayW_, (float)fpsOverlayH_ };
+			SDL_RenderTexture(rr, fpsOverlayTexture_, nullptr, &dst);
 		}
 	}
 
@@ -224,7 +216,7 @@ void RetroFE::render() {
 		if (!rr || !rt) continue;
 
 		SDL_SetRenderTarget(rr, nullptr);
-		SDL_RenderCopy(rr, rt, nullptr, nullptr);
+		SDL_RenderTexture(rr, rt, nullptr, nullptr);
 		SDL_RenderPresent(rr);
 
 		SDL::advanceRenderTarget(i);
@@ -239,7 +231,7 @@ void RetroFE::render() {
 	prevShowFps = showFps_;
 
 	if (showFpsJustEnabled) {
-		lastFpsUpdateTimestamp = SDL_GetTicks64();
+		lastFpsUpdateTimestamp = SDL_GetTicks();
 		framesSinceFpsUpdate = 0;
 		accumulatedRenderMs = 0.0;
 		waitingForFpsData = true;
@@ -270,7 +262,7 @@ void RetroFE::render() {
 			lateMaxUsInWindow = std::max(lateMaxUsInWindow, l);
 		}
 
-		const uint64_t now_ticks64 = SDL_GetTicks64();
+		const uint64_t now_ticks64 = SDL_GetTicks();
 		if (now_ticks64 - lastFpsUpdateTimestamp >= 1000) {
 			const uint64_t windowMs = now_ticks64 - lastFpsUpdateTimestamp;
 
@@ -316,7 +308,7 @@ void RetroFE::render() {
 		int outW = 0, outH = 0;
 		SDL_Renderer* renderer0 = SDL::getRenderer(0);
 		if (renderer0) {
-			SDL_GetRendererOutputSize(renderer0, &outW, &outH);
+			SDL_GetCurrentRenderOutputSize(renderer0, &outW, &outH);
 		}
 
 		if (waitingForFpsData) {
@@ -348,7 +340,7 @@ void RetroFE::render() {
 
 			if (debugFont_) {
 				SDL_Color color{ 255, 255, 0, 255 };
-				SDL_Surface* surf = TTF_RenderText_Blended(debugFont_, overlayText, color);
+				SDL_Surface* surf = TTF_RenderText_Blended(debugFont_, overlayText, 0, color);
 				if (surf) {
 					SDL_Renderer* r0 = SDL::getRenderer(0);
 					if (r0) {
@@ -356,7 +348,7 @@ void RetroFE::render() {
 						fpsOverlayW_ = surf->w;
 						fpsOverlayH_ = surf->h;
 					}
-					SDL_FreeSurface(surf);
+					SDL_DestroySurface(surf);
 				}
 			}
 		}
@@ -487,7 +479,7 @@ void RetroFE::initializeMusicPlayer() {
 void RetroFE::launchEnter() {
 	currentPage_->setIsLaunched(true);
 	currentPage_->restartAllByMonitor(0);
-	SDL_SetWindowGrab(SDL::getWindow(0), SDL_FALSE);
+	SDL_SetWindowMouseGrab(SDL::getWindow(0), false);
 
 	// --- NEW: Check if a reboot is already happening ---
 	std::string launcherName = currentPage_->getSelectedItem()->collectionInfo->launcher;
@@ -510,7 +502,7 @@ void RetroFE::launchEnter() {
 		LOG_INFO("RetroFE", "Skipping unloadSDL cycle; a full application reboot is scheduled.");
 	}
 #ifdef __APPLE__
-	SDL_SetRelativeMouseMode(SDL_FALSE);
+	SDL_SetWindowRelativeMouseMode(SDL::getWindow(0), false);
 #endif
 	if (musicPlayer_) {
 		musicPlayer_->onGameLaunchStart();
@@ -537,14 +529,14 @@ void RetroFE::launchExit(bool userInitiated) {
 #ifdef WIN32
 	// On Windows, SDL_RaiseWindow is not always enough to steal focus back from
 	// another application like Steam. We need to be more assertive using the native API.
-	SDL_SysWMinfo wminfo;
-	SDL_VERSION(&wminfo.version);
-	if (SDL_GetWindowWMInfo(SDL::getWindow(0), &wminfo)) {
-		HWND retroFeHWND = wminfo.info.win.window;
-		// This is a more forceful way to bring the window to the front.
-		SetForegroundWindow(retroFeHWND);
-		// It's also good practice to make sure it's not minimized.
-		ShowWindow(retroFeHWND, SW_RESTORE);
+	{
+		HWND retroFeHWND = (HWND)SDL_GetPointerProperty(SDL_GetWindowProperties(SDL::getWindow(0)), SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
+		if (retroFeHWND) {
+			// This is a more forceful way to bring the window to the front.
+			SetForegroundWindow(retroFeHWND);
+			// It's also good practice to make sure it's not minimized.
+			ShowWindow(retroFeHWND, SW_RESTORE);
+		}
 	}
 #else
 	// For other platforms, the SDL way is usually sufficient.
@@ -582,7 +574,7 @@ void RetroFE::launchExit(bool userInitiated) {
 	Utils::postMessage("MediaplayerHiddenWindow", 0x8001, 76, 0);
 #endif
 #ifdef __APPLE__
-	SDL_SetRelativeMouseMode(SDL_TRUE);
+	SDL_SetWindowRelativeMouseMode(SDL::getWindow(0), true);
 #endif
 	bool globalHiscoresEnabled = false;
 	config_.getProperty(OPTION_GLOBALHISCORESENABLED, globalHiscoresEnabled);
@@ -755,7 +747,7 @@ bool RetroFE::run() {
 
 	SDL_RestoreWindow(SDL::getWindow(0));
 	SDL_RaiseWindow(SDL::getWindow(0));
-	SDL_SetWindowGrab(SDL::getWindow(0), SDL_TRUE);
+	SDL_SetWindowMouseGrab(SDL::getWindow(0), true);
 
 	// Define control configuration
 	config_.import("controls", controlsConfPath + ".conf");
@@ -3210,10 +3202,10 @@ RetroFE::RETROFE_STATE RetroFE::processUserInput(Page* page) {
 	config_.getProperty(OPTION_INFOEXITONSCROLL, infoExitOnScroll);
 
 	std::map<unsigned int, bool> ssExitInputs = {
-		{SDL_MOUSEMOTION, true},          {SDL_KEYDOWN, true},
-		{SDL_MOUSEBUTTONDOWN, true},      {SDL_JOYBUTTONDOWN, true},
-		{SDL_JOYAXISMOTION, true},        {SDL_JOYHATMOTION, true},
-		{SDL_CONTROLLERBUTTONDOWN, true}, {SDL_CONTROLLERAXISMOTION, true},
+		{SDL_EVENT_MOUSE_MOTION, true},          {SDL_EVENT_KEY_DOWN, true},
+		{SDL_EVENT_MOUSE_BUTTON_DOWN, true},      {SDL_EVENT_JOYSTICK_BUTTON_DOWN, true},
+		{SDL_EVENT_JOYSTICK_AXIS_MOTION, true},        {SDL_EVENT_JOYSTICK_HAT_MOTION, true},
+		{SDL_EVENT_GAMEPAD_BUTTON_DOWN, true}, {SDL_EVENT_GAMEPAD_AXIS_MOTION, true},
 	};
 	bool exit = false;
 	RETROFE_STATE state = RETROFE_IDLE;

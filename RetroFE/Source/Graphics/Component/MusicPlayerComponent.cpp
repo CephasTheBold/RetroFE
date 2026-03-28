@@ -360,7 +360,7 @@ void MusicPlayerComponent::loadVolumeBarTextures() {
 	SDL_Surface* fullSurfaceRaw = IMG_Load(fullPath.c_str());
 	if (!fullSurfaceRaw || !volumeEmptyTexture_) {
 		LOG_ERROR("MusicPlayerComponent", "Failed to load volume bar assets");
-		if (fullSurfaceRaw) SDL_FreeSurface(fullSurfaceRaw);
+		if (fullSurfaceRaw) SDL_DestroySurface(fullSurfaceRaw);
 		if (volumeEmptyTexture_) {
 			SDL_DestroyTexture(volumeEmptyTexture_);
 			volumeEmptyTexture_ = nullptr;
@@ -369,8 +369,8 @@ void MusicPlayerComponent::loadVolumeBarTextures() {
 	}
 
 	// Convert to 32-bit RGBA format
-	SDL_Surface* fullSurface = SDL_ConvertSurfaceFormat(fullSurfaceRaw, SDL_PIXELFORMAT_RGBA8888, 0);
-	SDL_FreeSurface(fullSurfaceRaw); // no longer needed
+	SDL_Surface* fullSurface = SDL_ConvertSurface(fullSurfaceRaw, SDL_PIXELFORMAT_RGBA8888);
+	SDL_DestroySurface(fullSurfaceRaw); // no longer needed
 	if (!fullSurface) {
 		LOG_ERROR("MusicPlayerComponent", "Failed to convert full surface to RGBA8888");
 		SDL_DestroyTexture(volumeEmptyTexture_);
@@ -403,7 +403,7 @@ void MusicPlayerComponent::loadVolumeBarTextures() {
 	volumeBarHeight_ = fullSurface->h;
 	baseViewInfo.ImageWidth = static_cast<float>(volumeBarWidth_);
 	baseViewInfo.ImageHeight = static_cast<float>(volumeBarHeight_);
-	SDL_FreeSurface(fullSurface);
+	SDL_DestroySurface(fullSurface);
 
 	if (!volumeFullTexture_) {
 		LOG_ERROR("MusicPlayerComponent", "Failed to create texture from full surface");
@@ -1741,9 +1741,9 @@ void MusicPlayerComponent::loadAlbumArt() {
 	}
 	std::vector<unsigned char> albumArtData;
 	if (musicPlayer_->getAlbumArt(albumArtTrackIndex_, albumArtData) && !albumArtData.empty()) {
-		SDL_RWops* rw = SDL_RWFromConstMem(albumArtData.data(), static_cast<int>(albumArtData.size()));
+		SDL_IOStream* rw = SDL_IOFromConstMem(albumArtData.data(), static_cast<int>(albumArtData.size()));
 		if (rw) {
-			albumArtTexture_ = IMG_LoadTexture_RW(renderer_, rw, 1);
+			albumArtTexture_ = IMG_LoadTexture_IO(renderer_, rw, 1);
 			if (albumArtTexture_) {
 				SDL_QueryTexture(albumArtTexture_, nullptr, nullptr,
 					&albumArtTextureWidth_, &albumArtTextureHeight_);

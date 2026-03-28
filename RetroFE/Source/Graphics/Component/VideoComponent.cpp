@@ -32,11 +32,7 @@
 #include "../../Video/VideoFactory.h"
 #include "../Page.h"
 #ifdef __APPLE__
-#include "SDL2/SDL_rect.h"
-#include "SDL2/SDL_render.h"
 #else
-#include "SDL_rect.h"
-#include "SDL_render.h"
 #endif
 #include <gst/video/video.h>
 #include "../../Video/VideoPool.h"
