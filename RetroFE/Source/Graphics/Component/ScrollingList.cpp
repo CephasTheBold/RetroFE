@@ -985,7 +985,7 @@ void ScrollingList::resetTweens(Component* c, std::shared_ptr<AnimationEvents> s
     }
 }
 
-void ScrollingList::findMediaFiles(Item* item) const {
+void ScrollingList::findMediaFiles(Item* item) {
     std::string layoutName;
     config_.getProperty(OPTION_LAYOUT, layoutName);
     const std::string typeLC = Utils::toLower(imageType_);
@@ -1183,9 +1183,9 @@ bool ScrollingList::allocateTexture(size_t index, const Item* item) {
             components_[index] = t;
             return true;
         }
-        // If the pre-resolved path referred to a file that no longer exists (e.g. the
-        // fileCache was out of date), fall through to the full search below so the list
-        // still renders correctly.
+        // If component creation failed despite a resolved path (e.g. the file was
+        // removed after pre-resolution), fall through to the full search so the
+        // list still renders correctly.
     }
 
     // -------- Full fallback-ladder search --------

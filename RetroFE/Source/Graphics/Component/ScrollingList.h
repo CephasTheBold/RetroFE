@@ -208,7 +208,7 @@ private:
 
     // Runs the full fallback-ladder search and stores resolved file paths on the item.
     // Should only be called from the background thread (via preResolveMediaPaths).
-    void findMediaFiles(Item* item) const;
+    void findMediaFiles(Item* item);
 
     // Pre-resolves media paths for all items in the background.
     void preResolveMediaPaths(std::vector<Item*>* items);
