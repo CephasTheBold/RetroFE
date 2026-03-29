@@ -78,6 +78,43 @@ ScrollingList::ScrollingList( Configuration &c,
     listId_ = nextListId++;
 }
 
+ScrollingList::ScrollingList(const ScrollingList& other)
+    : Component(other)
+    , layoutMode_(other.layoutMode_)
+    , commonMode_(other.commonMode_)
+    , playlistType_(other.playlistType_)
+    , selectedImage_(other.selectedImage_)
+    , textFallback_(other.textFallback_)
+    , scrollPoints_(other.scrollPoints_)
+    , tweenPoints_(other.tweenPoints_)
+    , itemIndex_(other.itemIndex_)
+    , selectedOffsetIndex_(other.selectedOffsetIndex_)
+    , forwardMap_(other.forwardMap_)
+    , backwardMap_(other.backwardMap_)
+    , forwardTween_(other.forwardTween_)
+    , backwardTween_(other.backwardTween_)
+    , scrollAcceleration_(other.scrollAcceleration_)
+    , startScrollTime_(other.startScrollTime_)
+    , minScrollTime_(other.minScrollTime_)
+    , scrollPeriod_(other.scrollPeriod_)
+    , config_(other.config_)
+    , fontInst_(other.fontInst_)
+    , layoutKey_(other.layoutKey_)
+    , imageType_(other.imageType_)
+    , videoType_(other.videoType_)
+    , items_(other.items_)
+    , components_(other.components_)
+    , useTextureCaching_(other.useTextureCaching_)
+    , perspectiveCornersInitialized_(other.perspectiveCornersInitialized_)
+    // preResolveFuture_ intentionally omitted: default-initialized (empty future).
+    // The copy represents the same logical list at a new menu depth; any pending
+    // background task belongs to the original and must not be shared.
+{
+    listId_ = other.listId_;
+    std::copy(std::begin(other.perspectiveCorners_), std::end(other.perspectiveCorners_),
+              std::begin(perspectiveCorners_));
+}
+
 
 ScrollingList::~ScrollingList() {
     ScrollingList::freeGraphicsMemory();

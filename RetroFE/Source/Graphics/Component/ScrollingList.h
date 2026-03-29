@@ -106,6 +106,11 @@ public:
         const std::string& videoType,
         bool useTextureCaching);
 
+    // Explicit copy constructor: copies all members except preResolveFuture_,
+    // which is default-initialized (empty) in the copy.  Needed because
+    // std::future is not copyable and would otherwise delete this constructor.
+    ScrollingList(const ScrollingList& other);
+
     ~ScrollingList() override;
     const std::vector<Item*>& getItems() const;
     
