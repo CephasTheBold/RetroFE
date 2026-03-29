@@ -148,11 +148,15 @@ const std::vector<Item*>& ScrollingList::getItems() const
 }
 
 void ScrollingList::setItems(std::vector<Item*>* items) {
-    // Wait for any pending pre-resolution from the previous item list to finish
-    // before swapping to the new one (prevents writing to stale Item pointers).
-    if (preResolveFuture_.valid()) {
-        preResolveFuture_.wait();
-    }
+    // Wait for ALL background tasks (pre-resolution from this and other ScrollingLists,
+    // video-pool cleanup, etc.) to finish before swapping to a new item list.
+    // This covers two races:
+    //   1. This list's own previous pre-resolution task writing to the old items.
+    //   2. Other ScrollingLists' pre-resolution tasks that may be writing to items
+    //      shared with the new list (e.g., multiple synchronized menus all pointing
+    //      to the same playlist vector). With a multi-thread pool, those tasks would
+    //      run concurrently and write to the same Item fields if not serialized here.
+    ThreadPool::getInstance().wait();
 
     items_ = items;
     if (!items_) return;
@@ -1500,6 +1504,13 @@ bool ScrollingList::isFastScrolling() const
 void ScrollingList::scroll(bool forward) {
     if (!items_ || items_->empty() || !scrollPoints_ || scrollPoints_->empty())
         return;
+
+    // Ensure pre-resolution has finished before allocateTexture reads
+    // item->resolvedMediaKey/resolvedVideoPath/resolvedImagePath.  Without
+    // this wait the scroll/render loop races with the background thread.
+    if (preResolveFuture_.valid()) {
+        preResolveFuture_.wait();
+    }
 
     if (scrollPeriod_ < minScrollTime_) scrollPeriod_ = minScrollTime_;
 
