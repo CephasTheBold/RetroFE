@@ -111,6 +111,12 @@ const std::vector<Item*>& ScrollingList::getItems() const
 }
 
 void ScrollingList::setItems(std::vector<Item*>* items) {
+    // Wait for any pending pre-resolution from the previous item list to finish
+    // before swapping to the new one (prevents writing to stale Item pointers).
+    if (preResolveFuture_.valid()) {
+        preResolveFuture_.wait();
+    }
+
     items_ = items;
     if (!items_) return;
 
@@ -132,6 +138,12 @@ void ScrollingList::setItems(std::vector<Item*>* items) {
             if (!it) continue;
             it->precomputeNameCandidates(types);   // builds once; selection-agnostic
         }
+    }
+
+    // ---- schedule background pre-resolution of media paths ----
+    if (!items_->empty()) {
+        preResolveFuture_ = ThreadPool::getInstance().enqueue(
+            &ScrollingList::preResolveMediaPaths, this, items_);
     }
 }
 
@@ -223,6 +235,11 @@ void ScrollingList::allocateSpritePoints() {
     if (!items_ || items_->empty()) return;
     if (!scrollPoints_ || scrollPoints_->empty()) return;
     if (components_.empty()) return;
+
+    // Ensure background pre-resolution has finished before we create components.
+    if (preResolveFuture_.valid()) {
+        preResolveFuture_.wait();
+    }
 
     size_t itemsSize = items_->size();
     size_t scrollPointsSize = scrollPoints_->size();
@@ -968,15 +985,213 @@ void ScrollingList::resetTweens(Component* c, std::shared_ptr<AnimationEvents> s
     }
 }
 
+void ScrollingList::findMediaFiles(Item* item) const {
+    std::string layoutName;
+    config_.getProperty(OPTION_LAYOUT, layoutName);
+    const std::string typeLC = Utils::toLower(imageType_);
+
+    // Build the same name-candidate list as allocateTexture (minus selected-item variants).
+    std::vector<std::string> names = { item->name, item->fullTitle };
+    if (!item->cloneof.empty())        names.push_back(item->cloneof);
+    if (typeLC == "numberbuttons")     names.push_back(item->numberButtons);
+    if (typeLC == "numberplayers")     names.push_back(item->numberPlayers);
+    if (typeLC == "year")              names.push_back(item->year);
+    if (typeLC == "title")             names.push_back(item->title);
+    if (typeLC == "developer")         names.push_back(item->developer.empty() ? item->manufacturer : item->developer);
+    if (typeLC == "manufacturer")      names.push_back(item->manufacturer);
+    if (typeLC == "genre")             names.push_back(item->genre);
+    if (typeLC == "ctrltype")          names.push_back(item->ctrlType);
+    if (typeLC == "joyways")           names.push_back(item->joyWays);
+    if (typeLC == "rating")            names.push_back(item->rating);
+    if (typeLC == "score")             names.push_back(item->score);
+    if (typeLC.rfind("playlist", 0) == 0)
+        names.push_back(item->name);
+    names.emplace_back("default");
+
+    // -------- Main media search loop --------
+    for (const auto& name : names) {
+        std::string imagePath;
+        std::string videoPath;
+
+        // 1) Collection or _common (layout / non-layout)
+        if (layoutMode_) {
+            std::string base = Utils::combinePath(Configuration::absolutePath, "layouts", layoutName, "collections");
+            std::string subPath = commonMode_ ? "_common" : collectionName;
+            buildPaths(imagePath, videoPath, base, subPath, imageType_, videoType_);
+        }
+        else {
+            if (commonMode_) {
+                buildPaths(imagePath, videoPath,
+                    Configuration::absolutePath,
+                    "collections/_common",
+                    imageType_, videoType_);
+            }
+            else {
+                config_.getMediaPropertyAbsolutePath(collectionName, imageType_, false, imagePath);
+                config_.getMediaPropertyAbsolutePath(collectionName, videoType_, false, videoPath);
+            }
+        }
+
+        if (videoType_ != "null") {
+            if (VideoBuilder::findVideoFile(videoPath, name, item->resolvedVideoPath)) {
+                item->resolvedMediaKey = imageType_ + "|" + videoType_;
+                return;
+            }
+        }
+        if (!imageType_.empty()) {
+            if (ImageBuilder::findImageFile(imagePath, name, item->resolvedImagePath)) {
+                item->resolvedMediaKey = imageType_ + "|" + videoType_;
+                return;
+            }
+        }
+
+        // 2) Per-item collection fallback (ALWAYS allowed)
+        {
+            std::string itemImagePath;
+            std::string itemVideoPath;
+
+            if (layoutMode_) {
+                std::string base = Utils::combinePath(Configuration::absolutePath, "layouts", layoutName, "collections");
+                buildPaths(itemImagePath, itemVideoPath, base, item->collectionInfo->name, imageType_, videoType_);
+            }
+            else {
+                config_.getMediaPropertyAbsolutePath(item->collectionInfo->name, imageType_, false, itemImagePath);
+                config_.getMediaPropertyAbsolutePath(item->collectionInfo->name, videoType_, false, itemVideoPath);
+            }
+
+            if (videoType_ != "null") {
+                if (VideoBuilder::findVideoFile(itemVideoPath, name, item->resolvedVideoPath)) {
+                    item->resolvedMediaKey = imageType_ + "|" + videoType_;
+                    return;
+                }
+            }
+            if (!imageType_.empty()) {
+                if (ImageBuilder::findImageFile(itemImagePath, name, item->resolvedImagePath)) {
+                    item->resolvedMediaKey = imageType_ + "|" + videoType_;
+                    return;
+                }
+            }
+        }
+    }
+
+    // -------- System collection fallback --------
+    {
+        std::string imagePath;
+        std::string videoPath;
+
+        if (layoutMode_) {
+            imagePath = Utils::combinePath(Configuration::absolutePath,
+                "layouts", layoutName, "collections",
+                commonMode_ ? "_common" : item->name);
+            imagePath = Utils::combinePath(imagePath, "system_artwork");
+            videoPath = imagePath;
+        }
+        else {
+            if (commonMode_) {
+                imagePath = Utils::combinePath(Configuration::absolutePath, "collections", "_common");
+                imagePath = Utils::combinePath(imagePath, "system_artwork");
+                videoPath = imagePath;
+            }
+            else {
+                config_.getMediaPropertyAbsolutePath(item->name, imageType_, true, imagePath);
+                config_.getMediaPropertyAbsolutePath(item->name, videoType_, true, videoPath);
+            }
+        }
+
+        if (videoType_ != "null") {
+            if (VideoBuilder::findVideoFile(videoPath, videoType_, item->resolvedVideoPath)) {
+                item->resolvedMediaKey = imageType_ + "|" + videoType_;
+                return;
+            }
+        }
+        if (!imageType_.empty()) {
+            if (ImageBuilder::findImageFile(imagePath, imageType_, item->resolvedImagePath)) {
+                item->resolvedMediaKey = imageType_ + "|" + videoType_;
+                return;
+            }
+        }
+    }
+
+    // -------- ROM directory fallback --------
+    {
+        const std::string& romPath = item->filepath;
+
+        if (videoType_ != "null") {
+            if (VideoBuilder::findVideoFile(romPath, videoType_, item->resolvedVideoPath)) {
+                item->resolvedMediaKey = imageType_ + "|" + videoType_;
+                return;
+            }
+        }
+        if (!imageType_.empty()) {
+            if (ImageBuilder::findImageFile(romPath, imageType_, item->resolvedImagePath)) {
+                item->resolvedMediaKey = imageType_ + "|" + videoType_;
+                return;
+            }
+        }
+    }
+
+    // No media found; record text-fallback state.
+    item->needsTextFallback = textFallback_;
+    item->resolvedMediaKey  = imageType_ + "|" + videoType_;
+}
+
+void ScrollingList::preResolveMediaPaths(std::vector<Item*>* items) {
+    if (!items) return;
+    const std::string mediaKey = imageType_ + "|" + videoType_;
+    for (Item* item : *items) {
+        if (!item) continue;
+        // Skip if already resolved for this list's media configuration.
+        if (item->resolvedMediaKey == mediaKey) continue;
+        // Clear stale resolved paths before re-resolving.
+        item->resolvedVideoPath.clear();
+        item->resolvedImagePath.clear();
+        item->needsTextFallback = false;
+        findMediaFiles(item);
+    }
+}
+
 bool ScrollingList::allocateTexture(size_t index, const Item* item) {
     if (index >= components_.size()) return false;
 
     Component* t = nullptr;
+    std::string selectedItemName = getSelectedItemName();
+    const bool isSelectedItem = (selectedImage_ && item->name == selectedItemName);
+
+    // -------- Fast path: use pre-resolved media paths --------
+    // Pre-resolution skips selected-item variants, so only use it for non-selected items.
+    const std::string mediaKey = imageType_ + "|" + videoType_;
+    if (!isSelectedItem && item->resolvedMediaKey == mediaKey) {
+        if (!item->resolvedVideoPath.empty()) {
+            t = new VideoComponent(page,
+                item->resolvedVideoPath,
+                baseViewInfo.Monitor,
+                -1,
+                false,
+                listId_,
+                perspectiveCornersInitialized_ ? perspectiveCorners_ : nullptr);
+        }
+        if (!t && !item->resolvedImagePath.empty()) {
+            t = new Image(item->resolvedImagePath, "", page,
+                baseViewInfo.Monitor,
+                baseViewInfo.Additive,
+                useTextureCaching_);
+        }
+        if (!t && item->needsTextFallback && textFallback_) {
+            t = new Text(item->title, page, fontInst_, baseViewInfo.Monitor);
+        }
+        if (t) {
+            components_[index] = t;
+            return true;
+        }
+        // If the pre-resolved path referred to a file that no longer exists (e.g. the
+        // fileCache was out of date), fall through to the full search below so the list
+        // still renders correctly.
+    }
+
+    // -------- Full fallback-ladder search --------
     std::string layoutName;
     config_.getProperty(OPTION_LAYOUT, layoutName);
     std::string typeLC = Utils::toLower(imageType_);
-    std::string selectedItemName = getSelectedItemName();
-    const bool isSelectedItem = (selectedImage_ && item->name == selectedItemName);
 
     // Compose name candidates once
     std::vector<std::string> names = {
@@ -1178,7 +1393,7 @@ bool ScrollingList::allocateTexture(size_t index, const Item* item) {
     return true;
 }
 
-void ScrollingList::buildPaths(std::string& imagePath, std::string& videoPath, const std::string& base, const std::string& subPath, const std::string& mediaType, const std::string& videoType) {
+void ScrollingList::buildPaths(std::string& imagePath, std::string& videoPath, const std::string& base, const std::string& subPath, const std::string& mediaType, const std::string& videoType) const {
     imagePath = Utils::combinePath(base, subPath, "medium_artwork", mediaType);
     videoPath = Utils::combinePath(base, subPath, "medium_artwork", videoType);
 }

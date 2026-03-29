@@ -25,4 +25,7 @@ class ImageBuilder
 {
 public:
     Image * CreateImage(const std::string& path, Page &p, const std::string& name, int monitor, bool additive, bool useTextureCaching = false);
+    // Resolves dir+name to a full image file path without creating a component.
+    // Returns true and sets outFile on success.
+    static bool findImageFile(const std::string& dir, const std::string& name, std::string& outFile);
 };

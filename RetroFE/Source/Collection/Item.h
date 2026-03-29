@@ -71,4 +71,13 @@ public:
     bool static isSortDesc(std::string attribute);
     void precomputeNameCandidates(const std::vector<std::string>& typesLC) const;
     const std::vector<std::string_view>& baseNameCandidates(const std::string& typeLC) const;
+
+    // Pre-resolved media paths populated by ScrollingList::preResolveMediaPaths().
+    // Key: imageType + "|" + videoType that was used during resolution.
+    // When the key matches the requesting ScrollingList's types, allocateTexture
+    // uses these paths directly instead of running the full fallback ladder.
+    std::string resolvedVideoPath;      // full path to resolved video file, empty if none
+    std::string resolvedImagePath;      // full path to resolved image file, empty if none
+    bool        needsTextFallback{ false }; // true when no media was found
+    std::string resolvedMediaKey;       // imageType+"|"+videoType the paths were resolved for
 };

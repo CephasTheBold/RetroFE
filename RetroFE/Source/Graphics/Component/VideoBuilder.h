@@ -28,4 +28,7 @@ class VideoBuilder
 {
 public:
     static VideoComponent* createVideo(const std::string& path, Page& page, const std::string& name, int monitor, int numLoops = -1, bool softOverlay = false, int listId = -1, const int* perspectiveCorners = nullptr);
+    // Resolves dir+name to a full video file path without creating a component.
+    // Returns true and sets outFile on success.
+    static bool findVideoFile(const std::string& dir, const std::string& name, std::string& outFile);
 };

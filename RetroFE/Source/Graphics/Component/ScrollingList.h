@@ -18,6 +18,7 @@
 
 #include <vector>
 #include <mutex>
+#include <future>
 #include "Component.h"
 #include "../Animate/Tween.h"
 #include "../Page.h"
@@ -136,7 +137,7 @@ public:
     void triggerEventOnAll(const std::string& event, int menuIndex);;
 
     bool allocateTexture(size_t index, const Item* i);
-    void buildPaths(std::string& imagePath, std::string& videoPath, const std::string& base, const std::string& subPath, const std::string& mediaType, const std::string& videoType);
+    void buildPaths(std::string& imagePath, std::string& videoPath, const std::string& base, const std::string& subPath, const std::string& mediaType, const std::string& videoType) const;
     void deallocateTexture(size_t index);
     void setItems(std::vector<Item*>* items);
     void selectItemByName(std::string_view name);
@@ -205,6 +206,13 @@ private:
     inline size_t loopIncrement(size_t offset, size_t index, size_t size) const;
     inline size_t loopDecrement(size_t offset, size_t index, size_t size) const;
 
+    // Runs the full fallback-ladder search and stores resolved file paths on the item.
+    // Should only be called from the background thread (via preResolveMediaPaths).
+    void findMediaFiles(Item* item) const;
+
+    // Pre-resolves media paths for all items in the background.
+    void preResolveMediaPaths(std::vector<Item*>* items);
+
     bool layoutMode_;
     bool commonMode_;
     bool playlistType_;
@@ -246,5 +254,6 @@ private:
     bool perspectiveCornersInitialized_{ false };
     int perspectiveCorners_[8]; // stores x,y coordinates for all 4 corners in order: topLeft, topRight, bottomLeft, bottomRight
 
-
+    // Future tracking the background pre-resolution task for the current item list.
+    std::future<void> preResolveFuture_;
 };

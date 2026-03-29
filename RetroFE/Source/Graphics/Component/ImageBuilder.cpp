@@ -56,3 +56,10 @@ Image* ImageBuilder::CreateImage(const std::string& path, Page& p,
     }
     return image;
 }
+
+bool ImageBuilder::findImageFile(const std::string& dir, const std::string& name, std::string& outFile) {
+    const std::string prefix = makePrefix(dir, name);
+    return Utils::findMatchingFile(std::string_view(prefix),
+        std::begin(kImgExts), std::end(kImgExts),
+        outFile);
+}
