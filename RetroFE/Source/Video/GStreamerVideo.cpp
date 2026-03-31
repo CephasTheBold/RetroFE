@@ -178,6 +178,10 @@ GStreamerVideo::~GStreamerVideo() {
 	}
 }
 
+void GStreamerVideo::setOnReadyCallback(std::function<void(IVideo*)> cb) {
+	onReadyCallback_ = std::move(cb);
+}
+
 gboolean GStreamerVideo::busCallback(GstBus* /*bus*/, GstMessage* msg, gpointer user_data) {
 	auto* video = static_cast<GStreamerVideo*>(user_data);
 
@@ -230,6 +234,10 @@ gboolean GStreamerVideo::busCallback(GstBus* /*bus*/, GstMessage* msg, gpointer 
 						// Signal that we have settled into a "stopped" state
 						if (video->notifyOnNone_.exchange(false, std::memory_order_acq_rel)) {
 							video->becameNone_.store(true, std::memory_order_release);
+							// NEW: Bulletproofing trigger for the VideoPool
+							if (video->onReadyCallback_) {
+								video->onReadyCallback_(video);
+							}
 						}
 						break;
 					}
@@ -580,7 +588,7 @@ bool GStreamerVideo::unload() {
 		// the STATE_CHANGED message that follows this call.
 		gst_element_set_state(pipeline_, GST_STATE_READY);
 
-			// 4. Clean up per-session contexts
+		// 4. Clean up per-session contexts
 		if (audioCtx_) { g_free(audioCtx_); audioCtx_ = nullptr; }
 		if (videoCtx_) { g_free(videoCtx_); videoCtx_ = nullptr; }
 
@@ -595,6 +603,7 @@ bool GStreamerVideo::unload() {
 	width_ = -1;       // Force draw() to re-check on next video
 	height_ = -1;
 	videoDrawIdx_ = -1; // Prevent showing the last frame of the old video
+	texture_ = nullptr;
 	hasError_.store(false, std::memory_order_release);
 	hasVideoStream_.store(false, std::memory_order_release);
 	loopsFinished_.store(false, std::memory_order_release);
@@ -893,6 +902,8 @@ bool GStreamerVideo::play(const std::string& file) {
 	loopsFinished_.store(false, std::memory_order_release);
 	hasVideoStream_.store(false, std::memory_order_release);
 	currentFile_ = file;
+	videoDrawIdx_ = -1; // Prevent showing the last frame of the old video
+	texture_ = nullptr;
 
 	LOG_DEBUG("GStreamerVideo", "Starting play for " + file + " (Session: " + std::to_string(newSessionId) + ")");
 
@@ -947,9 +958,9 @@ bool GStreamerVideo::play(const std::string& file) {
 			return false;
 		}
 		LOG_DEBUG("GStreamerVideo",
-		((scr == GST_STATE_CHANGE_ASYNC)
-			? "PAUSED is async (prerolling)"
-			: "PAUSED immediately"));
+			((scr == GST_STATE_CHANGE_ASYNC)
+				? "PAUSED is async (prerolling)"
+				: "PAUSED immediately"));
 
 		// Start muted/0.0; unmute later in resume()
 		//gst_stream_volume_set_volume(GST_STREAM_VOLUME(playbin_), GST_STREAM_VOLUME_FORMAT_LINEAR, 1.0);
@@ -1325,21 +1336,71 @@ void GStreamerVideo::draw() {
 		texture_ = nullptr;
 	}
 }
-bool GStreamerVideo::updateTextureFromFrameIYUV(SDL_Texture* texture, GstVideoFrame* frame) const {
-	const auto* srcY = static_cast<const uint8_t*>(GST_VIDEO_FRAME_PLANE_DATA(frame, 0));
-	const auto* srcU = static_cast<const uint8_t*>(GST_VIDEO_FRAME_PLANE_DATA(frame, 1));
-	const auto* srcV = static_cast<const uint8_t*>(GST_VIDEO_FRAME_PLANE_DATA(frame, 2));
 
-	// Stride IS the distance between rows in the source buffer
+bool GStreamerVideo::updateTextureFromFrameIYUV(SDL_Texture* texture, GstVideoFrame* frame) const {
+	void* pixels;
+	int pitch;
+
+	// Lock the texture to get direct write access
+	if (SDL_LockTexture(texture, nullptr, &pixels, &pitch) != 0) {
+		LOG_ERROR("GStreamerVideo", std::string("SDL_LockTexture failed: ") + SDL_GetError());
+		return false;
+	}
+
+	const int width = GST_VIDEO_FRAME_WIDTH(frame);
+	const int height = GST_VIDEO_FRAME_HEIGHT(frame);
+
+	const uint8_t* srcY = static_cast<const uint8_t*>(GST_VIDEO_FRAME_PLANE_DATA(frame, 0));
+	const uint8_t* srcU = static_cast<const uint8_t*>(GST_VIDEO_FRAME_PLANE_DATA(frame, 1));
+	const uint8_t* srcV = static_cast<const uint8_t*>(GST_VIDEO_FRAME_PLANE_DATA(frame, 2));
+
 	const int strideY = GST_VIDEO_FRAME_PLANE_STRIDE(frame, 0);
 	const int strideU = GST_VIDEO_FRAME_PLANE_STRIDE(frame, 1);
 	const int strideV = GST_VIDEO_FRAME_PLANE_STRIDE(frame, 2);
 
-	if (SDL_UpdateYUVTexture(texture, nullptr, srcY, strideY, srcU, strideU, srcV, strideV) != 0) {
-		LOG_ERROR("GStreamerVideo", std::string("SDL_UpdateYUVTexture failed: ") + SDL_GetError());
-		return false;
+	uint8_t* dst = static_cast<uint8_t*>(pixels);
+
+	// --- Y PLANE ---
+	if (strideY == pitch) {
+		// FAST PATH: Layouts match perfectly. Do a single bulk copy.
+		std::memcpy(dst, srcY, pitch * height);
+	}
+	else {
+		// SAFE PATH: Padding differs. Copy row-by-row.
+		for (int y = 0; y < height; ++y) {
+			std::memcpy(dst + y * pitch, srcY + y * strideY, width);
+		}
+	}
+	dst += height * pitch;
+
+	// --- U & V PLANES ---
+	int uvPitch = pitch / 2;
+	int uvWidth = width / 2;
+	int uvHeight = height / 2;
+
+	// Copy U
+	if (strideU == uvPitch) {
+		std::memcpy(dst, srcU, uvPitch * uvHeight);
+	}
+	else {
+		for (int y = 0; y < uvHeight; ++y) {
+			std::memcpy(dst + y * uvPitch, srcU + y * strideU, uvWidth);
+		}
+	}
+	dst += uvHeight * uvPitch;
+
+	// Copy V
+	if (strideV == uvPitch) {
+		std::memcpy(dst, srcV, uvPitch * uvHeight);
+	}
+	else {
+		for (int y = 0; y < uvHeight; ++y) {
+			std::memcpy(dst + y * uvPitch, srcV + y * strideV, uvWidth);
+		}
 	}
 
+	// Commit to GPU
+	SDL_UnlockTexture(texture);
 	return true;
 }
 

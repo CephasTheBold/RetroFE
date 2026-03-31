@@ -7,6 +7,8 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <string_view>
+#include <atomic>
+#include <mutex>
 #include <SDL2/SDL_image.h>
 
 struct SDL_Texture;
@@ -29,6 +31,8 @@ public:
 private:
     struct CachedImage {
         SDL_Texture* texture = nullptr;
+        int width = 0;   // Added to avoid background SDL_QueryTexture
+        int height = 0;  // Added to avoid background SDL_QueryTexture
         std::vector<SDL_Surface*> animatedSurfaces;
         std::vector<int> frameDelays;
     };
@@ -52,17 +56,17 @@ private:
         CacheKey getKey(const std::string& filePath, int monitor);
     };
 
-    struct LoadContext {
-        const std::string& filePath;
-        PathCache::CacheKey cacheKey;
-        CachedImage& newCachedImage;
-        ViewInfo& baseViewInfo;
-        bool useCache;
-    };
+    struct LoadResult {
+        bool isCacheHit = false;
+        SDL_Texture* cachedTexture = nullptr;
 
-    bool loadStaticImage(SDL_RWops* rw, LoadContext& ctx);
-    bool loadAnimatedImage(SDL_RWops* rw, LoadContext& ctx);
-    bool loadFromCache(LoadContext& ctx);
+        SDL_Surface* surface = nullptr;
+        std::vector<SDL_Surface*> animatedSurfaces;
+        std::vector<int> frameDelays;
+
+        float width = 0;
+        float height = 0;
+    };
 
     void resetAnimationState();
     void clearInstanceResourcesForRetry();
@@ -79,14 +83,18 @@ private:
     std::vector<int> frameDelays_;
 
     int currentFrame_ = 0;
-    Uint32 lastFrameTime_ = 0; // 0 indicates the animation hasn't started yet
+    Uint32 lastFrameTime_ = 0;
 
     bool useTextureCaching_;
     bool isUsingCachedStaticTexture_ = false;
     bool isUsingCachedSurfaces_ = false;
 
+    std::atomic<LoadResult*> pendingResult_{ nullptr };
+    std::atomic<bool> isLoading_{ false };
+
     static PathCache pathCache_;
     static std::unordered_map<PathCache::CacheKey, CachedImage, PathCache::CacheKeyHash> textureCache_;
+    static std::mutex textureCacheMutex_;
 };
 
 #endif

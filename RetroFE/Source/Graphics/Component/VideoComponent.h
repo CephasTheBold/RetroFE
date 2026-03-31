@@ -68,6 +68,5 @@ private:
     bool dimensionsUpdated_ = false; // Track if dimensions have been updated for the current video
 	bool instanceReady_{ false }; // Track if the video instance is ready to play
 	bool pendingRestart_{ false }; // Track if a restart is pending after fast-scroll
-    bool pendingRetarget_ = false;
     bool restartOnHide_ = false;
 };

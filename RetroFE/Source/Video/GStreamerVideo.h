@@ -24,6 +24,7 @@
 #include <atomic>
 #include <string>
 #include <vector>
+#include <functional>
 
 extern "C" {
 #if (__APPLE__)
@@ -86,6 +87,7 @@ public:
 
 
 	bool hasFinishedLoops() const;
+	void setOnReadyCallback(std::function<void(IVideo*)> cb) override;
 
 
 	bool hasError() const override {
@@ -208,5 +210,7 @@ private:
 	AudioBus::SourceId videoSourceId_{ 0 };   // ID of this video’s source in AudioBus
 	GstElement* audioSink_{ nullptr };        // GStreamer appsink for audio
 	std::atomic<bool> audioRun_{ false };     // Control flag for the feeder loop
+
+	std::function<void(IVideo*)> onReadyCallback_;
 };
 

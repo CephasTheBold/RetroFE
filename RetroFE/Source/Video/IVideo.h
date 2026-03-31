@@ -17,6 +17,7 @@
 
 #include <SDL.h>
 #include <string>
+#include <functional>
 #include <gst/video/video.h>
 
 class IVideo {
@@ -58,4 +59,5 @@ public:
 	virtual bool hasError() const = 0;
 	virtual bool unload() = 0;
 	virtual bool hasFinishedLoops() const = 0;
+	virtual void setOnReadyCallback(std::function<void(IVideo*)> cb) = 0;
 };
