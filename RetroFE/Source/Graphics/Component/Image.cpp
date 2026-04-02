@@ -49,7 +49,7 @@ void Image::allocateGraphicsMemory() {
     int monitor = baseViewInfo.Monitor;
     bool useCache = useTextureCaching_;
 
-    ThreadPool::getInstance().enqueue([state, primaryPath, fallbackPath, monitor, useCache]() {
+    ThreadPool::getInstance().enqueueAtFront([state, primaryPath, fallbackPath, monitor, useCache]() {
         auto result = std::make_unique<LoadResult>();
 
         // 1. Try Cache for Primary, then Fallback
