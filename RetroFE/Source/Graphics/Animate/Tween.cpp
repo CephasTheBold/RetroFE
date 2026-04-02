@@ -295,5 +295,5 @@ float Tween::easeInOutCircular(float p, float b, float c) {
     p *= 2.0f;
     if (p < 1.0f) return -c / 2.0f * (sqrtf(1.0f - p * p) - 1.0f) + b;
     p -= 2.0f;
-    return c / 2.0f * (sqrtf(1.0f - p * p) + 1.0f);
+    return c / 2.0f * (sqrtf(1.0f - p * p) + 1.0f) + b;
 }

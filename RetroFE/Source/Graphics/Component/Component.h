@@ -84,8 +84,8 @@ private:
 
     bool animate();
 
-    std::shared_ptr<AnimationEvents> tweens_; // Use shared_ptr for tweens_
-    std::weak_ptr<Animation> currentTweens_; // Use shared_ptr instead of raw pointer
+    std::shared_ptr<AnimationEvents> tweens_;
+    Animation currentAnimation_; // Value type: component owns its current animation state
     SDL_Texture *backgroundTexture_;
     bool         pauseOnScroll_;
     ViewInfo     storeViewInfo_;

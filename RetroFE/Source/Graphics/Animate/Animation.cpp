@@ -18,49 +18,23 @@
 #include <memory>
 #include <vector>
 
+#include "Animation.h"
+
 Animation::Animation() = default;
 
-Animation::Animation(const Animation& copy) {
-    // Shallow copy each TweenSet by copying the shared_ptr
-    for (const auto& tweenSet : copy.animationVector_) {
-        animationVector_.push_back(tweenSet);
-    }
-}
-
-Animation& Animation::operator=(const Animation& other) {
-    if (this != &other) { // Protection against self-assignment
-        // Clear existing resources
-        Clear();
-
-        // Shallow copy each TweenSet by copying the shared_ptr
-        for (const auto& tweenSet : other.animationVector_) {
-            animationVector_.push_back(tweenSet);
-        }
-    }
-    return *this;
-}
-
-Animation::~Animation()
-{
-    Clear();
-}
-
-void Animation::Push(std::shared_ptr<TweenSet> set) {
-    animationVector_.push_back(set);
+void Animation::Push(const TweenSet& set) {
+    animationVector_.push_back(set); // Triggers deep copy of the TweenSet
 }
 
 void Animation::Clear() {
     animationVector_.clear();
 }
 
-std::shared_ptr<TweenSet> Animation::tweenSet(unsigned int index) {
+TweenSet* Animation::tweenSet(unsigned int index) {
     if (index < animationVector_.size()) {
-        return animationVector_[index]; // Return the shared pointer directly
+        return &animationVector_[index];
     }
-    else {
-        // Handle the error or return nullptr if the index is out of bounds
-        return nullptr;
-    }
+    return nullptr;
 }
 
 size_t Animation::size() const {

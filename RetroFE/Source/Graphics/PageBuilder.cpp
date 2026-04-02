@@ -1065,19 +1065,26 @@ std::shared_ptr<AnimationEvents> PageBuilder::createTweenInstance(rapidxml::xml_
 
 
 void PageBuilder::buildTweenSet(AnimationEvents* tweens, xml_node<>* componentXml, const std::string& tagName, const std::string& tweenName) {
-	for (componentXml = componentXml->first_node(tagName.c_str()); componentXml; componentXml = componentXml->next_sibling(tagName.c_str())) {
-		xml_attribute<> const* indexXml = componentXml->first_attribute("menuIndex");
+	// Iterate through all XML nodes with the specified tagName
+	for (xml_node<>* node = componentXml->first_node(tagName.c_str()); node; node = node->next_sibling(tagName.c_str())) {
+		xml_attribute<> const* indexXml = node->first_attribute("menuIndex");
+
+		// OPTIMIZATION: Parse the XML once per node, instead of once per index.
+		// We create a single Animation object on the stack and populate it.
+		Animation animation;
+		getTweenSet(node, &animation);
 
 		if (indexXml) {
 			std::string indexs = indexXml->value();
+			if (indexs.empty()) continue;
+
 			if (indexs[0] == '!') {
 				indexs.erase(0, 1);
 				int index = Utils::convertInt(indexs);
 				for (int i = 0; i < MENU_INDEX_HIGH - 1; i++) {
 					if (i != index) {
-						auto animation = std::make_shared<Animation>();
-						getTweenSet(componentXml, animation.get());
-						tweens->setAnimation(tweenName, i, std::move(animation));
+						// setAnimation now takes a const Animation& and performs a deep copy
+						tweens->setAnimation(tweenName, i, animation);
 					}
 				}
 			}
@@ -1086,9 +1093,7 @@ void PageBuilder::buildTweenSet(AnimationEvents* tweens, xml_node<>* componentXm
 				int index = Utils::convertInt(indexs);
 				for (int i = 0; i < MENU_INDEX_HIGH - 1; i++) {
 					if (i < index) {
-						auto animation = std::make_shared<Animation>();
-						getTweenSet(componentXml, animation.get());
-						tweens->setAnimation(tweenName, i, std::move(animation));
+						tweens->setAnimation(tweenName, i, animation);
 					}
 				}
 			}
@@ -1097,28 +1102,23 @@ void PageBuilder::buildTweenSet(AnimationEvents* tweens, xml_node<>* componentXm
 				int index = Utils::convertInt(indexs);
 				for (int i = 0; i < MENU_INDEX_HIGH - 1; i++) {
 					if (i > index) {
-						auto animation = std::make_shared<Animation>();
-						getTweenSet(componentXml, animation.get());
-						tweens->setAnimation(tweenName, i, std::move(animation));
+						tweens->setAnimation(tweenName, i, animation);
 					}
 				}
 			}
 			else if (indexs[0] == 'i') {
-				auto animation = std::make_shared<Animation>();
-				getTweenSet(componentXml, animation.get());
-				tweens->setAnimation(tweenName, MENU_INDEX_HIGH, std::move(animation));
+				// Handle the "info" index
+				tweens->setAnimation(tweenName, MENU_INDEX_HIGH, animation);
 			}
 			else {
-				int index = Utils::convertInt(indexXml->value());
-				auto animation = std::make_shared<Animation>();
-				getTweenSet(componentXml, animation.get());
-				tweens->setAnimation(tweenName, index, std::move(animation));
+				// Specific single index
+				int index = Utils::convertInt(indexs);
+				tweens->setAnimation(tweenName, index, animation);
 			}
 		}
 		else {
-			auto animation = std::make_shared<Animation>();
-			getTweenSet(componentXml, animation.get());
-			tweens->setAnimation(tweenName, -1, std::move(animation));
+			// Default case: no menuIndex attribute, use index -1
+			tweens->setAnimation(tweenName, -1, animation);
 		}
 	}
 }
@@ -1603,12 +1603,15 @@ void PageBuilder::buildViewInfo(xml_node<>* componentXml, ViewInfo& info, xml_no
 
 void PageBuilder::getTweenSet(const xml_node<>* node, Animation* animation) {
 	if (node) {
-		for (xml_node<>* set = node->first_node("set"); set; set = set->next_sibling("set")) {
-			// Create a shared_ptr to manage the TweenSet instance.
-			auto ts = std::make_shared<TweenSet>();
-			getAnimationEvents(set, *ts);
+		// Iterate through each "set" node in the XML
+		for (xml_node<>* setNode = node->first_node("set"); setNode; setNode = setNode->next_sibling("set")) {
+			// Stack-allocated TweenSet: no heap allocation or smart pointer overhead
+			TweenSet ts;
 
-			// Use the shared_ptr to transfer ownership of the TweenSet instance to the Animation instance.
+			// Populate the TweenSet (assumes getAnimationEvents takes TweenSet&)
+			getAnimationEvents(setNode, ts);
+
+			// Push the set into the animation; this triggers a deep copy of the TweenSet
 			animation->Push(ts);
 		}
 	}
@@ -1776,10 +1779,16 @@ void PageBuilder::getAnimationEvents(const xml_node<>* node, TweenSet& tweens) {
 
 					// if in layout action has playlist="<current playlist name>" then perform action
 					std::string playlistFilter = playlist && playlist->value() ? playlist->value() : "";
-					auto t = std::make_unique<Tween>(property, algorithm, fromValue, toValue, durationValue, playlistFilter);
-					if (!fromDefined)
-						t->startDefined = false;
-					tweens.push(std::move(t));
+
+					// Create the Tween object on the stack
+					Tween t(property, algorithm, fromValue, toValue, durationValue, playlistFilter);
+
+					if (!fromDefined) {
+						t.startDefined = false;
+					}
+
+					// Push the object into the TweenSet; this triggers a deep copy into the internal vector
+					tweens.push(t);
 				}
 				else {
 					std::stringstream ss;

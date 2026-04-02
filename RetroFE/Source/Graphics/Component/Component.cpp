@@ -52,12 +52,14 @@ void Component::freeGraphicsMemory() {
     newScrollItemSelected = false;
     menuIndex_ = -1;
 
-    // Reset the shared_ptr to release the memory
-    currentTweens_.reset();
+    // Clear the locally owned animation data to release contiguous vector memory
+    currentAnimation_.Clear();
+
     currentTweenIndex_ = 0;
     currentTweenComplete_ = true;
     elapsedTweenTime_ = 0;
 
+    // Standard SDL resource cleanup
     if (backgroundTexture_) {
         SDL_DestroyTexture(backgroundTexture_);
         backgroundTexture_ = nullptr;
@@ -152,25 +154,14 @@ std::string_view Component::filePath()
 
 bool Component::update(float dt) {
     elapsedTweenTime_ += dt;
-    if (animationRequested_ && animationRequestedType_ != "" && !tweens_->getAnimationMap().empty()) {
-        std::shared_ptr<Animation> newTweens = nullptr;
-        if (menuIndex_ >= MENU_INDEX_HIGH) {
-            newTweens = tweens_->getAnimation(animationRequestedType_, MENU_INDEX_HIGH);
-            if (!(newTweens && newTweens->size() > 0)) {
-                newTweens = tweens_->getAnimation(animationRequestedType_, menuIndex_ - MENU_INDEX_HIGH);
-            }
-        }
-        else {
-            newTweens = tweens_->getAnimation(animationRequestedType_, menuIndex_);
-        }
 
-        if (newTweens && newTweens->size() == 0) {
-            newTweens.reset();
-        }
+    // 1. Check for newly requested animations (e.g., from triggerEvent)
+    if (animationRequested_ && !animationRequestedType_.empty() && tweens_) {
+        Animation* newTweens = tweens_->getAnimation(animationRequestedType_, menuIndex_);
 
         if (newTweens && newTweens->size() > 0) {
             animationType_ = animationRequestedType_;
-            currentTweens_ = newTweens;  // Assign to weak_ptr
+            currentAnimation_ = *newTweens;  // DEEP COPY: Ensures local ownership
             currentTweenIndex_ = 0;
             elapsedTweenTime_ = 0;
             storeViewInfo_ = baseViewInfo;
@@ -179,31 +170,31 @@ bool Component::update(float dt) {
         animationRequested_ = false;
     }
 
+    // 2. Handle transitions to Idle state if nothing is running
     if (tweens_ && currentTweenComplete_) {
         animationType_ = "idle";
-        auto idleTweens = tweens_->getAnimation("idle", menuIndex_);
+        Animation* idleTweens = tweens_->getAnimation("idle", menuIndex_);
+
         if (idleTweens && idleTweens->size() == 0 && !page.isMenuScrolling()) {
             idleTweens = tweens_->getAnimation("menuIdle", menuIndex_);
         }
-        currentTweens_ = idleTweens;  // Assign to weak_ptr
-        currentTweenIndex_ = 0;
-        elapsedTweenTime_ = 0;
-        storeViewInfo_ = baseViewInfo;
-        currentTweenComplete_ = false;
-        animationRequested_ = false;
-    }
 
-    // Lock weak_ptr before using
-    std::shared_ptr<Animation> lockedTweens = currentTweens_.lock();
-    if (lockedTweens) {
-        currentTweenComplete_ = animate();
-        if (currentTweenComplete_) {
-            currentTweens_.reset();
+        if (idleTweens && idleTweens->size() > 0) {
+            currentAnimation_ = *idleTweens; // DEEP COPY
             currentTweenIndex_ = 0;
+            elapsedTweenTime_ = 0;
+            storeViewInfo_ = baseViewInfo;
+            currentTweenComplete_ = false;
         }
     }
-    else {
-        currentTweenComplete_ = true;
+
+    // 3. Process the animation frame
+    if (!currentTweenComplete_) {
+        currentTweenComplete_ = animate();
+        if (currentTweenComplete_) {
+            currentAnimation_.Clear(); // Free memory once finished
+            currentTweenIndex_ = 0;
+        }
     }
 
     return currentTweenComplete_;
@@ -230,199 +221,115 @@ void Component::draw()
 }
 
 bool Component::animate() {
-    bool completeDone = false;
-    auto sharedTweens = currentTweens_.lock(); // Lock the weak_ptr to get a shared_ptr
-
-    if (!sharedTweens || currentTweenIndex_ >= sharedTweens->size()) {
-        completeDone = true;
+    // Check if we have any animation data to process
+    if (currentAnimation_.size() == 0 || currentTweenIndex_ >= currentAnimation_.size()) {
+        return true; // Animation is finished or empty
     }
-    else {
-        bool currentDone = true;
-        auto tweens = sharedTweens->tweenSet(currentTweenIndex_);
-        if (!tweens) return true; // Additional check for safety
 
-        for (unsigned int i = 0; i < tweens->size(); i++) {
-            const Tween* tween = tweens->getTween(i); // Ensure const correctness
+    bool currentDone = true;
+    // Get the current TweenSet from the contiguous vector
+    TweenSet* tweens = currentAnimation_.tweenSet(currentTweenIndex_);
+    if (!tweens) return true;
 
-            if (!tween->matchesPlaylist(playlistName)) {
-                continue;
-            }
+    for (unsigned int i = 0; i < tweens->size(); i++) {
+        const Tween* tween = tweens->getTween(i);
 
-            double elapsedTime = elapsedTweenTime_;
-            if (elapsedTime < tween->duration)
-                currentDone = false;
-            else
-                elapsedTime = tween->duration;
-
-            switch (tween->property) {
-                case TWEEN_PROPERTY_X:
-                if (tween->startDefined)
-                    baseViewInfo.X = tween->animate(elapsedTime);
-                else
-                    baseViewInfo.X = tween->animate(elapsedTime, storeViewInfo_.X);
-                break;
-
-                case TWEEN_PROPERTY_Y:
-                if (tween->startDefined)
-                    baseViewInfo.Y = tween->animate(elapsedTime);
-                else
-                    baseViewInfo.Y = tween->animate(elapsedTime, storeViewInfo_.Y);
-                break;
-
-                case TWEEN_PROPERTY_HEIGHT:
-                if (tween->startDefined)
-                    baseViewInfo.Height = tween->animate(elapsedTime);
-                else
-                    baseViewInfo.Height = tween->animate(elapsedTime, storeViewInfo_.Height);
-                break;
-
-                case TWEEN_PROPERTY_WIDTH:
-                if (tween->startDefined)
-                    baseViewInfo.Width = tween->animate(elapsedTime);
-                else
-                    baseViewInfo.Width = tween->animate(elapsedTime, storeViewInfo_.Width);
-                break;
-
-                case TWEEN_PROPERTY_ANGLE:
-                if (tween->startDefined)
-                    baseViewInfo.Angle = tween->animate(elapsedTime);
-                else
-                    baseViewInfo.Angle = tween->animate(elapsedTime, storeViewInfo_.Angle);
-                break;
-
-                case TWEEN_PROPERTY_ALPHA:
-                if (tween->startDefined)
-                    baseViewInfo.Alpha = tween->animate(elapsedTime);
-                else
-                    baseViewInfo.Alpha = tween->animate(elapsedTime, storeViewInfo_.Alpha);
-                break;
-
-                case TWEEN_PROPERTY_X_ORIGIN:
-                if (tween->startDefined)
-                    baseViewInfo.XOrigin = tween->animate(elapsedTime);
-                else
-                    baseViewInfo.XOrigin = tween->animate(elapsedTime, storeViewInfo_.XOrigin);
-                break;
-
-                case TWEEN_PROPERTY_Y_ORIGIN:
-                if (tween->startDefined)
-                    baseViewInfo.YOrigin = tween->animate(elapsedTime);
-                else
-                    baseViewInfo.YOrigin = tween->animate(elapsedTime, storeViewInfo_.YOrigin);
-                break;
-
-                case TWEEN_PROPERTY_X_OFFSET:
-                if (tween->startDefined)
-                    baseViewInfo.XOffset = tween->animate(elapsedTime);
-                else
-                    baseViewInfo.XOffset = tween->animate(elapsedTime, storeViewInfo_.XOffset);
-                break;
-
-                case TWEEN_PROPERTY_Y_OFFSET:
-                if (tween->startDefined)
-                    baseViewInfo.YOffset = tween->animate(elapsedTime);
-                else
-                    baseViewInfo.YOffset = tween->animate(elapsedTime, storeViewInfo_.YOffset);
-                break;
-
-                case TWEEN_PROPERTY_FONT_SIZE:
-                if (tween->startDefined)
-                    baseViewInfo.FontSize = tween->animate(elapsedTime);
-                else
-                    baseViewInfo.FontSize = tween->animate(elapsedTime, storeViewInfo_.FontSize);
-                break;
-
-                case TWEEN_PROPERTY_BACKGROUND_ALPHA:
-                if (tween->startDefined)
-                    baseViewInfo.BackgroundAlpha = tween->animate(elapsedTime);
-                else
-                    baseViewInfo.BackgroundAlpha = tween->animate(elapsedTime, storeViewInfo_.BackgroundAlpha);
-                break;
-
-                case TWEEN_PROPERTY_MAX_WIDTH:
-                if (tween->startDefined)
-                    baseViewInfo.MaxWidth = tween->animate(elapsedTime);
-                else
-                    baseViewInfo.MaxWidth = tween->animate(elapsedTime, storeViewInfo_.MaxWidth);
-                break;
-
-                case TWEEN_PROPERTY_MAX_HEIGHT:
-                if (tween->startDefined)
-                    baseViewInfo.MaxHeight = tween->animate(elapsedTime);
-                else
-                    baseViewInfo.MaxHeight = tween->animate(elapsedTime, storeViewInfo_.MaxHeight);
-                break;
-
-                case TWEEN_PROPERTY_LAYER:
-                if (tween->startDefined)
-                    baseViewInfo.Layer = static_cast<unsigned int>(tween->animate(elapsedTime));
-                else
-                    baseViewInfo.Layer = static_cast<unsigned int>(tween->animate(elapsedTime, static_cast<float>(storeViewInfo_.Layer)));
-                break;
-
-                case TWEEN_PROPERTY_CONTAINER_X:
-                if (tween->startDefined)
-                    baseViewInfo.ContainerX = tween->animate(elapsedTime);
-                else
-                    baseViewInfo.ContainerX = tween->animate(elapsedTime, storeViewInfo_.ContainerX);
-                break;
-
-                case TWEEN_PROPERTY_CONTAINER_Y:
-                if (tween->startDefined)
-                    baseViewInfo.ContainerY = tween->animate(elapsedTime);
-                else
-                    baseViewInfo.ContainerY = tween->animate(elapsedTime, storeViewInfo_.ContainerY);
-                break;
-
-                case TWEEN_PROPERTY_CONTAINER_WIDTH:
-                if (tween->startDefined)
-                    baseViewInfo.ContainerWidth = tween->animate(elapsedTime);
-                else
-                    baseViewInfo.ContainerWidth = tween->animate(elapsedTime, storeViewInfo_.ContainerWidth);
-                break;
-
-                case TWEEN_PROPERTY_CONTAINER_HEIGHT:
-                if (tween->startDefined)
-                    baseViewInfo.ContainerHeight = tween->animate(elapsedTime);
-                else
-                    baseViewInfo.ContainerHeight = tween->animate(elapsedTime, storeViewInfo_.ContainerHeight);
-                break;
-
-                case TWEEN_PROPERTY_VOLUME:
-                if (tween->startDefined)
-                    baseViewInfo.Volume = tween->animate(elapsedTime);
-                else
-                    baseViewInfo.Volume = tween->animate(elapsedTime, storeViewInfo_.Volume);
-                break;
-
-                case TWEEN_PROPERTY_MONITOR:
-                if (tween->startDefined)
-                    baseViewInfo.Monitor = static_cast<unsigned int>(tween->animate(elapsedTime));
-                else
-                    baseViewInfo.Monitor = static_cast<unsigned int>(tween->animate(elapsedTime, static_cast<float>(storeViewInfo_.Monitor)));
-                break;
-
-                case TWEEN_PROPERTY_NOP:
-                break;
-                case TWEEN_PROPERTY_RESTART:
-                // Compare tween's float duration to a float literal.
-                baseViewInfo.Restart = (tween->duration != 0.0f) && (elapsedTime == 0.0);
-                break;
-            }
+        // Check if this specific tween is filtered out for the current playlist
+        if (!tween->matchesPlaylist(playlistName)) {
+            continue;
         }
 
-        if (currentDone) {
-            currentTweenIndex_++;
-            elapsedTweenTime_ = 0;
-            storeViewInfo_ = baseViewInfo;
+        double elapsedTime = elapsedTweenTime_;
+        if (elapsedTime < tween->duration) {
+            currentDone = false;
+        }
+        else {
+            elapsedTime = tween->duration;
+        }
+
+        // Apply animation logic based on whether a start value is defined in the XML
+        switch (tween->property) {
+            case TWEEN_PROPERTY_X:
+            baseViewInfo.X = tween->startDefined ? tween->animate(elapsedTime) : tween->animate(elapsedTime, storeViewInfo_.X);
+            break;
+            case TWEEN_PROPERTY_Y:
+            baseViewInfo.Y = tween->startDefined ? tween->animate(elapsedTime) : tween->animate(elapsedTime, storeViewInfo_.Y);
+            break;
+            case TWEEN_PROPERTY_HEIGHT:
+            baseViewInfo.Height = tween->startDefined ? tween->animate(elapsedTime) : tween->animate(elapsedTime, storeViewInfo_.Height);
+            break;
+            case TWEEN_PROPERTY_WIDTH:
+            baseViewInfo.Width = tween->startDefined ? tween->animate(elapsedTime) : tween->animate(elapsedTime, storeViewInfo_.Width);
+            break;
+            case TWEEN_PROPERTY_ANGLE:
+            baseViewInfo.Angle = tween->startDefined ? tween->animate(elapsedTime) : tween->animate(elapsedTime, storeViewInfo_.Angle);
+            break;
+            case TWEEN_PROPERTY_ALPHA:
+            baseViewInfo.Alpha = tween->startDefined ? tween->animate(elapsedTime) : tween->animate(elapsedTime, storeViewInfo_.Alpha);
+            break;
+            case TWEEN_PROPERTY_X_ORIGIN:
+            baseViewInfo.XOrigin = tween->startDefined ? tween->animate(elapsedTime) : tween->animate(elapsedTime, storeViewInfo_.XOrigin);
+            break;
+            case TWEEN_PROPERTY_Y_ORIGIN:
+            baseViewInfo.YOrigin = tween->startDefined ? tween->animate(elapsedTime) : tween->animate(elapsedTime, storeViewInfo_.YOrigin);
+            break;
+            case TWEEN_PROPERTY_X_OFFSET:
+            baseViewInfo.XOffset = tween->startDefined ? tween->animate(elapsedTime) : tween->animate(elapsedTime, storeViewInfo_.XOffset);
+            break;
+            case TWEEN_PROPERTY_Y_OFFSET:
+            baseViewInfo.YOffset = tween->startDefined ? tween->animate(elapsedTime) : tween->animate(elapsedTime, storeViewInfo_.YOffset);
+            break;
+            case TWEEN_PROPERTY_FONT_SIZE:
+            baseViewInfo.FontSize = tween->startDefined ? tween->animate(elapsedTime) : tween->animate(elapsedTime, storeViewInfo_.FontSize);
+            break;
+            case TWEEN_PROPERTY_BACKGROUND_ALPHA:
+            baseViewInfo.BackgroundAlpha = tween->startDefined ? tween->animate(elapsedTime) : tween->animate(elapsedTime, storeViewInfo_.BackgroundAlpha);
+            break;
+            case TWEEN_PROPERTY_MAX_WIDTH:
+            baseViewInfo.MaxWidth = tween->startDefined ? tween->animate(elapsedTime) : tween->animate(elapsedTime, storeViewInfo_.MaxWidth);
+            break;
+            case TWEEN_PROPERTY_MAX_HEIGHT:
+            baseViewInfo.MaxHeight = tween->startDefined ? tween->animate(elapsedTime) : tween->animate(elapsedTime, storeViewInfo_.MaxHeight);
+            break;
+            case TWEEN_PROPERTY_LAYER:
+            baseViewInfo.Layer = static_cast<unsigned int>(tween->startDefined ? tween->animate(elapsedTime) : tween->animate(elapsedTime, static_cast<float>(storeViewInfo_.Layer)));
+            break;
+            case TWEEN_PROPERTY_CONTAINER_X:
+            baseViewInfo.ContainerX = tween->startDefined ? tween->animate(elapsedTime) : tween->animate(elapsedTime, storeViewInfo_.ContainerX);
+            break;
+            case TWEEN_PROPERTY_CONTAINER_Y:
+            baseViewInfo.ContainerY = tween->startDefined ? tween->animate(elapsedTime) : tween->animate(elapsedTime, storeViewInfo_.ContainerY);
+            break;
+            case TWEEN_PROPERTY_CONTAINER_WIDTH:
+            baseViewInfo.ContainerWidth = tween->startDefined ? tween->animate(elapsedTime) : tween->animate(elapsedTime, storeViewInfo_.ContainerWidth);
+            break;
+            case TWEEN_PROPERTY_CONTAINER_HEIGHT:
+            baseViewInfo.ContainerHeight = tween->startDefined ? tween->animate(elapsedTime) : tween->animate(elapsedTime, storeViewInfo_.ContainerHeight);
+            break;
+            case TWEEN_PROPERTY_VOLUME:
+            baseViewInfo.Volume = tween->startDefined ? tween->animate(elapsedTime) : tween->animate(elapsedTime, storeViewInfo_.Volume);
+            break;
+            case TWEEN_PROPERTY_MONITOR:
+            baseViewInfo.Monitor = static_cast<unsigned int>(tween->startDefined ? tween->animate(elapsedTime) : tween->animate(elapsedTime, static_cast<float>(storeViewInfo_.Monitor)));
+            break;
+            case TWEEN_PROPERTY_RESTART:
+            baseViewInfo.Restart = (tween->duration != 0.0f) && (elapsedTime == 0.0);
+            break;
+            case TWEEN_PROPERTY_NOP:
+            default:
+            break;
         }
     }
 
-    if (!sharedTweens || currentTweenIndex_ >= sharedTweens->size()) {
-        completeDone = true;
+    // If all tweens in the current set are done, move to the next set
+    if (currentDone) {
+        currentTweenIndex_++;
+        elapsedTweenTime_ = 0;
+        storeViewInfo_ = baseViewInfo;
     }
 
-    return completeDone;
+    // Return true if we have completed all sets in the animation
+    return (currentTweenIndex_ >= currentAnimation_.size());
 }
 
 bool Component::isPlaying()

@@ -19,40 +19,29 @@
 #include <memory>
 #include <map>
 
-AnimationEvents::AnimationEvents() = default;
+Animation* AnimationEvents::getAnimation(const std::string& tween, int index) {
+    // Ensure the tween group exists
+    if (animationMap_.find(tween) == animationMap_.end()) {
+        animationMap_[tween][-1] = Animation();
+    }
 
-AnimationEvents::~AnimationEvents()
-{
-    clear();
+    auto& group = animationMap_[tween];
+    auto it = group.find(index);
+    if (it == group.end()) {
+        index = -1; // Fallback to default index
+    }
+
+    return &group[index];
 }
 
-std::shared_ptr<Animation> AnimationEvents::getAnimation(const std::string& tween)
-{
-    return getAnimation(tween, -1);
-}
-
-std::shared_ptr<Animation> AnimationEvents::getAnimation(const std::string& tween, int index)
-{
-    if (animationMap_.find(tween) == animationMap_.end())
-        animationMap_[tween][-1] = std::make_shared<Animation>();
-
-    if (animationMap_[tween].find(index) == animationMap_[tween].end())
-        index = -1;
-
-    return animationMap_[tween][index];
-}
-
-void AnimationEvents::setAnimation(const std::string& tween, int index, std::shared_ptr<Animation> animation)
-{
-    animationMap_[tween][index] = std::move(animation);
-}
-
-void AnimationEvents::clear()
-{
-    animationMap_.clear(); // std::unique_ptr will automatically clean up
-}
-
-// Getter for animationMap_
-const std::map<std::string, std::map<int, std::shared_ptr<Animation>>>& AnimationEvents::getAnimationMap() const {
+const std::map<std::string, std::map<int, Animation>>& AnimationEvents::getAnimationMap() const {
     return animationMap_;
+}
+
+void AnimationEvents::setAnimation(const std::string& tween, int index, const Animation& animation) {
+    animationMap_[tween][index] = animation; // Performs a deep copy
+}
+
+void AnimationEvents::clear() {
+    animationMap_.clear();
 }

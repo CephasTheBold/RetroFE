@@ -21,18 +21,19 @@
 #include <map>
 #include <memory>
 
-class Animation
-{
+class Animation {
 public:
     Animation();
-    Animation(const Animation& copy);
-    Animation& operator=(const Animation& other);
-    ~Animation();
-    void Push(std::shared_ptr<TweenSet> set);
+    Animation(const Animation& copy) = default;
+    Animation& operator=(const Animation& other) = default;
+    ~Animation() = default;
+
+    void Push(const TweenSet& set); // Takes a copy of the set
     void Clear();
-    std::vector<TweenSet *> *tweenSets();
-    std::shared_ptr<TweenSet> tweenSet(unsigned int index);
+
+    TweenSet* tweenSet(unsigned int index); // Returns pointer to internal set
     size_t size() const;
+
 private:
-    std::vector<std::shared_ptr<TweenSet>> animationVector_;
+    std::vector<TweenSet> animationVector_; // Contiguous storage of sets
 };

@@ -17,47 +17,21 @@
 
 TweenSet::TweenSet() = default;
 
-TweenSet::TweenSet(const TweenSet& copy) {
-    set_.reserve(copy.set_.size());
-    for (const auto& tween : copy.set_) {
-        set_.push_back(std::make_unique<Tween>(*tween));
-    }
-}
-
-TweenSet& TweenSet::operator=(const TweenSet& other) {
-    if (this != &other) {
-        set_.clear(); // Clear existing tweens
-        set_.reserve(other.set_.size());
-        for (const auto& tween : other.set_) {
-            set_.push_back(std::make_unique<Tween>(*tween));
-        }
-    }
-    return *this;
-}
-
-
-TweenSet::~TweenSet()
-{
-    clear();
-}
-
-void TweenSet::push(std::unique_ptr<Tween> tween) {
-    set_.push_back(std::move(tween));
+void TweenSet::push(const Tween& tween) {
+    set_.push_back(tween); // Copies/moves the tween into contiguous memory
 }
 
 void TweenSet::clear() {
     set_.clear();
 }
 
-Tween* TweenSet::getTween(unsigned int index) const {
+Tween* TweenSet::getTween(unsigned int index) {
     if (index < set_.size()) {
-        return set_[index].get();
+        return &set_[index]; // Return address of the object in the vector
     }
     return nullptr;
 }
 
-
-size_t TweenSet::size() const
-{
+size_t TweenSet::size() const {
     return set_.size();
 }

@@ -19,19 +19,20 @@
 #include <vector>
 #include <memory>
 
-class TweenSet
-{
+class TweenSet {
 public:
     TweenSet();
-    TweenSet(const TweenSet& copy);
-    TweenSet& operator=(const TweenSet& other);
-    ~TweenSet();
-    void push(std::unique_ptr<Tween> tween);
+    // Default copy/assignment now work correctly with std::vector<Tween>
+    TweenSet(const TweenSet& copy) = default;
+    TweenSet& operator=(const TweenSet& other) = default;
+    ~TweenSet() = default;
+
+    void push(const Tween& tween); // Changed to take object by reference
     void clear();
-    Tween* getTween(unsigned int index) const;
+    Tween* getTween(unsigned int index); // Returns pointer to internal object
 
     size_t size() const;
 
 private:
-    std::vector<std::unique_ptr<Tween>> set_;
+    std::vector<Tween> set_; // Contiguous storage of Tween objects
 };
