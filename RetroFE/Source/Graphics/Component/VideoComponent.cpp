@@ -41,8 +41,8 @@
 #include <gst/video/video.h>
 #include "../../Video/VideoPool.h"
 
-VideoComponent::VideoComponent(Page& p, const std::string& videoFile, int monitor, int numLoops, bool softOverlay, int listId, const int* perspectiveCorners)
-	: Component(p), videoFile_(videoFile), softOverlay_(softOverlay), numLoops_(numLoops), monitor_(monitor), listId_(listId), currentPage_(&p) {
+VideoComponent::VideoComponent(Page& p, const std::string& videoFile, int monitor, int numLoops, bool softOverlay, int listId, const int* perspectiveCorners, bool priority)
+	: Component(p), videoFile_(videoFile), softOverlay_(softOverlay), numLoops_(numLoops), monitor_(monitor), listId_(listId), currentPage_(&p), priority_(priority) {
 	if (perspectiveCorners) {
 		std::copy(perspectiveCorners, perspectiveCorners + 8, perspectiveCorners_);
 		hasPerspective_ = true;
@@ -212,7 +212,8 @@ void VideoComponent::allocateGraphicsMemory() {
 	if (!videoFile_.empty()) {
 		videoInst_ = VideoFactory::createVideo(
 			monitor_, numLoops_, softOverlay_, listId_,
-			hasPerspective_ ? perspectiveCorners_ : nullptr
+			hasPerspective_ ? perspectiveCorners_ : nullptr,
+			priority_
 		);
 
 		if (!videoInst_) {

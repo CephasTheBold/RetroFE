@@ -19,7 +19,7 @@
 #include <fstream>
 
 
-VideoComponent* VideoBuilder::createVideo(const std::string& path, Page& page, const std::string& name, int monitor, int numLoops, bool softOverlay, int listId, const int* perspectiveCorners) {
+VideoComponent* VideoBuilder::createVideo(const std::string& path, Page& page, const std::string& name, int monitor, int numLoops, bool softOverlay, int listId, const int* perspectiveCorners, bool priority) {
     VideoComponent* component = nullptr;
 
     // Declare the extensions vector as static so it's only initialized once.

@@ -1002,8 +1002,22 @@ bool ScrollingList::allocateTexture(size_t index, const Item* item) {
     ImageBuilder imageBuild;
     VideoBuilder videoBuild;
 
+    const bool isPriority = (index == selectedOffsetIndex_);
+
     auto tryVideo = [&](const std::string& videoPath, const std::string& logicalName) -> Component* {
         if (videoType_ == "null") return nullptr;
+
+        // --- LOGGING FOR PRIORITY VERIFICATION ---
+        if (isPriority) {
+            LOG_DEBUG("ScrollingList", "Priority Load Triggered: Slot[" + std::to_string(index) +
+                "] for Game: " + logicalName + " Path: " + videoPath);
+        }
+        else {
+            // Optional: lower level log for background cushion items
+            LOG_DEBUG("ScrollingList", "Cushion Load: Slot[" + std::to_string(index) +
+                "] Path: " + videoPath);
+        }
+
         return videoBuild.createVideo(
             videoPath,
             page,
@@ -1012,7 +1026,8 @@ bool ScrollingList::allocateTexture(size_t index, const Item* item) {
             -1,
             false,
             listId_,
-            perspectiveCornersInitialized_ ? perspectiveCorners_ : nullptr
+            perspectiveCornersInitialized_ ? perspectiveCorners_ : nullptr,
+            isPriority // Still passing the flag
         );
         };
 

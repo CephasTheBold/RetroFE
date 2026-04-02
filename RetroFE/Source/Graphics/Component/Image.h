@@ -9,6 +9,7 @@
 #include <string_view>
 #include <atomic>
 #include <mutex>
+#include <memory>
 #include <SDL2/SDL_image.h>
 
 struct SDL_Texture;
@@ -31,8 +32,8 @@ public:
 private:
     struct CachedImage {
         SDL_Texture* texture = nullptr;
-        int width = 0;   // Added to avoid background SDL_QueryTexture
-        int height = 0;  // Added to avoid background SDL_QueryTexture
+        int width = 0;
+        int height = 0;
         std::vector<SDL_Surface*> animatedSurfaces;
         std::vector<int> frameDelays;
     };
@@ -68,6 +69,21 @@ private:
         float height = 0;
     };
 
+    // Lifetime bridge: stays alive via shared_ptr even if Image is destroyed
+    struct SharedLoadState {
+        std::atomic<LoadResult*> pendingResult{ nullptr };
+        std::atomic<bool> isLoading{ false };
+
+        ~SharedLoadState() {
+            if (LoadResult* res = pendingResult.exchange(nullptr)) {
+                // If the Image was deleted before we could draw, clean up the result
+                if (res->surface) SDL_FreeSurface(res->surface);
+                for (auto* s : res->animatedSurfaces) if (s) SDL_FreeSurface(s);
+                delete res;
+            }
+        }
+    };
+
     void resetAnimationState();
     void clearInstanceResourcesForRetry();
     bool createAnimatedStreamingTexture(int width, int height);
@@ -89,8 +105,7 @@ private:
     bool isUsingCachedStaticTexture_ = false;
     bool isUsingCachedSurfaces_ = false;
 
-    std::atomic<LoadResult*> pendingResult_{ nullptr };
-    std::atomic<bool> isLoading_{ false };
+    std::shared_ptr<SharedLoadState> loadState_;
 
     static PathCache pathCache_;
     static std::unordered_map<PathCache::CacheKey, CachedImage, PathCache::CacheKeyHash> textureCache_;

@@ -24,36 +24,24 @@
 bool VideoFactory::enabled_ = true;
 int VideoFactory::numLoops_ = 0;
 
-std::unique_ptr<IVideo> VideoFactory::createVideo(int monitor, int numLoops, bool softOverlay, int listId, const int* perspectiveCorners) {
-    if (!enabled_) {
-        return nullptr;
-    }
+std::unique_ptr<IVideo> VideoFactory::createVideo(int monitor, int numLoops, bool softOverlay,
+    int listId, const int* perspectiveCorners, bool priority) {
+    if (!enabled_) return nullptr;
 
-    // VideoPool::acquireVideo now returns std::unique_ptr<IVideo>
-    auto instance = VideoPool::acquireVideo(monitor, listId, softOverlay);
-    if (!instance) {
-        LOG_ERROR("VideoFactory", "VideoPool failed to provide a video instance.");
-        return nullptr;
-    }
+    // Pass priority to VideoPool
+    auto instance = VideoPool::acquireVideo(monitor, listId, softOverlay, priority);
 
-    // Since instance is now a unique_ptr, use -> instead of .
-    if (!instance->initialize()) {
-        LOG_ERROR("VideoFactory", "Failed to initialize video from VideoPool");
-        // No need to delete - unique_ptr will handle cleanup
-        return nullptr;
-    }
+    if (!instance) return nullptr;
 
-    // Cast to GStreamerVideo to access specific methods
+    if (!instance->initialize()) return nullptr;
+
     if (auto* gstreamerVid = dynamic_cast<GStreamerVideo*>(instance.get())) {
-        int loopsToSet = (numLoops > 0) ? numLoops : numLoops_;
-        gstreamerVid->setNumLoops(loopsToSet);
+        gstreamerVid->setNumLoops(numLoops > 0 ? numLoops : numLoops_);
         gstreamerVid->setSoftOverlay(softOverlay);
-        if (perspectiveCorners) {  // Only set if not null
+        if (perspectiveCorners) {
             gstreamerVid->setPerspectiveCorners(perspectiveCorners);
-            }
         }
-
-    // Return the unique_ptr - ownership is transferred to caller
+    }
     return instance;
 }
 

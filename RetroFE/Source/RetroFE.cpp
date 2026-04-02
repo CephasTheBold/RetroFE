@@ -784,6 +784,8 @@ bool RetroFE::run() {
 	VideoFactory::setEnabled(videoEnable);
 	VideoFactory::setNumLoops(videoLoop);
 
+	VideoPool::shuttingDown_ = false;
+
 	initializeThread = SDL_CreateThread(initialize, "RetroFEInit", (void*)this);
 
 	if (!initializeThread)

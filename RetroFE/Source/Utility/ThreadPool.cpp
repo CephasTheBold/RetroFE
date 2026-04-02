@@ -26,7 +26,7 @@ ThreadPool::ThreadPool(size_t threads) : stop(false), activeWorkers(0) {
 					return;
 
 				task = std::move(this->tasks.front());
-				this->tasks.pop();
+				this->tasks.pop_front();
 				++activeWorkers;
 			}
 
