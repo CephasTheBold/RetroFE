@@ -559,6 +559,10 @@ bool GStreamerVideo::unload() {
 	const std::string fileForLog = currentFile_.empty() ? "unknown" : currentFile_;
 	LOG_DEBUG("GStreamerVideo", "Unload (async) called for " + fileForLog);
 
+	// 1. Capture the session ID we are unloading BEFORE changing any state.
+	// This ensures the lambda knows exactly which session it belongs to.
+	const uint64_t sessionId = currentPlaySessionId_.load(std::memory_order_acquire);
+
 	// Early exit if already in target state None
 	if (!playbin_ || targetState_.load(std::memory_order_acquire) == IVideo::VideoState::None) {
 		LOG_DEBUG("GStreamerVideo", "Unload: Already in target state None for " + fileForLog);
@@ -575,24 +579,35 @@ bool GStreamerVideo::unload() {
 	}
 
 	// Perform GStreamer teardown on GLib thread. 
-	// actualState_ will be updated by busCallback when it sees STATE_CHANGED -> READY.
-	(void)GlibLoop::instance().invokeAsync<bool>([this, fileForLog]() -> bool {
+	(void)GlibLoop::instance().invokeAsync<bool>([this, fileForLog, sessionId]() -> bool {
 		if (!pipeline_ || !playbin_) return true;
 
+		// 2. Stop data flow before changing states
 		detachAndDrainSink(videoSink_, &padProbeId_);
 		guint noProbe = 0;
 		detachAndDrainSink(audioSink_, &noProbe);
 
-		// 1. Initiate flush and drop to READY state.
-		// We do NOT flush the bus here because we WANT the busCallback to process 
-		// the STATE_CHANGED message that follows this call.
+		// 3. Initiate state change to READY.
 		gst_element_set_state(pipeline_, GST_STATE_READY);
 
-		// 4. Clean up per-session contexts
-		if (audioCtx_) { g_free(audioCtx_); audioCtx_ = nullptr; }
-		if (videoCtx_) { g_free(videoCtx_); videoCtx_ = nullptr; }
+		// 4. SYNC WAIT: Force the GLib thread to wait until the pipeline is actually 
+		// in the READY state. This ensures internal worker threads (typefind, etc.) 
+		// release their locks before this unload task completes.
+		gst_element_get_state(pipeline_, nullptr, nullptr, 1 * GST_SECOND);
 
-		LOG_DEBUG("GStreamerVideo", "Unload: GStreamer pipeline teardown initiated for " + fileForLog);
+		// 5. SESSION GUARDED CLEANUP: Only free these if they still belong to the
+		// session that started this unload. If a 'play' has already allocated new
+		// contexts for Session B, we won't touch them.
+		if (audioCtx_ && audioCtx_->session == sessionId) {
+			g_free(audioCtx_);
+			audioCtx_ = nullptr;
+		}
+		if (videoCtx_ && videoCtx_->session == sessionId) {
+			g_free(videoCtx_);
+			videoCtx_ = nullptr;
+		}
+
+		LOG_DEBUG("GStreamerVideo", "Unload: GStreamer pipeline teardown finalized for session " + std::to_string(sessionId));
 		return true;
 		}, G_PRIORITY_HIGH);
 
@@ -600,9 +615,9 @@ bool GStreamerVideo::unload() {
 	currentFile_ = "";
 	playCount_ = 0;
 	numLoops_ = 0;
-	width_ = -1;       // Force draw() to re-check on next video
+	width_ = -1;
 	height_ = -1;
-	videoDrawIdx_ = -1; // Prevent showing the last frame of the old video
+	videoDrawIdx_ = -1;
 	texture_ = nullptr;
 	hasError_.store(false, std::memory_order_release);
 	hasVideoStream_.store(false, std::memory_order_release);
@@ -610,7 +625,6 @@ bool GStreamerVideo::unload() {
 
 	return true;
 }
-
 // Function to compute perspective transform from 4 arbitrary points
 static inline std::array<double, 9> computePerspectiveMatrixFromCorners(
 	int width,
@@ -925,13 +939,23 @@ bool GStreamerVideo::play(const std::string& file) {
 		}
 
 		// Clear any lingering async transition: quiesce/flush ? READY
-		if (gst_element_get_state(pipeline_, nullptr, nullptr, 0) == GST_STATE_CHANGE_ASYNC) {
-			LOG_WARNING("GStreamerVideo", "Previous transition ASYNC; quiesce+flush ? READY");
+		GstStateChangeReturn stateRet = gst_element_get_state(pipeline_, nullptr, nullptr, 200 * GST_MSECOND);
+
+		if (stateRet == GST_STATE_CHANGE_ASYNC || stateRet == GST_STATE_CHANGE_FAILURE) {
+			LOG_WARNING("GStreamerVideo", "Previous transition ASYNC or uncertain; forcing synchronous READY for " + file);
+
 			detachAndDrainSink(videoSink_, &padProbeId_);
 			guint noProbe = 0;
 			detachAndDrainSink(audioSink_, &noProbe);
+
 			gst_element_send_event(pipeline_, gst_event_new_flush_start());
 			gst_element_set_state(pipeline_, GST_STATE_READY);
+
+			// 2. SYNC WAIT: After requesting READY, wait synchronously for the state 
+			// to be reached. This ensures worker threads (typefind, demuxers) have 
+			// finished state synchronization before the next set_state call.
+			gst_element_get_state(pipeline_, nullptr, nullptr, 2 * GST_SECOND);
+
 			gst_element_send_event(pipeline_, gst_event_new_flush_stop(TRUE));
 		}
 
