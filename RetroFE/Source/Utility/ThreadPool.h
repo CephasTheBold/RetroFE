@@ -3,7 +3,7 @@
 #define THREADPOOL_H
 
 #include <vector>
-#include <deque>
+#include <queue>
 #include <thread>
 #include <mutex>
 #include <condition_variable>
@@ -37,17 +37,12 @@ public:
     template<class F, class... Args>
     auto enqueue(F&& f, Args&&... args)
         -> std::future<typename std::invoke_result_t<F, Args...>>;
-    
-    // New Priority Method
-    template<class F, class... Args>
-    auto enqueueAtFront(F&& f, Args&&... args)
-        -> std::future<typename std::invoke_result_t<F, Args...>>;
 
 private:
     // Worker threads
     std::vector<std::thread> workers;
     // Task queue
-    std::deque<std::function<void()>> tasks;
+    std::queue<std::function<void()>> tasks;
 
     // Synchronization
     std::mutex queueMutex;
@@ -82,41 +77,11 @@ auto ThreadPool::enqueue(F&& f, Args&&... args)
     {
         std::unique_lock<std::mutex> lock(queueMutex);
         if (stop) throw std::runtime_error("enqueue on stopped ThreadPool");
-        tasks.emplace_back([pkg] { (*pkg)(); });
+        tasks.emplace([pkg] { (*pkg)(); });
     }
     condition.notify_one();
     return res;
 }
 
-template<class F, class... Args>
-auto ThreadPool::enqueueAtFront(F&& f, Args&&... args)
--> std::future<std::invoke_result_t<F, Args...>> {
-    using return_type = std::invoke_result_t<F, Args...>;
-
-    auto pkg = std::make_shared<std::packaged_task<return_type()>>(
-        [func = std::forward<F>(f),
-        tup = std::make_tuple(std::forward<Args>(args)...)
-        ]() mutable -> return_type {
-            if constexpr (std::is_void_v<return_type>) {
-                std::apply(std::move(func), std::move(tup));
-                return;
-            }
-            else {
-                return std::apply(std::move(func), std::move(tup));
-            }
-        }
-    );
-
-    std::future<return_type> res = pkg->get_future();
-    {
-        std::unique_lock<std::mutex> lock(queueMutex);
-        if (stop) throw std::runtime_error("enqueueAtFront on stopped ThreadPool");
-
-        // Use emplace_front to jump to the head of the line
-        tasks.emplace_front([pkg] { (*pkg)(); });
-    }
-    condition.notify_one();
-    return res;
-}
 
 #endif // THREADPOOL_H

@@ -41,8 +41,8 @@
 #include <gst/video/video.h>
 #include "../../Video/VideoPool.h"
 
-VideoComponent::VideoComponent(Page& p, const std::string& videoFile, int monitor, int numLoops, bool softOverlay, int listId, const int* perspectiveCorners, bool priority)
-	: Component(p), videoFile_(videoFile), softOverlay_(softOverlay), numLoops_(numLoops), monitor_(monitor), listId_(listId), currentPage_(&p), priority_(priority) {
+VideoComponent::VideoComponent(Page& p, const std::string& videoFile, int monitor, int numLoops, bool softOverlay, int listId, const int* perspectiveCorners)
+	: Component(p), videoFile_(videoFile), softOverlay_(softOverlay), numLoops_(numLoops), monitor_(monitor), listId_(listId), currentPage_(&p) {
 	if (perspectiveCorners) {
 		std::copy(perspectiveCorners, perspectiveCorners + 8, perspectiveCorners_);
 		hasPerspective_ = true;
@@ -56,11 +56,18 @@ VideoComponent::~VideoComponent() {
 
 bool VideoComponent::update(float dt) {
 
-	// 1.0f / 255.0f is ~0.00392f. Anything lower maps to Uint8 0 in SDL.
-	constexpr float MIN_VISIBLE_ALPHA = 1.0f / 255.0f;
-
-	if (!videoInst_ && !videoFile_.empty()) {
-		allocateGraphicsMemory();
+	// 1. --- complete pending retarget on the main thread ---
+	if (videoInst_ && pendingRetarget_) {
+		if (auto* gst = dynamic_cast<GStreamerVideo*>(videoInst_.get())) {
+			if (gst->consumeBecameNone()) {
+				instanceReady_ = videoInst_->play(videoFile_);
+				pendingRetarget_ = false;
+				LOG_DEBUG("VideoComponent", "[Init] Prerolling to PAUSED: " + videoFile_);
+			}
+		}
+		else {
+			pendingRetarget_ = false;
+		}
 	}
 
 	if (!videoInst_ || !currentPage_ || !instanceReady_ || !videoInst_->isPipelineReady() || videoInst_->hasError()) {
@@ -85,7 +92,7 @@ bool VideoComponent::update(float dt) {
 	videoInst_->setVolume(baseViewInfo.Volume);
 	videoInst_->volumeUpdate();
 
-	const bool visibleNow = (baseViewInfo.Alpha > MIN_VISIBLE_ALPHA);
+	const bool visibleNow = (baseViewInfo.Alpha > 0.0f);
 	auto actual = videoInst_->getActualState();
 	auto target = videoInst_->getTargetState();
 
@@ -212,8 +219,7 @@ void VideoComponent::allocateGraphicsMemory() {
 	if (!videoFile_.empty()) {
 		videoInst_ = VideoFactory::createVideo(
 			monitor_, numLoops_, softOverlay_, listId_,
-			hasPerspective_ ? perspectiveCorners_ : nullptr,
-			priority_
+			hasPerspective_ ? perspectiveCorners_ : nullptr
 		);
 
 		if (!videoInst_) {
@@ -242,6 +248,7 @@ void VideoComponent::freeGraphicsMemory() {
 		VideoPool::releaseVideo(std::move(video), monitor_, listId_);
 		return;
 	}
+	pendingRetarget_ = false;
 	LOG_DEBUG("VideoComponent", "Stopping and resetting video: " + videoFile_);
 	videoInst_.reset();
 }
@@ -348,7 +355,7 @@ bool VideoComponent::isPlaying() {
 	return videoInst_->isPlaying();
 }
 
-bool VideoComponent::hasFinishedLoops(){
+bool VideoComponent::hasFinishedLoops() {
 	if (!videoInst_) {
 		return true;
 	}

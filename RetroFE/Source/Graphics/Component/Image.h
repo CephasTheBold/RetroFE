@@ -7,9 +7,6 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <string_view>
-#include <atomic>
-#include <mutex>
-#include <memory>
 #include <SDL2/SDL_image.h>
 
 struct SDL_Texture;
@@ -32,8 +29,6 @@ public:
 private:
     struct CachedImage {
         SDL_Texture* texture = nullptr;
-        int width = 0;
-        int height = 0;
         std::vector<SDL_Surface*> animatedSurfaces;
         std::vector<int> frameDelays;
     };
@@ -57,32 +52,17 @@ private:
         CacheKey getKey(const std::string& filePath, int monitor);
     };
 
-    struct LoadResult {
-        bool isCacheHit = false;
-        SDL_Texture* cachedTexture = nullptr;
-
-        SDL_Surface* surface = nullptr;
-        std::vector<SDL_Surface*> animatedSurfaces;
-        std::vector<int> frameDelays;
-
-        float width = 0;
-        float height = 0;
+    struct LoadContext {
+        const std::string& filePath;
+        PathCache::CacheKey cacheKey;
+        CachedImage& newCachedImage;
+        ViewInfo& baseViewInfo;
+        bool useCache;
     };
 
-    // Lifetime bridge: stays alive via shared_ptr even if Image is destroyed
-    struct SharedLoadState {
-        std::atomic<LoadResult*> pendingResult{ nullptr };
-        std::atomic<bool> isLoading{ false };
-
-        ~SharedLoadState() {
-            if (LoadResult* res = pendingResult.exchange(nullptr)) {
-                // If the Image was deleted before we could draw, clean up the result
-                if (res->surface) SDL_FreeSurface(res->surface);
-                for (auto* s : res->animatedSurfaces) if (s) SDL_FreeSurface(s);
-                delete res;
-            }
-        }
-    };
+    bool loadStaticImage(SDL_RWops* rw, LoadContext& ctx);
+    bool loadAnimatedImage(SDL_RWops* rw, LoadContext& ctx);
+    bool loadFromCache(LoadContext& ctx);
 
     void resetAnimationState();
     void clearInstanceResourcesForRetry();
@@ -99,17 +79,14 @@ private:
     std::vector<int> frameDelays_;
 
     int currentFrame_ = 0;
-    Uint32 lastFrameTime_ = 0;
+    Uint32 lastFrameTime_ = 0; // 0 indicates the animation hasn't started yet
 
     bool useTextureCaching_;
     bool isUsingCachedStaticTexture_ = false;
     bool isUsingCachedSurfaces_ = false;
 
-    std::shared_ptr<SharedLoadState> loadState_;
-
     static PathCache pathCache_;
     static std::unordered_map<PathCache::CacheKey, CachedImage, PathCache::CacheKeyHash> textureCache_;
-    static std::mutex textureCacheMutex_;
 };
 
 #endif

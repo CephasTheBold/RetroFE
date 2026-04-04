@@ -26,7 +26,7 @@ ThreadPool::ThreadPool(size_t threads) : stop(false), activeWorkers(0) {
 					return;
 
 				task = std::move(this->tasks.front());
-				this->tasks.pop_front();
+				this->tasks.pop();
 				++activeWorkers;
 			}
 
@@ -68,7 +68,7 @@ ThreadPool::~ThreadPool() {
 ThreadPool& ThreadPool::getInstance() {
 	static ThreadPool instance([] {
 		unsigned hw = std::thread::hardware_concurrency();
-		unsigned suggested = std::clamp(hw / 2, 3u, 6u);
+		unsigned suggested = hw ? std::min(3u, hw) : 3u; // keep 1+ cores free
 		if (const char* env_p = std::getenv("RETROFE_THREADPOOL_SIZE")) {
 			unsigned user = std::atoi(env_p);
 			if (user > 0 && user < 64) suggested = user;

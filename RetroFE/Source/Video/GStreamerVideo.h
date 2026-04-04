@@ -24,7 +24,8 @@
 #include <atomic>
 #include <string>
 #include <vector>
-#include <functional>
+#include <memory>
+#include <mutex>
 
 extern "C" {
 #if (__APPLE__)
@@ -87,7 +88,6 @@ public:
 
 
 	bool hasFinishedLoops() const;
-	void setOnReadyCallback(std::function<void(IVideo*)> cb) override;
 
 
 	bool hasError() const override {
@@ -114,6 +114,8 @@ public:
 	}
 
 private:
+	std::shared_ptr<std::atomic<bool>> aliveToken_;
+	std::mutex asyncMutex_;
 	// === Thread-shared atomics ===
 	std::atomic<uint64_t> currentPlaySessionId_{ 0 };
 	static std::atomic<uint64_t> nextUniquePlaySessionId_;
@@ -210,7 +212,5 @@ private:
 	AudioBus::SourceId videoSourceId_{ 0 };   // ID of this video’s source in AudioBus
 	GstElement* audioSink_{ nullptr };        // GStreamer appsink for audio
 	std::atomic<bool> audioRun_{ false };     // Control flag for the feeder loop
-
-	std::function<void(IVideo*)> onReadyCallback_;
 };
 

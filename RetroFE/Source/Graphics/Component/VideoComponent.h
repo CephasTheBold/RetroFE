@@ -28,10 +28,9 @@
 #include <memory>
 
 
-class VideoComponent : public Component
-{
+class VideoComponent : public Component {
 public:
-    explicit VideoComponent(Page& p, const std::string& videoFile, int monitor, int numLoops, bool softOverlay, int listID, const int* perspectiveCorners, bool priority = false);
+    explicit VideoComponent(Page& p, const std::string& videoFile, int monitor, int numLoops, bool softOverlay, int listID, const int* perspectiveCorners);
     ~VideoComponent() override;
     bool update(float dt) override;
     void draw() override;
@@ -41,23 +40,23 @@ public:
     bool isPlaying() override;
     bool hasFinishedLoops();
     bool hasVideoStream();
-    void skipForward( ) override;
-    void skipBackward( ) override;
-    void skipForwardp( ) override;
-    void skipBackwardp( ) override;
-    void pause( ) override;
+    void skipForward() override;
+    void skipBackward() override;
+    void skipForwardp() override;
+    void skipBackwardp() override;
+    void pause() override;
     void resume();
-    void restart( ) override;
-    unsigned long long getCurrent( ) override;
-    unsigned long long getDuration( ) override;
-    bool isPaused( ) override;
+    void restart() override;
+    unsigned long long getCurrent() override;
+    unsigned long long getDuration() override;
+    bool isPaused() override;
     std::string_view filePath();
 
 private:
     std::string videoFile_;
     std::unique_ptr<IVideo> videoInst_;
     bool hasBeenOnScreen_{ false };
-	bool wasVisible_{ false };
+    bool wasVisible_{ false };
     bool softOverlay_;
     int numLoops_;
     int monitor_;
@@ -66,8 +65,8 @@ private:
     int perspectiveCorners_[8]{ 0 }; // Initialize to zeros
     bool hasPerspective_{ false };
     bool dimensionsUpdated_ = false; // Track if dimensions have been updated for the current video
-	bool instanceReady_{ false }; // Track if the video instance is ready to play
-	bool pendingRestart_{ false }; // Track if a restart is pending after fast-scroll
+    bool instanceReady_{ false }; // Track if the video instance is ready to play
+    bool pendingRestart_{ false }; // Track if a restart is pending after fast-scroll
+    bool pendingRetarget_ = false;
     bool restartOnHide_ = false;
-    bool priority_{ false };
 };

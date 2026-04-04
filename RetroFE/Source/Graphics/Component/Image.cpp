@@ -2,9 +2,8 @@
 #include "../ViewInfo.h"
 #include "../../SDL.h"
 #include "../../Utility/Log.h"
-#include "../../Utility/ThreadPool.h"
 
-std::mutex Image::textureCacheMutex_;
+// -------------------- Static Storage --------------------
 Image::PathCache Image::pathCache_;
 std::unordered_map<Image::PathCache::CacheKey, Image::CachedImage, Image::PathCache::CacheKeyHash> Image::textureCache_;
 
@@ -20,167 +19,154 @@ void Image::ensureCacheReserved() {
     reserved = true;
 }
 
+// -------------------- Lifecycle --------------------
 Image::Image(const std::string& file, const std::string& altFile, Page& p, int monitor, bool additive, bool useTextureCaching)
-    : Component(p), file_(file), altFile_(altFile), useTextureCaching_(useTextureCaching),
-    loadState_(std::make_shared<SharedLoadState>()) {
+    : Component(p), file_(file), altFile_(altFile), useTextureCaching_(useTextureCaching) {
     baseViewInfo.Monitor = monitor;
     baseViewInfo.Additive = additive;
     baseViewInfo.Layout = page.getCurrentLayout();
 }
 
-Image::~Image() {
-    freeGraphicsMemory();
-}
+Image::~Image() { freeGraphicsMemory(); }
 
+// -------------------- Memory Management --------------------
 void Image::allocateGraphicsMemory() {
-    if (texture_ || animatedTexture_ || loadState_->isLoading.load()) return;
-
-    // Fix: Check BOTH paths. If both are empty, then return.
-    if (file_.empty() && altFile_.empty()) return;
-
+    if (texture_ || animatedTexture_) return;
     if (useTextureCaching_) ensureCacheReserved();
 
-    loadState_->isLoading = true;
+    auto tryLoad = [this](const std::string& filePath) -> bool {
+        if (filePath.empty()) return false;
+        clearInstanceResourcesForRetry();
 
-    // Capture shared_ptr to state, NOT 'this'. This prevents crashing when backing out.
-    auto state = loadState_;
-    std::string primaryPath = file_;
-    std::string fallbackPath = altFile_;
-    int monitor = baseViewInfo.Monitor;
-    bool useCache = useTextureCaching_;
+        CachedImage newCachedImage;
+        PathCache::CacheKey cacheKey{};
 
-    ThreadPool::getInstance().enqueueAtFront([state, primaryPath, fallbackPath, monitor, useCache]() {
-        auto result = std::make_unique<LoadResult>();
-
-        // 1. Try Cache for Primary, then Fallback
-        if (useCache) {
-            std::scoped_lock lock(textureCacheMutex_);
-
-            auto checkCache = [&](const std::string& path) {
-                if (path.empty()) return false;
-                auto it = textureCache_.find(pathCache_.getKey(path, monitor));
-                if (it != textureCache_.end()) {
-                    result->isCacheHit = true;
-                    result->cachedTexture = it->second.texture;
-                    result->width = (float)it->second.width;
-                    result->height = (float)it->second.height;
-                    result->animatedSurfaces = it->second.animatedSurfaces;
-                    result->frameDelays = it->second.frameDelays;
-                    return true;
-                }
-                return false;
-                };
-
-            if (checkCache(primaryPath) || checkCache(fallbackPath)) {
-                state->pendingResult.store(result.release());
-                return;
-            }
+        if (useTextureCaching_) {
+            cacheKey = pathCache_.getKey(filePath, baseViewInfo.Monitor);
+            LoadContext ctx{ filePath, cacheKey, newCachedImage, baseViewInfo, true };
+            if (loadFromCache(ctx)) return true;
         }
 
-        // 2. Disk Load (Try Primary, then Fallback)
-        SDL_RWops* rw = primaryPath.empty() ? nullptr : SDL_RWFromFile(primaryPath.c_str(), "rb");
-        if (!rw && !fallbackPath.empty()) {
-            rw = SDL_RWFromFile(fallbackPath.c_str(), "rb");
-        }
+        SDL_RWops* rw = SDL_RWFromFile(filePath.c_str(), "rb");
+        if (!rw) return false;
 
-        if (!rw) {
-            state->isLoading = false;
-            return;
-        }
+        LoadContext ctx{ filePath, cacheKey, newCachedImage, baseViewInfo, useTextureCaching_ };
+        bool success = (IMG_isGIF(rw) || IMG_isWEBP(rw)) ? loadAnimatedImage(rw, ctx) : loadStaticImage(rw, ctx);
 
-        // Decode logic
-        if (IMG_isGIF(rw) || IMG_isWEBP(rw)) {
-            IMG_Animation* anim = IMG_LoadAnimation_RW(rw, 1);
-            if (anim) {
-                result->width = (float)anim->w;
-                result->height = (float)anim->h;
-                for (int i = 0; i < anim->count; ++i) {
-                    SDL_Surface* s = SDL_ConvertSurfaceFormat(anim->frames[i], SDL_PIXELFORMAT_RGBA32, 0);
-                    if (s) {
-                        result->animatedSurfaces.push_back(s);
-                        result->frameDelays.push_back((anim->delays && anim->delays[i] > 0) ? anim->delays[i] : 100);
-                    }
-                }
-                IMG_FreeAnimation(anim);
-            }
-        }
-        else {
-            SDL_Surface* temp = IMG_Load_RW(rw, 1);
-            if (temp) {
-                result->surface = SDL_ConvertSurfaceFormat(temp, SDL_PIXELFORMAT_RGBA32, 0);
-                result->width = (float)result->surface->w;
-                result->height = (float)result->surface->h;
-                SDL_FreeSurface(temp);
-            }
-        }
+        if (!success) return false;
 
-        if (result->surface || !result->animatedSurfaces.empty()) {
-            state->pendingResult.store(result.release());
-        }
-        else {
-            state->isLoading = false;
-        }
-        });
-}
-
-void Image::draw() {
-    Component::draw();
-
-    // Poll for the result via the loadState shared pointer
-    if (LoadResult* res = loadState_->pendingResult.exchange(nullptr)) {
-        if (res->isCacheHit) {
-            texture_ = res->cachedTexture;
-            isUsingCachedStaticTexture_ = (texture_ != nullptr);
-            animatedSurfaces_ = res->animatedSurfaces;
-            frameDelays_ = res->frameDelays;
-            isUsingCachedSurfaces_ = !animatedSurfaces_.empty();
-            if (isUsingCachedSurfaces_) {
-                createAnimatedStreamingTexture((int)res->width, (int)res->height);
-                primeAnimatedTextureIfNeeded();
-            }
-        }
-        else {
-            if (res->surface) {
-                texture_ = SDL_CreateTextureFromSurface(SDL::getRenderer(baseViewInfo.Monitor), res->surface);
-                SDL_FreeSurface(res->surface);
-            }
-            else if (!res->animatedSurfaces.empty()) {
-                animatedSurfaces_ = res->animatedSurfaces;
-                frameDelays_ = res->frameDelays;
-                createAnimatedStreamingTexture((int)res->width, (int)res->height);
-                primeAnimatedTextureIfNeeded();
-            }
-
-            if (useTextureCaching_ && (texture_ || !animatedSurfaces_.empty())) {
-                std::scoped_lock lock(textureCacheMutex_);
-                // Check which file we actually loaded to use as the key
-                std::string actualFile = SDL_RWFromFile(file_.c_str(), "rb") ? file_ : altFile_;
-                auto cacheKey = pathCache_.getKey(actualFile, baseViewInfo.Monitor);
-
-                CachedImage ci;
-                ci.texture = texture_;
-                ci.width = (int)res->width;
-                ci.height = (int)res->height;
-                ci.animatedSurfaces = animatedSurfaces_;
-                ci.frameDelays = frameDelays_;
-                textureCache_[cacheKey] = ci;
+        if (useTextureCaching_) {
+            auto [it, inserted] = textureCache_.try_emplace(cacheKey);
+            if (inserted) {
+                it->second = std::move(newCachedImage);
                 isUsingCachedStaticTexture_ = (texture_ != nullptr);
                 isUsingCachedSurfaces_ = !animatedSurfaces_.empty();
             }
+            else {
+                if (texture_ && !isUsingCachedStaticTexture_) SDL_DestroyTexture(texture_);
+                texture_ = it->second.texture;
+                isUsingCachedStaticTexture_ = (texture_ != nullptr);
+                animatedSurfaces_ = it->second.animatedSurfaces;
+                frameDelays_ = it->second.frameDelays;
+                isUsingCachedSurfaces_ = !animatedSurfaces_.empty();
+                primeAnimatedTextureIfNeeded();
+            }
         }
-        baseViewInfo.ImageWidth = res->width;
-        baseViewInfo.ImageHeight = res->height;
-        loadState_->isLoading = false;
-        delete res;
+        return true;
+        };
+
+    if (!file_.empty() && tryLoad(file_)) return;
+    if (!altFile_.empty() && tryLoad(altFile_)) return;
+}
+
+// -------------------- Loaders --------------------
+bool Image::loadStaticImage(SDL_RWops* rw, LoadContext& ctx) {
+    SDL_Texture* tex = IMG_LoadTexture_RW(SDL::getRenderer(baseViewInfo.Monitor), rw, 1);
+    if (!tex) return false;
+    SDL_QueryTexture(tex, nullptr, nullptr, (int*)&ctx.baseViewInfo.ImageWidth, (int*)&ctx.baseViewInfo.ImageHeight);
+    texture_ = tex;
+    if (ctx.useCache) ctx.newCachedImage.texture = tex;
+    return true;
+}
+
+bool Image::loadAnimatedImage(SDL_RWops* rw, LoadContext& ctx) {
+    resetAnimationState();
+    IMG_Animation* anim = IMG_LoadAnimation_RW(rw, 1);
+    if (!anim) return false;
+
+    if (anim->count <= 1) {
+        texture_ = SDL_CreateTextureFromSurface(SDL::getRenderer(baseViewInfo.Monitor), anim->frames[0]);
+        ctx.baseViewInfo.ImageWidth = (float)anim->w;
+        ctx.baseViewInfo.ImageHeight = (float)anim->h;
+        if (ctx.useCache) ctx.newCachedImage.texture = texture_;
+        IMG_FreeAnimation(anim);
+        return texture_ != nullptr;
     }
 
+    for (int i = 0; i < anim->count; ++i) {
+        SDL_Surface* s = SDL_ConvertSurfaceFormat(anim->frames[i], SDL_PIXELFORMAT_RGBA32, 0);
+        if (s) {
+            animatedSurfaces_.push_back(s);
+            frameDelays_.push_back((anim->delays && anim->delays[i] > 0) ? anim->delays[i] : 100);
+        }
+    }
+
+    ctx.baseViewInfo.ImageWidth = (float)anim->w;
+    ctx.baseViewInfo.ImageHeight = (float)anim->h;
+    bool ok = createAnimatedStreamingTexture(anim->w, anim->h);
+
+    if (ok && ctx.useCache) {
+        ctx.newCachedImage.animatedSurfaces = animatedSurfaces_;
+        ctx.newCachedImage.frameDelays = frameDelays_;
+    }
+
+    IMG_FreeAnimation(anim);
+    primeAnimatedTextureIfNeeded();
+    return ok;
+}
+
+bool Image::loadFromCache(LoadContext& ctx) {
+    auto it = textureCache_.find(ctx.cacheKey);
+    if (it == textureCache_.end()) return false;
+    const CachedImage& ci = it->second;
+    if (ci.texture) {
+        texture_ = ci.texture;
+        isUsingCachedStaticTexture_ = true;
+    }
+    else if (!ci.animatedSurfaces.empty()) {
+        animatedSurfaces_ = ci.animatedSurfaces;
+        frameDelays_ = ci.frameDelays;
+        isUsingCachedSurfaces_ = true;
+        createAnimatedStreamingTexture(animatedSurfaces_[0]->w, animatedSurfaces_[0]->h);
+    }
+    SDL_Texture* target = texture_ ? texture_ : animatedTexture_;
+    if (target) {
+        SDL_QueryTexture(target, nullptr, nullptr, (int*)&ctx.baseViewInfo.ImageWidth, (int*)&ctx.baseViewInfo.ImageHeight);
+        primeAnimatedTextureIfNeeded();
+    }
+    return true;
+}
+
+// -------------------- Draw (The "Stutter-Free" Logic) --------------------
+void Image::draw() {
+    Component::draw();
     if (!texture_ && !animatedTexture_) return;
 
-    // ... (rest of draw logic for animation and renderCopyF is identical) ...
     if (animatedTexture_ && !animatedSurfaces_.empty() && !frameDelays_.empty()) {
         Uint32 now = SDL_GetTicks();
-        if (lastFrameTime_ == 0) lastFrameTime_ = now;
+
+        /* FIX 1: Lazy Initialization
+           Align the animation clock to the EXACT moment it is first drawn.
+           This prevents 'lost time' during loading from causing a frame-skip. */
+        if (lastFrameTime_ == 0) {
+            lastFrameTime_ = now;
+        }
+
         bool frameChanged = false;
+
+        /* FIX 2: Loop Safety
+           We limit the while loop to advance at most one full cycle.
+           This prevents 'micro-stutters' where it skips Frame 0 during the loop-around. */
         size_t maxAdvance = animatedSurfaces_.size();
         size_t advanced = 0;
 
@@ -190,10 +176,17 @@ void Image::draw() {
             frameChanged = true;
             advanced++;
         }
-        if (now - lastFrameTime_ > 1000) lastFrameTime_ = now;
+
+        /* If we are still massively out of sync (e.g. PC went to sleep), snap to now */
+        if (now - lastFrameTime_ > 1000) {
+            lastFrameTime_ = now;
+        }
+
         if (frameChanged) {
             SDL_Surface* s = animatedSurfaces_[currentFrame_];
-            if (s && s->pixels) SDL_UpdateTexture(animatedTexture_, nullptr, s->pixels, s->pitch);
+            if (s && s->pixels) {
+                SDL_UpdateTexture(animatedTexture_, nullptr, s->pixels, s->pitch);
+            }
         }
     }
 
@@ -205,6 +198,7 @@ void Image::draw() {
         page.getLayoutWidthByMonitor(baseViewInfo.Monitor), page.getLayoutHeightByMonitor(baseViewInfo.Monitor));
 }
 
+// -------------------- Helpers --------------------
 void Image::freeGraphicsMemory() {
     if (animatedTexture_) SDL_DestroyTexture(animatedTexture_);
     if (texture_ && !isUsingCachedStaticTexture_) SDL_DestroyTexture(texture_);
@@ -219,8 +213,27 @@ void Image::freeGraphicsMemory() {
     resetAnimationState();
 }
 
+void Image::resetAnimationState() {
+    currentFrame_ = 0;
+    lastFrameTime_ = 0; // Set to 0 so draw() can lazy-init it
+}
+
+void Image::clearInstanceResourcesForRetry() { freeGraphicsMemory(); }
+
+bool Image::createAnimatedStreamingTexture(int width, int height) {
+    if (width <= 0 || height <= 0) return false;
+    animatedTexture_ = SDL_CreateTexture(SDL::getRenderer(baseViewInfo.Monitor), SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, width, height);
+    return animatedTexture_ != nullptr;
+}
+
+void Image::primeAnimatedTextureIfNeeded() {
+    if (animatedTexture_ && !animatedSurfaces_.empty()) {
+        SDL_Surface* s = animatedSurfaces_[0];
+        if (s) SDL_UpdateTexture(animatedTexture_, nullptr, s->pixels, s->pitch);
+    }
+}
+
 void Image::cleanupTextureCache() {
-    std::scoped_lock lock(textureCacheMutex_);
     for (auto& [key, entry] : textureCache_) {
         if (entry.texture) SDL_DestroyTexture(entry.texture);
         for (auto* s : entry.animatedSurfaces) if (s) SDL_FreeSurface(s);
@@ -228,17 +241,4 @@ void Image::cleanupTextureCache() {
     textureCache_.clear();
 }
 
-void Image::resetAnimationState() { currentFrame_ = 0; lastFrameTime_ = 0; }
-void Image::clearInstanceResourcesForRetry() { freeGraphicsMemory(); }
-bool Image::createAnimatedStreamingTexture(int width, int height) {
-    if (width <= 0 || height <= 0) return false;
-    animatedTexture_ = SDL_CreateTexture(SDL::getRenderer(baseViewInfo.Monitor), SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, width, height);
-    return animatedTexture_ != nullptr;
-}
-void Image::primeAnimatedTextureIfNeeded() {
-    if (animatedTexture_ && !animatedSurfaces_.empty()) {
-        SDL_Surface* s = animatedSurfaces_[0];
-        if (s) SDL_UpdateTexture(animatedTexture_, nullptr, s->pixels, s->pitch);
-    }
-}
 std::string_view Image::filePath() { return file_; }
