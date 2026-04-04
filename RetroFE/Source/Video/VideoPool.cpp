@@ -1,6 +1,6 @@
 #include "VideoPool.h"
 #include "../Utility/Log.h"
-#include "../Utility/ThreadPool.h"
+#include "GlibLoop.h"
 
 std::mutex VideoPool::s_registryMutex;
 std::atomic<bool> VideoPool::shuttingDown_ = false;
@@ -77,12 +77,12 @@ VideoPool::VideoPtr VideoPool::acquireVideo(int monitor, int listId, bool softOv
             };
 
         if (priority) {
-            // High priority: Jump to the front of the ThreadPool queue
-            ThreadPool::getInstance().enqueueAtFront(std::move(task));
+            // High priority: schedule on the GLib loop before default-priority tasks
+            GlibLoop::instance().invoke(std::move(task), G_PRIORITY_HIGH);
         }
         else {
-            // Standard: Add to the end of the queue
-            ThreadPool::getInstance().enqueue(std::move(task));
+            // Standard: schedule on the GLib loop at default priority
+            GlibLoop::instance().invoke(std::move(task));
         }
     }
 
@@ -171,7 +171,7 @@ void VideoPool::tryErasePool(int monitor, int listId, PoolInfoPtr pool) {
         if (v->getActualState() != IVideo::VideoState::None) return;
     }
 
-    // Everyone is stopped and we are marked for cleanup—safe to delete from registry
+    // Everyone is stopped and we are marked for cleanupï¿½safe to delete from registry
     std::scoped_lock lock(s_registryMutex);
     auto mit = pools_.find(monitor);
     if (mit != pools_.end()) {
@@ -196,7 +196,7 @@ void VideoPool::cleanup(int monitor, int listId) {
 
     std::scoped_lock plock(pool->poolMutex);
     pool->markedForCleanup = true;
-    // We don't erase here anymore—tryErasePool handles it once the GStreamer threads settle
+    // We don't erase here anymoreï¿½tryErasePool handles it once the GStreamer threads settle
 }
 
 void VideoPool::shutdown() {
