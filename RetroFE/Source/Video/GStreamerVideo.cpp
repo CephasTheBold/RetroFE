@@ -587,15 +587,23 @@ bool GStreamerVideo::unload() {
 		guint noProbe = 0;
 		detachAndDrainSink(audioSink_, &noProbe);
 
-		// 3. Initiate state change to READY.
+		// 3. Flush first so any internally-blocked element threads (typefind,
+		//    demuxers, decoders pushing into queues) return GST_FLOW_FLUSHING
+		//    immediately instead of stalling until the state-change timeout.
+		gst_element_send_event(pipeline_, gst_event_new_flush_start());
+
+		// 4. Initiate state change to READY.
 		gst_element_set_state(pipeline_, GST_STATE_READY);
 
-		// 4. SYNC WAIT: Force the GLib thread to wait until the pipeline is actually 
+		// 5. SYNC WAIT: Force the GLib thread to wait until the pipeline is actually 
 		// in the READY state. This ensures internal worker threads (typefind, etc.) 
 		// release their locks before this unload task completes.
 		gst_element_get_state(pipeline_, nullptr, nullptr, 1 * GST_SECOND);
 
-		// 5. SESSION GUARDED CLEANUP: Only free these if they still belong to the
+		// 6. Reset pad flush-state so the pipeline is clean for the next play().
+		gst_element_send_event(pipeline_, gst_event_new_flush_stop(TRUE));
+
+		// 7. SESSION GUARDED CLEANUP: Only free these if they still belong to the
 		// session that started this unload. If a 'play' has already allocated new
 		// contexts for Session B, we won't touch them.
 		if (audioCtx_ && audioCtx_->session == sessionId) {
