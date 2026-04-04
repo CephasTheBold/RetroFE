@@ -1,5 +1,6 @@
 #include "VideoPool.h"
 #include "../Utility/Log.h"
+#include "../Utility/ThreadPool.h"
 #include "GlibLoop.h"
 
 std::mutex VideoPool::s_registryMutex;
@@ -76,13 +77,19 @@ VideoPool::VideoPtr VideoPool::acquireVideo(int monitor, int listId, bool softOv
             VideoPool::injectNewInstance((newVid && !newVid->hasError()) ? std::move(newVid) : nullptr, poolWeak, monitor, listId);
             };
 
-        if (priority) {
-            // High priority: schedule on the GLib loop before default-priority tasks
-            GlibLoop::instance().invoke(std::move(task), G_PRIORITY_HIGH);
+        try {
+            if (priority) {
+                // High priority: jump to the front of the ThreadPool queue
+                ThreadPool::getInstance().enqueueAtFront(std::move(task));
+            }
+            else {
+                // Standard: run on a ThreadPool thread so many constructions can run in parallel
+                ThreadPool::getInstance().enqueue(std::move(task));
+            }
         }
-        else {
-            // Standard: schedule on the GLib loop at default priority
-            GlibLoop::instance().invoke(std::move(task));
+        catch (...) {
+            // ThreadPool has been stopped (app is shutting down); undo the pending counter
+            pool->pendingCreation--;
         }
     }
 
