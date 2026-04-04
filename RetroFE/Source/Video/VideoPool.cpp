@@ -1,7 +1,6 @@
 #include "VideoPool.h"
 #include "../Utility/Log.h"
 #include "../Utility/ThreadPool.h"
-#include "GlibLoop.h"
 
 std::mutex VideoPool::s_registryMutex;
 std::atomic<bool> VideoPool::shuttingDown_ = false;
