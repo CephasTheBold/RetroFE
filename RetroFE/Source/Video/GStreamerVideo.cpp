@@ -509,9 +509,6 @@ bool GStreamerVideo::stop() {
 			elementSetupHandlerId_ = 0;
 		}
 
-		if (audioCtx_) { g_free(audioCtx_); audioCtx_ = nullptr; }
-		if (videoCtx_) { g_free(videoCtx_); videoCtx_ = nullptr; }
-
 		LOG_DEBUG("GStreamerVideo::stop", "Unreffing pipeline to guarantee final cleanup.");
 		gst_object_unref(pipeline_);
 
@@ -581,9 +578,6 @@ bool GStreamerVideo::unload() {
 			LOG_DEBUG("GStreamerVideo", "Waiting for ASYNC teardown to READY...");
 			gst_element_get_state(pipeline_, nullptr, nullptr, 2 * GST_SECOND);
 		}
-
-		if (audioCtx_) { g_free(audioCtx_); audioCtx_ = nullptr; }
-		if (videoCtx_) { g_free(videoCtx_); videoCtx_ = nullptr; }
 
 		LOG_DEBUG("GStreamerVideo", "Unload: GStreamer pipeline teardown initiated for " + fileForLog);
 		});
@@ -967,15 +961,10 @@ bool GStreamerVideo::play(const std::string& file) {
 }
 
 void GStreamerVideo::setupCallbacksForSession(uint64_t sessionId) {
-	// Clean up old contexts if they exist
-	if (audioCtx_) {
-		g_free(audioCtx_);
-		audioCtx_ = nullptr;
-	}
-	if (videoCtx_) {
-		g_free(videoCtx_);
-		videoCtx_ = nullptr;
-	}
+	// 1. DO NOT manually free old contexts here. 
+	// GStreamer frees them automatically when we overwrite them below.
+	audioCtx_ = nullptr;
+	videoCtx_ = nullptr;
 
 	// Setup video callbacks
 	videoCbs_.new_preroll = &GStreamerVideo::on_new_preroll;
@@ -983,14 +972,22 @@ void GStreamerVideo::setupCallbacksForSession(uint64_t sessionId) {
 	videoCtx_ = (SessionCtx*)g_malloc0(sizeof(SessionCtx));
 	videoCtx_->self = this;
 	videoCtx_->session = sessionId;
-	gst_app_sink_set_callbacks(GST_APP_SINK(videoSink_), &videoCbs_, videoCtx_, nullptr);
+
+	// Notice the new 4th parameter: the DestroyNotify lambda
+	gst_app_sink_set_callbacks(GST_APP_SINK(videoSink_), &videoCbs_, videoCtx_, [](gpointer data) {
+		g_free(data);
+		});
 
 	// Setup audio callbacks
 	audioCbs_.new_sample = &GStreamerVideo::on_audio_new_sample;
 	audioCtx_ = (SessionCtx*)g_malloc0(sizeof(SessionCtx));
 	audioCtx_->self = this;
 	audioCtx_->session = sessionId;
-	gst_app_sink_set_callbacks(GST_APP_SINK(audioSink_), &audioCbs_, audioCtx_, nullptr);
+
+	// Notice the new 4th parameter: the DestroyNotify lambda
+	gst_app_sink_set_callbacks(GST_APP_SINK(audioSink_), &audioCbs_, audioCtx_, [](gpointer data) {
+		g_free(data);
+		});
 }
 
 GstPadProbeReturn GStreamerVideo::padProbeCallback(GstPad* /*pad*/, GstPadProbeInfo* info, gpointer user_data) {
