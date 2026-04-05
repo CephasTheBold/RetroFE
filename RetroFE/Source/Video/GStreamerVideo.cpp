@@ -1396,6 +1396,8 @@ void GStreamerVideo::skipForward() {
 		return;
 	}
 
+	std::lock_guard<std::mutex> lock(asyncMutex_);
+
 	const std::string fileForLog = currentFile_;
 
 	// Check if we're in a seekable state
@@ -1446,6 +1448,8 @@ void GStreamerVideo::skipBackward() {
 		return;
 	}
 
+	std::lock_guard<std::mutex> lock(asyncMutex_);
+
 	const std::string fileForLog = currentFile_;
 
 	GstState current, pending;
@@ -1485,6 +1489,8 @@ void GStreamerVideo::skipForwardp() {
 		LOG_DEBUG("GStreamerVideo", "skipForwardp: Pipeline not ready");
 		return;
 	}
+
+	std::lock_guard<std::mutex> lock(asyncMutex_);
 
 	const std::string fileForLog = currentFile_;
 
@@ -1536,6 +1542,8 @@ void GStreamerVideo::skipBackwardp() {
 		return;
 	}
 
+	std::lock_guard<std::mutex> lock(asyncMutex_);
+
 	const std::string fileForLog = currentFile_;
 
 	GstState current, pending;
@@ -1583,6 +1591,8 @@ void GStreamerVideo::pause() {
 		return;
 	}
 
+	std::lock_guard<std::mutex> lock(asyncMutex_);
+
 	if (actualState_.load(std::memory_order_acquire) == IVideo::VideoState::Paused) {
 		LOG_DEBUG("GStreamerVideo", "Pause: Already paused for " + currentFile_);
 		return;
@@ -1623,6 +1633,8 @@ void GStreamerVideo::resume() {
 		LOG_DEBUG("GStreamerVideo", "Resume: Pipeline not ready for " + currentFile_);
 		return;
 	}
+
+	std::lock_guard<std::mutex> lock(asyncMutex_);
 
 	// Only return early if actual state is already playing
 	if (actualState_.load(std::memory_order_acquire) == IVideo::VideoState::Playing) {
@@ -1669,6 +1681,8 @@ void GStreamerVideo::restart() {
 		return;
 	}
 
+	std::lock_guard<std::mutex> lock(asyncMutex_);
+
 	const std::string fileForLog = currentFile_;
 	LOG_DEBUG("GStreamerVideo", "Requesting restart (seek to 0) for " + fileForLog);
 
@@ -1692,30 +1706,22 @@ void GStreamerVideo::restart() {
 }
 
 void GStreamerVideo::loop() {
-	if (!pipeLineReady_.load(std::memory_order_acquire)) {
-		LOG_DEBUG("GStreamerVideo", "Loop: Pipeline not ready for " + currentFile_);
-		return;
-	}
+	if (!pipeLineReady_.load(std::memory_order_acquire) || !playbin_) return;
 
-	if (!playbin_) {
-		LOG_WARNING("GStreamerVideo", "Loop: Playbin is null for " + currentFile_);
-		return;
-	}
-
+	auto alive = aliveToken_;
 	const std::string fileForLog = currentFile_;
-	LOG_DEBUG("GStreamerVideo", "Requesting loop (seek to 0) for " + fileForLog);
 
-	gboolean seekResult = gst_element_seek(pipeline_, 1.0, GST_FORMAT_TIME,
-		GST_SEEK_FLAG_FLUSH,
-		GST_SEEK_TYPE_SET, 0,
-		GST_SEEK_TYPE_NONE, GST_CLOCK_TIME_NONE);
+	ThreadPool::getInstance().enqueue([this, fileForLog, alive]() {
+		if (!alive->load(std::memory_order_acquire)) return;
+		std::lock_guard<std::mutex> lock(asyncMutex_);
+		if (!alive->load(std::memory_order_acquire)) return;
+		if (!pipeline_) return;
 
-	if (seekResult) {
-		LOG_DEBUG("GStreamerVideo", "Loop: Successfully sought to beginning for " + fileForLog);
-	}
-	else {
-		LOG_ERROR("GStreamerVideo", "Loop: Failed to seek to start for " + fileForLog);
-	}
+		LOG_DEBUG("GStreamerVideo", "Requesting loop (seek to 0) for " + fileForLog);
+		gst_element_seek(pipeline_, 1.0, GST_FORMAT_TIME,
+			GST_SEEK_FLAG_FLUSH, GST_SEEK_TYPE_SET, 0,
+			GST_SEEK_TYPE_NONE, GST_CLOCK_TIME_NONE);
+		});
 }
 
 unsigned long long GStreamerVideo::getCurrent() {
