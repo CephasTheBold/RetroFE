@@ -362,11 +362,6 @@ void VideoPool::erasePoolIfIdle_nolock(int monitor, int listId) {
 	// Disarm callbacks on idle instances before destruction
 	for (auto& up : pool.available) {
 		if (!up) continue;
-		if (up->getActualState() != IVideo::VideoState::None) {
-			if (auto* gsv = dynamic_cast<GStreamerVideo*>(up.get())) {
-				gsv->unload(); // synchronous to avoid racing destruction
-			}
-		}
 		if (auto* gsv = dynamic_cast<GStreamerVideo*>(up.get())) {
 			gsv->disarmOnBecameNone();
 		}
