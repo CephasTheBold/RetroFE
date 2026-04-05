@@ -481,6 +481,7 @@ bool GStreamerVideo::stop() {
 	detachAndDrainSink(audioSink_, &noProbe);
 
 	if (videoSourceId_ != 0) {
+		AudioBus::instance().setGain(videoSourceId_, 0.0f);
 		AudioBus::instance().removeSource(videoSourceId_);
 		videoSourceId_ = 0;
 	}
@@ -548,6 +549,10 @@ bool GStreamerVideo::unload() {
 
 	pipeLineReady_.store(false, std::memory_order_release);
 	targetState_.store(IVideo::VideoState::None, std::memory_order_release);
+
+	if (videoSourceId_ != 0) {
+		AudioBus::instance().setGain(videoSourceId_, 0.0f);
+	}
 
 	if (GstSample* s = stagedSample_.exchange(nullptr, std::memory_order_acq_rel)) {
 		gst_sample_unref(s);
@@ -940,7 +945,7 @@ bool GStreamerVideo::play(const std::string& file) {
 		setupCallbacksForSession(newSessionId);
 		if (videoSourceId_ == 0) {
 			videoSourceId_ = AudioBus::instance().addSource("video-preview");
-			AudioBus::instance().setGain(videoSourceId_, 0.8f);
+			AudioBus::instance().setGain(videoSourceId_, 0.0f);
 		}
 
 		// 4. Request PAUSED (preroll)
