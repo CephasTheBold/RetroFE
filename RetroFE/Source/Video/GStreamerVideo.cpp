@@ -404,8 +404,10 @@ void GStreamerVideo::setNumLoops(int n) {
 }
 
 SDL_Texture* GStreamerVideo::getTexture() const {
-	SDL_Texture* tex_to_render = texture_;
-	return tex_to_render;
+	// If the index is -1, we are logically unloaded; return null even if 
+	// the pointer hasn't been cleared yet.
+	if (videoDrawIdx_ == -1) return nullptr;
+	return texture_;
 }
 
 bool GStreamerVideo::initialize() {
@@ -540,62 +542,41 @@ bool GStreamerVideo::stop() {
 }
 
 bool GStreamerVideo::unload() {
-	const std::string fileForLog = currentFile_.empty() ? "unknown" : currentFile_;
-	LOG_DEBUG("GStreamerVideo", "Unload (async) called for " + fileForLog);
+	if (!initialized_ || !pipeline_) return false;
 
-	if (!playbin_ || targetState_.load(std::memory_order_acquire) == IVideo::VideoState::None) {
-		return true;
-	}
-
-	pipeLineReady_.store(false, std::memory_order_release);
+	// 1. LOCK OUT UI SPAM
+	// Prevents stray pause/resume calls from changing targetState_
 	targetState_.store(IVideo::VideoState::None, std::memory_order_release);
 
-	if (videoSourceId_ != 0) {
-		AudioBus::instance().setGain(videoSourceId_, 0.0f);
+	// 2. VISUAL DISCONNECT
+	// Tells the UI to stop drawing and unlinks from the Ring Buffer
+	videoDrawIdx_ = -1;
+	texture_ = nullptr;
+
+	// 3. FLUSH STAGED DATA
+	// Remove any leftover frame from the old video so it doesn't flash
+	if (GstSample* old = stagedSample_.exchange(nullptr, std::memory_order_acq_rel)) {
+		gst_sample_unref(old);
 	}
 
-	if (GstSample* s = stagedSample_.exchange(nullptr, std::memory_order_acq_rel)) {
-		gst_sample_unref(s);
-	}
-
-	auto alive = aliveToken_;
-
-	ThreadPool::getInstance().enqueue([this, fileForLog, alive]() {
-		if (!alive->load(std::memory_order_acquire)) return;
-		std::lock_guard<std::mutex> lock(asyncMutex_);
-		if (!alive->load(std::memory_order_acquire)) return;
-
-		if (!pipeline_ || !playbin_) return;
-
-		// If a new play() was requested while waiting, abort unload. 
-		// play() will handle dropping the pipeline to READY.
-		if (targetState_.load(std::memory_order_acquire) != IVideo::VideoState::None) {
-			return;
-		}
-
-		detachAndDrainSink(videoSink_, &padProbeId_);
-		guint noProbe = 0;
-		detachAndDrainSink(audioSink_, &noProbe);
-
-		GstStateChangeReturn ret = gst_element_set_state(pipeline_, GST_STATE_READY);
-
-		if (ret == GST_STATE_CHANGE_ASYNC) {
-			LOG_DEBUG("GStreamerVideo", "Waiting for ASYNC teardown to READY...");
-			gst_element_get_state(pipeline_, nullptr, nullptr, 2 * GST_SECOND);
-		}
-
-		LOG_DEBUG("GStreamerVideo", "Unload: GStreamer pipeline teardown initiated for " + fileForLog);
-		});
-
+	// 4. RESET METADATA
 	currentFile_ = "";
 	playCount_ = 0;
 	numLoops_ = 0;
-	videoDrawIdx_ = -1;
-	texture_ = nullptr;
+
+	// 5. ATOMIC FLAGS RESET
+	// Ensure the new video starts with a fresh status
 	hasError_.store(false, std::memory_order_release);
 	hasVideoStream_.store(false, std::memory_order_release);
 	loopsFinished_.store(false, std::memory_order_release);
 
+	// 6. AUDIO MUTE
+	// Optional: ensures the "Hot" pipeline is silent while in the pool
+	if (videoSourceId_ != 0) {
+		AudioBus::instance().setGain(videoSourceId_, 0.0f);
+	}
+
+	LOG_DEBUG("GStreamerVideo", "Unload: Instance reset and returned to pool.");
 	return true;
 }
 
@@ -884,7 +865,6 @@ bool GStreamerVideo::play(const std::string& file) {
 		return false;
 	}
 
-	// Atomically increment and assign session ID immediately (thread-safe)
 	const uint64_t newSessionId = nextUniquePlaySessionId_++;
 	currentPlaySessionId_.store(newSessionId, std::memory_order_release);
 	loopsFinished_.store(false, std::memory_order_release);
@@ -893,7 +873,6 @@ bool GStreamerVideo::play(const std::string& file) {
 
 	LOG_DEBUG("GStreamerVideo", "Starting play for " + file + " (Session: " + std::to_string(newSessionId) + ")");
 
-	// App-side guards
 	pipeLineReady_.store(false, std::memory_order_release);
 	targetState_.store(IVideo::VideoState::Paused, std::memory_order_release);
 
@@ -904,9 +883,8 @@ bool GStreamerVideo::play(const std::string& file) {
 		std::lock_guard<std::mutex> lock(asyncMutex_);
 		if (!alive->load(std::memory_order_acquire)) return;
 
-		// Guard against fast-scrolling
+		// Fast-scroll abort
 		if (currentPlaySessionId_.load(std::memory_order_acquire) != newSessionId) {
-			LOG_DEBUG("GStreamerVideo", "Session " + std::to_string(newSessionId) + " cancelled before execution");
 			return;
 		}
 
@@ -916,50 +894,65 @@ bool GStreamerVideo::play(const std::string& file) {
 			return;
 		}
 
-		// 1. ALWAYS drop to READY before switching files. 
-		// This safely kills old streaming threads and dynamic elements to prevent deadlocks.
-		detachAndDrainSink(videoSink_, &padProbeId_);
-		guint noProbe = 0;
-		detachAndDrainSink(audioSink_, &noProbe);
+		// --- NEW INSTANT-URI LOGIC ---
+		GstState current = GST_STATE_NULL, pending = GST_STATE_NULL;
+		gst_element_get_state(pipeline_, &current, &pending, 0);
 
-		GstStateChangeReturn ret = gst_element_set_state(pipeline_, GST_STATE_READY);
+		bool useInstantUri = (current == GST_STATE_PLAYING || current == GST_STATE_PAUSED ||
+			pending == GST_STATE_PLAYING || pending == GST_STATE_PAUSED);
 
-		// If it's tearing down asynchronously, WAIT for it to finish.
-		// We are in a ThreadPool worker, so blocking here is perfectly safe.
-		if (ret == GST_STATE_CHANGE_ASYNC) {
-			LOG_DEBUG("GStreamerVideo", "Waiting for ASYNC teardown to READY...");
-			gst_element_get_state(pipeline_, nullptr, nullptr, 5 * GST_SECOND);
+		if (useInstantUri) {
+			LOG_DEBUG("GStreamerVideo", "Pipeline is active. Preparing for instant-uri switch...");
+
+			// 1. Wait for any current async operations to finish so we don't interrupt mid-transition
+			if (pending != GST_STATE_VOID_PENDING) {
+				gst_element_get_state(pipeline_, nullptr, nullptr, 2 * GST_SECOND);
+			}
+
+			// 2. Force the pipeline to PAUSED cleanly BEFORE changing the URI.
+			// This stops the clock and halts old data flow.
+			if (current != GST_STATE_PAUSED) {
+				gst_element_set_state(pipeline_, GST_STATE_PAUSED);
+				gst_element_get_state(pipeline_, nullptr, nullptr, 2 * GST_SECOND);
+			}
+		}
+		else {
+			// Cold Boot / Coming from Unload: Clear old data and drop to READY
+			LOG_DEBUG("GStreamerVideo", "Pipeline inactive. Performing cold boot.");
+			detachAndDrainSink(videoSink_, &padProbeId_);
+			guint noProbe = 0;
+			detachAndDrainSink(audioSink_, &noProbe);
+			gst_element_set_state(pipeline_, GST_STATE_READY);
 		}
 
-		// 2. Now safe to set the new URI
+		// 3. Setup fresh session (GDestroyNotify safely cleans up old contexts in the background)
+		setupCallbacksForSession(newSessionId);
+
+		if (videoSourceId_ == 0) {
+			videoSourceId_ = AudioBus::instance().addSource("video-preview");
+		}
+		AudioBus::instance().setGain(videoSourceId_, 0.0f); // Silence for incoming stream
+
+		// 4. Trigger the URI switch
 		gchar* uri = gst_filename_to_uri(file.c_str(), nullptr);
-		if (!uri) {
-			LOG_ERROR("GStreamerVideo", "Failed to convert filename to URI: " + file);
-			hasError_.store(true, std::memory_order_release);
-			return;
-		}
 		g_object_set(playbin_, "uri", uri, nullptr);
 		g_free(uri);
 
-		// 3. Setup callbacks for the new session
-		setupCallbacksForSession(newSessionId);
-		if (videoSourceId_ == 0) {
-			videoSourceId_ = AudioBus::instance().addSource("video-preview");
-			AudioBus::instance().setGain(videoSourceId_, 0.0f);
+		// 5. Final State Commands
+		if (!useInstantUri) {
+			// If we came from READY, we must explicitly push it up to PAUSED to start prerolling.
+			GstStateChangeReturn scr = gst_element_set_state(pipeline_, GST_STATE_PAUSED);
+			if (scr == GST_STATE_CHANGE_FAILURE) {
+				LOG_ERROR("GStreamerVideo", "Pipeline failed to set PAUSED for " + file);
+				hasError_.store(true, std::memory_order_release);
+			}
 		}
-
-		// 4. Request PAUSED (preroll)
-		GstStateChangeReturn scr = gst_element_set_state(pipeline_, GST_STATE_PAUSED);
-		if (scr == GST_STATE_CHANGE_FAILURE) {
-			LOG_ERROR("GStreamerVideo", "Pipeline failed to set PAUSED for " + file);
-			hasError_.store(true, std::memory_order_release);
-			return;
+		else {
+			// If we used instant-uri, the pipeline is ALREADY in PAUSED. 
+			// Setting the URI automatically triggered playbin3 to spin up the new streams 
+			// and begin an async preroll. Do NOT call set_state(PAUSED) here to avoid deadlocks!
+			LOG_DEBUG("GStreamerVideo", "instant-uri switch successful. Prerolling automatically.");
 		}
-
-		LOG_DEBUG("GStreamerVideo",
-			((scr == GST_STATE_CHANGE_ASYNC)
-				? "PAUSED is async (prerolling)"
-				: "PAUSED immediately"));
 		});
 
 	return true;
@@ -1603,6 +1596,10 @@ void GStreamerVideo::pause() {
 		return;
 	}
 
+	if (targetState_.load(std::memory_order_acquire) == IVideo::VideoState::None) {
+		return;
+	}
+	
 	if (targetState_.load(std::memory_order_acquire) == IVideo::VideoState::Paused) {
 		LOG_DEBUG("GStreamerVideo", "Pause: Already requesting pause for " + currentFile_);
 		return;
@@ -1650,6 +1647,10 @@ void GStreamerVideo::resume() {
 	// Already requested play?
 	if (targetState_.load(std::memory_order_acquire) == IVideo::VideoState::Playing) {
 		LOG_DEBUG("GStreamerVideo", "Resume: Already requesting play for " + currentFile_);
+		return;
+	}
+
+	if (targetState_.load(std::memory_order_acquire) == IVideo::VideoState::None) {
 		return;
 	}
 

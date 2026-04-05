@@ -66,8 +66,8 @@ VideoPool::VideoPtr VideoPool::acquireVideo(int monitor, int listId, bool softOv
 		}
 		};
 
-	auto try_pop_ready = [&]() -> VideoPtr {
-		// fast path: ready hint
+	auto try_pop_reuse = [&]() -> VideoPtr {
+		// 1. FAST PATH: Ready Hint (Targeted targeted reuse)
 		while (!pool.readyHints.empty()) {
 			IVideo* key = pool.readyHints.front();
 			pool.readyHints.pop_front();
@@ -82,7 +82,26 @@ VideoPool::VideoPtr VideoPool::acquireVideo(int monitor, int listId, bool softOv
 			LOG_DEBUG("VideoPool", "Acquire (readyHint reuse) " + poolStateStr(monitor, listId, pool));
 			return vid;
 		}
-		// slow path: scan for None
+
+		// 2. THE HOT SWAP: Explicitly hunt for active pipelines (triggers instant-uri!)
+		// We iterate backwards from the end to grab the MOST RECENTLY released pipeline.
+		if (!pool.available.empty()) {
+			for (auto it = pool.available.end(); it != pool.available.begin(); ) {
+				--it;
+				if ((*it)->getActualState() != IVideo::VideoState::None) {
+					IVideo* key = it->get();
+					auto vid = std::move(*it);
+					pool.available.erase(it);
+					pool.index.erase(key);
+					pool.hinted.erase(key);
+					pool.currentActive++;
+					LOG_DEBUG("VideoPool", "Acquire (HOT SWAP reuse) " + poolStateStr(monitor, listId, pool));
+					return vid;
+				}
+			}
+		}
+
+		// 3. THE COLD SWAP: Fallback to scanning for fully idle (None) pipelines
 		for (auto it = pool.available.begin(); it != pool.available.end(); ++it) {
 			if ((*it)->getActualState() == IVideo::VideoState::None) {
 				IVideo* key = it->get();
@@ -91,13 +110,13 @@ VideoPool::VideoPtr VideoPool::acquireVideo(int monitor, int listId, bool softOv
 				pool.index.erase(key);
 				pool.hinted.erase(key);
 				pool.currentActive++;
-				LOG_DEBUG("VideoPool", "Acquire (scan reuse) " + poolStateStr(monitor, listId, pool));
+				LOG_DEBUG("VideoPool", "Acquire (COLD reuse) " + poolStateStr(monitor, listId, pool));
 				return vid;
 			}
 		}
+
 		return nullptr;
 		};
-
 	// PRE-LATCH: always create (records peak)
 	if (!pool.initialCountLatched) {
 		pool.currentActive++;
@@ -133,7 +152,7 @@ VideoPool::VideoPtr VideoPool::acquireVideo(int monitor, int listId, bool softOv
 		pump_ready_hints();
 
 		// 1) any ready?
-		if (auto vid = try_pop_ready()) {
+		if (auto vid = try_pop_reuse()) {
 			LOG_DEBUG("VideoPool", "Acquire (reuse OK) " + poolStateStr(monitor, listId, pool));
 			lk.unlock(); // unlock after logging
 			if (auto* gsv = dynamic_cast<GStreamerVideo*>(vid.get())) gsv->disarmOnBecameNone();
@@ -161,9 +180,32 @@ VideoPool::VideoPtr VideoPool::acquireVideo(int monitor, int listId, bool softOv
 			}
 		}
 
+		// --- NEW STEP 3: THE HOT SWAP ---
+		// We are at max capacity and no pipelines are fully torn down to 'None'. 
+		// Instead of blocking the UI thread, grab the most recently released active 
+		// instance. This triggers instant-uri inside GStreamerVideo!
+		if (!pool.available.empty()) {
+			// Grab from the back (the most recently released, hottest pipeline)
+			auto it = std::prev(pool.available.end());
+			IVideo* key = it->get();
+			auto vid = std::move(*it);
+
+			pool.available.erase(it);
+			pool.index.erase(key);
+			pool.hinted.erase(key); // Just in case it was hinted while we grabbed it
+			pool.currentActive++;
+
+			LOG_DEBUG("VideoPool", "Acquire (HOT SWAP) " + poolStateStr(monitor, listId, pool));
+			lk.unlock();
+
+			if (auto* gsv = dynamic_cast<GStreamerVideo*>(vid.get())) gsv->disarmOnBecameNone();
+			vid->setSoftOverlay(softOverlay);
+			return vid;
+		}
+
 		LOG_DEBUG("VideoPool", "Acquire (wait) " + poolStateStr(monitor, listId, pool));
 
-		// 3) wait until: hint arrives, an idle reaches None, cleanup/shutdown, or growth becomes possible
+		// 4) wait until: hint arrives, an idle reaches None, cleanup/shutdown, or growth becomes possible
 		using namespace std::chrono_literals;
 
 		s_cv.wait_for(lk, 50ms, [&pool] {
@@ -180,7 +222,6 @@ VideoPool::VideoPtr VideoPool::acquireVideo(int monitor, int listId, bool softOv
 		// loop re-checks everything
 	}
 }
-
 void VideoPool::releaseVideo(VideoPtr vid, int monitor, int listId) {
 	if (!vid) {
 		LOG_DEBUG("VideoPool",
