@@ -67,10 +67,9 @@ public:
 	void volumeUpdate() override;
 	void draw() override;
 	void setNumLoops(int n);
-	int getHeight() override;
-	int getWidth() override;
 	bool isPlaying() override;
 	void setVolume(float volume) override;
+	VideoDim getDimensions() override;
 	void skipForward() override;
 	void skipBackward() override;
 	void skipForwardp() override;
@@ -99,23 +98,12 @@ public:
 	static void enablePlugin(const std::string& pluginName);
 	static void disablePlugin(const std::string& pluginName);
 	
-	std::atomic<bool> becameNone_{ false };
-
-	bool consumeBecameNone() {
-		return becameNone_.exchange(false, std::memory_order_acq_rel);
-	}
-	void armOnBecameNone() {
-		becameNone_.store(false, std::memory_order_release);
-		notifyOnNone_.store(true, std::memory_order_release);
-	}
-	void disarmOnBecameNone() {
-		notifyOnNone_.store(false, std::memory_order_release);
-		becameNone_.store(false, std::memory_order_release);
-	}
-
 private:
-	std::shared_ptr<std::atomic<bool>> aliveToken_;
-	std::mutex asyncMutex_;
+	struct AsyncState {
+		std::mutex mutex;
+		std::atomic<bool> alive{ true };
+	};
+	std::shared_ptr<AsyncState> asyncState_ = std::make_shared<AsyncState>();
 	// === Thread-shared atomics ===
 	std::atomic<uint64_t> currentPlaySessionId_{ 0 };
 	static std::atomic<uint64_t> nextUniquePlaySessionId_;
@@ -125,8 +113,8 @@ private:
 	std::atomic<IVideo::VideoState> targetState_{ IVideo::VideoState::None };
 	std::atomic<IVideo::VideoState> actualState_{ IVideo::VideoState::None };
 
-	int width_{ -1 };
-	int height_{ -1 };
+	std::atomic<VideoDim> dimensions_{};
+
 	int playCount_{ 0 };
 	std::string currentFile_{};
 	int numLoops_{ 0 };
@@ -167,16 +155,11 @@ private:
 
 
 	// === Internal helpers ===
-	struct SessionCtx {
-		GStreamerVideo* self{ nullptr };
-		uint64_t session{ 0 };
-	};
+
 	GstAppSinkCallbacks audioCbs_{};
 	GstAppSinkCallbacks videoCbs_{};
-	SessionCtx* audioCtx_ = nullptr;    // we own and free explicitly
-	SessionCtx* videoCtx_ = nullptr;
 
-	static constexpr int kVideoRing = 3; // set to 3 if you still see the odd hitch
+	static constexpr int kVideoRing = 3;
 	SDL_Texture* videoTexRing_[3]{ nullptr, nullptr, nullptr };
 	int          videoRingCount_{ kVideoRing };
 	int          videoWriteIdx_{ 0 };
@@ -193,7 +176,6 @@ private:
 	static GstFlowReturn on_new_preroll(GstAppSink* sink, gpointer user_data);
 	static GstFlowReturn on_new_sample(GstAppSink* sink, gpointer user_data);
 	static GstFlowReturn on_audio_new_sample(GstAppSink* sink, gpointer user_data);
-	void setupCallbacksForSession(uint64_t sessionId);
 	static GstPadProbeReturn padProbeCallback(GstPad* pad, GstPadProbeInfo* info, gpointer user_data);
 	static void initializePlugins();
 	void createSdlTexture();
@@ -203,14 +185,11 @@ private:
 	bool updateTextureFromFrameRGBA(SDL_Texture*, GstVideoFrame*) const;
 	std::string generateDotFileName(const std::string& prefix, const std::string& videoFilePath) const;
 
-	std::atomic<bool> notifyOnNone_{ false };
-	std::atomic<bool> unloading_{ false };
 	std::atomic<bool> loopsFinished_{ false }; // Indicates when all loops have finished	
 	std::atomic<bool> hasVideoStream_{ true };  // Assume true until proven otherwise
 
 	// Audio bus integration
 	AudioBus::SourceId videoSourceId_{ 0 };   // ID of this video’s source in AudioBus
 	GstElement* audioSink_{ nullptr };        // GStreamer appsink for audio
-	std::atomic<bool> audioRun_{ false };     // Control flag for the feeder loop
 };
 

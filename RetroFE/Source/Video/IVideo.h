@@ -19,6 +19,11 @@
 #include <string>
 #include <gst/video/video.h>
 
+struct VideoDim {
+	int w = -1;
+	int h = -1;
+};
+
 class IVideo {
 public:
 	enum class VideoState {
@@ -38,8 +43,7 @@ public:
 	virtual SDL_Texture* getTexture() const = 0;
 	virtual void draw() = 0;
 	virtual void volumeUpdate() = 0;
-	virtual int getHeight() = 0;
-	virtual int getWidth() = 0;
+	virtual VideoDim getDimensions() = 0;
 	virtual void setSoftOverlay(bool value) = 0;
 	virtual void setVolume(float volume) = 0;
 	virtual void skipForward() = 0;

@@ -18,7 +18,6 @@
 
 #include <list>
 #include <vector>
-#include <deque>
 #include <unordered_map>
 #include <unordered_set>
 #include <atomic>
@@ -44,14 +43,8 @@ private:
         // Idle instances, oldest-first (we insert at back)
         std::list<VideoPtr> available;
 
-        // Fast path: raw pointers to items known to be VideoState::None
-        std::deque<IVideo*> readyHints;
-
         // O(1) lookup/validation & removal by pointer
         std::unordered_map<IVideo*, std::list<VideoPtr>::iterator> index;
-
-        // Prevent duplicate hints spamming the queue
-        std::unordered_set<IVideo*> hinted;
 
         // Bookkeeping
         size_t currentActive = 0;

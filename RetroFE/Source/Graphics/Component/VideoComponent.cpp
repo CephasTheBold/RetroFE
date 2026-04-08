@@ -58,16 +58,11 @@ bool VideoComponent::update(float dt) {
 
 	// 1. --- complete pending retarget on the main thread ---
 	if (videoInst_ && pendingRetarget_) {
-		if (auto* gst = dynamic_cast<GStreamerVideo*>(videoInst_.get())) {
-			if (gst->consumeBecameNone()) {
-				instanceReady_ = videoInst_->play(videoFile_);
-				pendingRetarget_ = false;
-				LOG_DEBUG("VideoComponent", "[Init] Prerolling to PAUSED: " + videoFile_);
-			}
-		}
-		else {
-			pendingRetarget_ = false;
-		}
+		// We no longer need to wait for consumeBecameNone(). 
+		// GStreamerVideo::play() handles its own internal serialization natively!
+		instanceReady_ = videoInst_->play(videoFile_);
+		pendingRetarget_ = false;
+		LOG_DEBUG("VideoComponent", "[Init] Prerolling to PAUSED: " + videoFile_);
 	}
 
 	if (!videoInst_ || !currentPage_ || !instanceReady_ || !videoInst_->isPipelineReady() || videoInst_->hasError()) {
@@ -77,16 +72,20 @@ bool VideoComponent::update(float dt) {
 	// 2. --- Dimensions & Universal Volume ---
 	const bool audioOnly = !hasVideoStream();
 	if (!dimensionsUpdated_) {
-		const int w = videoInst_->getWidth();
-		const int h = videoInst_->getHeight();
-		if (audioOnly || (w > 0 && h > 0)) {
+		// One atomic load to get the synchronized pair
+		const auto dims = videoInst_->getDimensions();
+
+		if (audioOnly || (dims.w > 0 && dims.h > 0)) {
 			if (!audioOnly) {
-				baseViewInfo.ImageWidth = static_cast<float>(w);
-				baseViewInfo.ImageHeight = static_cast<float>(h);
+				baseViewInfo.ImageWidth = static_cast<float>(dims.w);
+				baseViewInfo.ImageHeight = static_cast<float>(dims.h);
 			}
 			dimensionsUpdated_ = true;
+			LOG_DEBUG("VideoComponent", "Dimensions locked: " + std::to_string(dims.w) + "x" + std::to_string(dims.h));
 		}
-		else return Component::update(dt);
+		else {
+			return Component::update(dt); // Still waiting for GStreamer to report size
+		}
 	}
 
 	videoInst_->setVolume(baseViewInfo.Volume);
