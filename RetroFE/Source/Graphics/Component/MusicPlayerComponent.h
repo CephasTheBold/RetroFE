@@ -52,7 +52,6 @@ public:
     void onPcmDataReceived(const Uint8* data, int len);
 
     // Control functions for interacting with the music player
-    void pause() override;
     unsigned long long getCurrent() override;
     unsigned long long getDuration() override;
     bool isPaused() override;

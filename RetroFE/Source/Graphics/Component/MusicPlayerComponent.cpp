@@ -1971,10 +1971,6 @@ Component* MusicPlayerComponent::reloadComponent() {
 	}
 	return loadedComponent_;
 }
-void MusicPlayerComponent::pause() {
-	if (musicPlayer_->isPlaying()) musicPlayer_->pauseMusic();
-	else musicPlayer_->playMusic();
-}
 
 unsigned long long MusicPlayerComponent::getCurrent() { return static_cast<unsigned long long>(musicPlayer_->getCurrent()); }
 unsigned long long MusicPlayerComponent::getDuration() { return static_cast<unsigned long long>(musicPlayer_->getDuration()); }
