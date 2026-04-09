@@ -19,51 +19,63 @@
 #include <list>
 #include <vector>
 #include <unordered_map>
-#include <unordered_set>
-#include <atomic>
-#include <mutex>
-#include <condition_variable>
-#include "GStreamerVideo.h"
+#include <memory>
+#include <string>
 
+class IVideo;
+
+// Main-thread-only pool for IVideo instances.
+// listId == -1 => non-pooled ("one-shot") videos.
 class VideoPool {
 public:
-	using VideoPtr = std::unique_ptr<IVideo>;  // <-- Use base type
+    using VideoPtr = std::unique_ptr<IVideo>;
 
     static VideoPtr acquireVideo(int monitor, int listId, bool softOverlay);
-	static void releaseVideo(VideoPtr vid, int monitor, int listId);
-	static void releaseVideoBatch(std::vector<VideoPtr> videos, int monitor, int listId);
-	static void cleanup(int monitor, int listId);
-	static void shutdown();
-	static std::atomic<bool> shuttingDown_;
+    static void releaseVideo(VideoPtr vid, int monitor, int listId);
+    static void releaseVideoBatch(std::vector<VideoPtr> videos, int monitor, int listId);
+
+    // Marks a pool for cleanup. If there are no active instances, the pool is erased immediately.
+    static void cleanup(int monitor, int listId);
+
+    // Clears all pools and disables further pooling.
+    static void shutdown();
+
+    // Hint the pool that we'd like at least desiredTotal instances available+active.
+    // This does not pre-create; it just raises the max to avoid later "at cap" behavior.
     static void reserveCapacity(int monitor, int listId, size_t desiredTotal);
 
-private:
+    static bool isShuttingDown() { return shuttingDown_; }
+    static bool shuttingDown_;
 
+
+private:
     struct PoolInfo {
-        // Idle instances, oldest-first (we insert at back)
+        // Oldest-first; we push releases to the back.
         std::list<VideoPtr> available;
 
-        // O(1) lookup/validation & removal by pointer
-        std::unordered_map<IVideo*, std::list<VideoPtr>::iterator> index;
-
-        // Bookkeeping
         size_t currentActive = 0;
         size_t observedMaxActive = 0;
+
+        // Once latched, this becomes the “steady state max total” (active + available).
         size_t requiredInstanceCount = 0;
         bool initialCountLatched = false;
 
-        // Sync
         bool markedForCleanup = false;
     };
 
+    using ListPoolMap = std::unordered_map<int, PoolInfo>;
+    using PoolMap = std::unordered_map<int, ListPoolMap>;
+
+    static PoolMap pools_;
+
     static void erasePoolIfIdle_nolock(int monitor, int listId);
-    static std::string poolStateStr(int monitor, int listId, const VideoPool::PoolInfo& p);
+    static std::string poolStateStr(int monitor, int listId, const PoolInfo& p);
 
+    // Policy: pick the best available instance:
+    // 1) most recently released "warm" (actualState != None)
+    // 2) oldest "cold" (actualState == None)
+    static VideoPtr popBestAvailable(PoolInfo& pool, int monitor, int listId);
 
-	using ListPoolMap = std::unordered_map<int, PoolInfo>;
-	using PoolMap = std::unordered_map<int, ListPoolMap>;
-
-	static PoolMap pools_;
-    static std::mutex s_mutex;
-    static std::condition_variable s_cv;
+    // Policy: create a new instance; returns nullptr on failure.
+    static VideoPtr createNewVideo(int monitor, bool softOverlay);
 };
