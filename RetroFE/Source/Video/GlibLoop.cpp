@@ -14,6 +14,7 @@
  * along with RetroFE.  If not, see <http://www.gnu.org/licenses/>.
  */
 #include "GlibLoop.h"
+#include <stdexcept>
 
 void GlibLoop::start() {
     bool expected = false;
@@ -21,16 +22,20 @@ void GlibLoop::start() {
         return; // already running
     }
 
+    // 1. FIX: Allocate BEFORE spawning the thread so they are instantly available
+    ctx_ = g_main_context_new();
+    loop_ = g_main_loop_new(ctx_, FALSE);
+
     th_ = std::thread([this] {
-        ctx_ = g_main_context_new();                 // dedicated context
-        g_main_context_push_thread_default(ctx_);     // make it the thread-default
-        loop_ = g_main_loop_new(ctx_, FALSE);
+        g_main_context_push_thread_default(ctx_);
 
-        g_main_loop_run(loop_);                       // blocks until quit
+        g_main_loop_run(loop_); // blocks until quit
 
+        g_main_context_pop_thread_default(ctx_);
+
+        // Teardown
         g_main_loop_unref(loop_);
         loop_ = nullptr;
-        g_main_context_pop_thread_default(ctx_);
         g_main_context_unref(ctx_);
         ctx_ = nullptr;
 
@@ -40,57 +45,106 @@ void GlibLoop::start() {
 
 void GlibLoop::stop() {
     if (!isRunning()) return;
-    // schedule quit on the loop's thread
-    g_main_context_invoke(context(),
-        [](gpointer data) -> gboolean {
-            auto* loop = static_cast<GMainLoop*>(data);
-            g_main_loop_quit(loop);
-            return G_SOURCE_REMOVE;
-        },
-        loop_);
-    if (th_.joinable()) th_.join();
+
+    // 3. FIX: g_main_loop_quit is thread-safe. Call it directly to instantly unblock.
+    if (loop_) {
+        g_main_loop_quit(loop_);
+    }
+
+    if (th_.joinable()) {
+        th_.join();
+    }
 }
 
-gboolean GlibLoop::invokeThunk(gpointer data) {
-    // take ownership, run, then delete
-    auto* fn = static_cast<std::function<void()>*>(data);
-    (*fn)();
-    delete fn;
-    return G_SOURCE_REMOVE;
+// --- BASIC INVOKE ---
+namespace {
+    struct InvokeCall {
+        std::function<void()> fn;
+    };
+
+    static gboolean invokeThunk(gpointer data) {
+        auto* ic = static_cast<InvokeCall*>(data);
+        ic->fn();
+        return G_SOURCE_REMOVE;
+    }
+
+    static void invokeDestroy(gpointer data) {
+        delete static_cast<InvokeCall*>(data);
+    }
 }
 
 void GlibLoop::invoke(std::function<void()> fn, int priority) {
     if (!isRunning()) return;
-    // allocate on heap; GLib will call invokeThunk on the loop thread
-    auto* heapFn = new std::function<void()>(std::move(fn));
-    g_main_context_invoke_full(context(), priority, &GlibLoop::invokeThunk,
-        heapFn, /*notify*/ nullptr);
+    auto* ic = new InvokeCall{ std::move(fn) };
+
+    // 2. FIX: Always pass the destroy_notify to prevent leaks
+    g_main_context_invoke_full(context(), priority, &invokeThunk, ic, &invokeDestroy);
 }
 
+// --- WAIT CALL ---
 namespace {
     struct WaitCall {
         std::function<void()> fn;
         std::shared_ptr<std::promise<void>> pr;
+        bool executed = false; // Track if GLib aborted us
     };
 
     static gboolean invokeWaitThunk(gpointer data) {
         auto* wc = static_cast<WaitCall*>(data);
-        // run the user function on the GLib thread
-        wc->fn();
-        // signal completion
-        wc->pr->set_value();
-        delete wc;
+        try {
+            wc->fn();
+            wc->pr->set_value();
+        }
+        catch (...) {
+            wc->pr->set_exception(std::current_exception());
+        }
+        wc->executed = true;
         return G_SOURCE_REMOVE;
     }
 
-    // Generic async call with result
+    static void invokeWaitDestroy(gpointer data) {
+        auto* wc = static_cast<WaitCall*>(data);
+        if (!wc->executed) {
+            // FIX: Prevent deadlocks if the loop shuts down before executing
+            wc->pr->set_exception(std::make_exception_ptr(std::runtime_error("GlibLoop aborted task")));
+        }
+        delete wc;
+    }
+}
+
+void GlibLoop::invokeAndWait(std::function<void()> fn, int priority) {
+    if (!isRunning()) { fn(); return; }
+    if (th_.joinable() && std::this_thread::get_id() == th_.get_id()) { fn(); return; }
+
+    auto pr = std::make_shared<std::promise<void>>();
+    auto fut = pr->get_future();
+    auto* wc = new WaitCall{ std::move(fn), pr, false };
+
+    g_main_context_invoke_full(context(), priority, &invokeWaitThunk, wc, &invokeWaitDestroy);
+    fut.get(); // Now 100% guaranteed to return or throw, never hang
+}
+
+bool GlibLoop::invokeAndWaitFor(std::function<void()> fn, std::chrono::milliseconds timeout, int priority) {
+    if (!isRunning()) { fn(); return true; }
+    if (th_.joinable() && std::this_thread::get_id() == th_.get_id()) { fn(); return true; }
+
+    auto pr = std::make_shared<std::promise<void>>();
+    auto fut = pr->get_future();
+    auto* wc = new WaitCall{ std::move(fn), pr, false };
+
+    g_main_context_invoke_full(context(), priority, &invokeWaitThunk, wc, &invokeWaitDestroy);
+    return (fut.wait_for(timeout) == std::future_status::ready);
+}
+
+// --- ASYNC CALLS ---
+namespace {
     template<typename T>
     struct AsyncCall {
         std::function<T()> fn;
         std::shared_ptr<std::promise<T>> pr;
+        bool executed = false;
     };
 
-    // Generic thunk for non-void types
     template<typename T>
     static gboolean invokeAsyncThunk(gpointer data) {
         auto* ac = static_cast<AsyncCall<T>*>(data);
@@ -101,134 +155,81 @@ namespace {
         catch (...) {
             ac->pr->set_exception(std::current_exception());
         }
-        delete ac;
+        ac->executed = true;
         return G_SOURCE_REMOVE;
     }
 
-    // Specialized thunk for void type
     static gboolean invokeAsyncVoidThunk(gpointer data) {
         auto* ac = static_cast<AsyncCall<void>*>(data);
         try {
             ac->fn();
-            ac->pr->set_value();  // No argument for void promise
+            ac->pr->set_value();
         }
         catch (...) {
             ac->pr->set_exception(std::current_exception());
         }
-        delete ac;
+        ac->executed = true;
         return G_SOURCE_REMOVE;
     }
-} // namespace
 
-void GlibLoop::invokeAndWait(std::function<void()> fn, int priority) {
-    if (!isRunning()) {
-        // No loop? Just run inline.
-        fn();
-        return;
+    template<typename T>
+    static void invokeAsyncDestroy(gpointer data) {
+        auto* ac = static_cast<AsyncCall<T>*>(data);
+        if (!ac->executed) {
+            ac->pr->set_exception(std::make_exception_ptr(std::runtime_error("GlibLoop aborted async task")));
+        }
+        delete ac;
     }
-
-    // If we're already on the GLib thread, run inline to avoid deadlock.
-    if (th_.joinable() && std::this_thread::get_id() == th_.get_id()) {
-        fn();
-        return;
-    }
-
-    auto pr = std::make_shared<std::promise<void>>();
-    auto fut = pr->get_future();
-
-    auto* wc = new WaitCall{ std::move(fn), pr };
-    g_main_context_invoke_full(context(), priority, &invokeWaitThunk, wc, /*notify*/ nullptr);
-
-    // block until the GLib thread has executed the task
-    fut.get();
 }
 
-bool GlibLoop::invokeAndWaitFor(std::function<void()> fn,
-    std::chrono::milliseconds timeout,
-    int priority) {
-    if (!isRunning()) {
-        fn();
-        return true;
-    }
-    if (th_.joinable() && std::this_thread::get_id() == th_.get_id()) {
-        fn();
-        return true;
-    }
-
-    auto pr = std::make_shared<std::promise<void>>();
-    auto fut = pr->get_future();
-
-    auto* wc = new WaitCall{ std::move(fn), pr };
-    g_main_context_invoke_full(context(), priority, &invokeWaitThunk, wc, /*notify*/ nullptr);
-
-    return (fut.wait_for(timeout) == std::future_status::ready);
-}
-
-// Generic template method for async operations with return values
 template<typename T>
 std::future<T> GlibLoop::invokeAsync(std::function<T()> fn, int priority) {
     auto pr = std::make_shared<std::promise<T>>();
     auto fut = pr->get_future();
 
-    if (!isRunning()) {
+    if (!isRunning() || (th_.joinable() && std::this_thread::get_id() == th_.get_id())) {
         try { pr->set_value(fn()); }
         catch (...) { pr->set_exception(std::current_exception()); }
         return fut;
     }
 
-    // NEW: self-thread fast path
-    if (th_.joinable() && std::this_thread::get_id() == th_.get_id()) {
-        try { pr->set_value(fn()); }
-        catch (...) { pr->set_exception(std::current_exception()); }
-        return fut;
-    }
-
-    auto* ac = new AsyncCall<T>{ std::move(fn), pr };
-    g_main_context_invoke_full(context(), priority, &invokeAsyncThunk<T>, ac, nullptr);
+    auto* ac = new AsyncCall<T>{ std::move(fn), pr, false };
+    g_main_context_invoke_full(context(), priority, &invokeAsyncThunk<T>, ac, &invokeAsyncDestroy<T>);
     return fut;
 }
 
-// Specialized template for void return type
 template<>
 std::future<void> GlibLoop::invokeAsync<void>(std::function<void()> fn, int priority) {
     auto pr = std::make_shared<std::promise<void>>();
     auto fut = pr->get_future();
 
-    if (!isRunning()) {
-        // No loop? Run inline and return immediate future
-        try {
-            fn();
-            pr->set_value();  // No argument for void promise
-        }
-        catch (...) {
-            pr->set_exception(std::current_exception());
-        }
+    if (!isRunning() || (th_.joinable() && std::this_thread::get_id() == th_.get_id())) {
+        try { fn(); pr->set_value(); }
+        catch (...) { pr->set_exception(std::current_exception()); }
         return fut;
     }
 
-    auto* ac = new AsyncCall<void>{ std::move(fn), pr };
-    g_main_context_invoke_full(context(), priority, &invokeAsyncVoidThunk, ac, /*notify*/ nullptr);
-
+    auto* ac = new AsyncCall<void>{ std::move(fn), pr, false };
+    g_main_context_invoke_full(context(), priority, &invokeAsyncVoidThunk, ac, &invokeAsyncDestroy<void>);
     return fut;
 }
 
-// Explicit template instantiations for common types
 template std::future<bool> GlibLoop::invokeAsync<bool>(std::function<bool()>, int);
 template std::future<int> GlibLoop::invokeAsync<int>(std::function<int()>, int);
-// Note: void specialization is defined above, not instantiated
 
-guint GlibLoop::addBusWatch(GstBus* bus, GstBusFunc func, gpointer user_data,
-    GDestroyNotify notify, int priority) {
+guint GlibLoop::addBusWatch(GstBus* bus, GstBusFunc func, gpointer user_data, GDestroyNotify notify, int priority) {
     if (!isRunning() || !bus || !func) return 0;
+
     std::promise<guint> pr;
     auto fut = pr.get_future();
-    gst_object_ref(bus); // survive the hop
+    gst_object_ref(bus);
+
     invoke([bus, func, user_data, notify, &pr, priority]() mutable {
-        // Attaches to THIS thread's thread-default context (set in start())
         guint id = gst_bus_add_watch_full(bus, priority, func, user_data, notify);
         pr.set_value(id);
         gst_object_unref(bus);
         }, priority);
+
     return fut.get();
 }
 

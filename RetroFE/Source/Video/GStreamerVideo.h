@@ -104,6 +104,26 @@ private:
 		std::atomic<bool> alive{ true };
 	};
 	std::shared_ptr<AsyncState> asyncState_ = std::make_shared<AsyncState>();
+
+	// --- Callback context to avoid UAF in GStreamer/GLib callbacks ---
+	struct CallbackCtx {
+		// GLib atomic refcount so callbacks can hold refs safely across threads
+		grefcount ref{};
+
+		// Shared lifetime gate (refcounted independently of GStreamerVideo)
+		std::shared_ptr<AsyncState> state;
+
+		// Raw pointer to the instance; set to nullptr during teardown to detach safely
+		GStreamerVideo* self = nullptr;
+	};
+
+	// One ctx per pipeline/appsink set. Owned by this instance while pipeline_ exists.
+	CallbackCtx* cbCtx_ = nullptr;
+
+	// ref/unref helpers
+	static CallbackCtx* cbCtxRef(CallbackCtx* c);
+	static void cbCtxUnref(gpointer data);
+
 	// === Thread-shared atomics ===
 	std::atomic<uint64_t> currentPlaySessionId_{ 0 };
 	static std::atomic<uint64_t> nextUniquePlaySessionId_;
@@ -152,12 +172,6 @@ private:
 	// === Static/shared ===
 	static bool initialized_;
 	static bool pluginsInitialized_;
-
-
-	// === Internal helpers ===
-
-	GstAppSinkCallbacks audioCbs_{};
-	GstAppSinkCallbacks videoCbs_{};
 
 	static constexpr int kVideoRing = 3;
 	SDL_Texture* videoTexRing_[3]{ nullptr, nullptr, nullptr };

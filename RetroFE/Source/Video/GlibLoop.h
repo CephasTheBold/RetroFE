@@ -69,9 +69,6 @@ private:
     ~GlibLoop() = default;
     GlibLoop(const GlibLoop&) = delete;
     GlibLoop& operator=(const GlibLoop&) = delete;
-
-    static gboolean invokeThunk(gpointer data); // internal
-
     GMainContext* ctx_ = nullptr;
     GMainLoop* loop_ = nullptr;
     std::thread   th_;
