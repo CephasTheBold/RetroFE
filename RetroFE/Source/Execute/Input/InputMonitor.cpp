@@ -112,159 +112,155 @@ InputDetectionResult InputMonitor::checkInputEvents() {
     auto k = pollKeyboard_();
     if (k == InputDetectionResult::QuitInput) return k;
 
-    auto j = pollJoystickSDL_();   // same logic you already have
-    if (j == InputDetectionResult::QuitInput) return j;
+    auto s = pollSdlEvents_(); // Now checks Mouse and Joystick
+    if (s == InputDetectionResult::QuitInput) return s;
 
-    if (k == InputDetectionResult::PlayInput || j == InputDetectionResult::PlayInput)
+    if (k == InputDetectionResult::PlayInput || s == InputDetectionResult::PlayInput)
         return InputDetectionResult::PlayInput;
 
     return InputDetectionResult::NoInput;
 }
 
-InputDetectionResult InputMonitor::pollJoystickSDL_() {
+InputDetectionResult InputMonitor::pollSdlEvents_() {
     SDL_Event e;
+    bool sawPlayActivity = false;
+    bool firedQuit = false;
+
     while (SDL_PollEvent(&e)) {
-        if (e.type == SDL_JOYBUTTONDOWN) {
+        // Mouse clicks are immediate PLAY activity
+        if (e.type == SDL_MOUSEBUTTONDOWN) {
+            anyInputRegistered_ = true;
+            sawPlayActivity = true;
+        }
+        else if (e.type == SDL_JOYBUTTONDOWN) {
             int buttonIdx = e.jbutton.button;
 
+            // 1. Single Quit
             if (singleQuitButtonIndices_.count(buttonIdx) > 0) {
                 if (!anyInputRegistered_) {
                     firstInputWasQuit_ = true;
-                    LOG_INFO("InputMonitor", "Single quit button " + std::to_string(buttonIdx) + " detected (first input).");
+                    LOG_INFO("InputMonitor", "Joystick single quit (first input).");
+                }
+                firedQuit = true;
+                anyInputRegistered_ = true;
+            }
+            else {
+                joystickButtonState_[e.jbutton.which][buttonIdx] = true;
+                joystickButtonTimeState_[e.jbutton.which][buttonIdx] = std::chrono::high_resolution_clock::now();
+
+                // 2. Combo Check
+                bool isComboPart = false;
+                for (int idx : quitComboIndices_) if (buttonIdx == idx) { isComboPart = true; break; }
+
+                if (!isComboPart) {
+                    anyInputRegistered_ = true;
+                    sawPlayActivity = true;
                 }
                 else {
-                    LOG_INFO("InputMonitor", "Single quit button " + std::to_string(buttonIdx) + " detected.");
-                }
-                anyInputRegistered_ = true;
-                return InputDetectionResult::QuitInput;
-            }
+                    // Check if combo is now finished
+                    bool allDown = true;
+                    std::chrono::high_resolution_clock::time_point earliest, latest;
+                    bool firstBtn = true;
+                    for (int idx : quitComboIndices_) {
+                        if (!joystickButtonState_[e.jbutton.which][idx]) { allDown = false; break; }
+                        auto t = joystickButtonTimeState_[e.jbutton.which][idx];
+                        if (firstBtn) { earliest = latest = t; firstBtn = false; }
+                        else { if (t < earliest) earliest = t; if (t > latest) latest = t; }
+                    }
 
-            joystickButtonState_[e.jbutton.which][buttonIdx] = true;
-            joystickButtonTimeState_[e.jbutton.which][buttonIdx] = std::chrono::high_resolution_clock::now();
-
-            bool isQuitCombo = !quitComboIndices_.empty();
-            if (isQuitCombo) {
-                for (int idx : quitComboIndices_) {
-                    if (joystickButtonState_[e.jbutton.which].count(idx) == 0 ||
-                        !joystickButtonState_[e.jbutton.which][idx]) {
-                        isQuitCombo = false;
-                        break;
+                    if (allDown && std::chrono::duration_cast<std::chrono::milliseconds>(latest - earliest).count() <= 200) {
+                        if (!anyInputRegistered_) {
+                            firstInputWasQuit_ = true;
+                            LOG_INFO("InputMonitor", "Joystick quit combo (first input).");
+                        }
+                        firedQuit = true;
+                        anyInputRegistered_ = true;
                     }
                 }
-            }
-
-            if (isQuitCombo) {
-                std::chrono::high_resolution_clock::time_point earliest, latest;
-                bool firstBtn = true;
-                for (int idx : quitComboIndices_) {
-                    const auto& t = joystickButtonTimeState_[e.jbutton.which][idx];
-                    if (firstBtn) { earliest = latest = t; firstBtn = false; }
-                    else { if (t < earliest) earliest = t; if (t > latest) latest = t; }
-                }
-
-                if (std::chrono::duration_cast<std::chrono::milliseconds>(latest - earliest).count() <= 200) {
-                    if (!anyInputRegistered_) {
-                        firstInputWasQuit_ = true;
-                        LOG_INFO("InputMonitor", "Quit combo detected (first input).");
-                    }
-                    else {
-                        LOG_INFO("InputMonitor", "Quit combo detected, but it was not the first input.");
-                    }
-                    anyInputRegistered_ = true;
-                    return InputDetectionResult::QuitInput;
-                }
-            }
-
-            bool isComboButton = false;
-            for (int idx : quitComboIndices_) {
-                if (buttonIdx == idx) { isComboButton = true; break; }
-            }
-
-            if (!isComboButton) {
-                if (!anyInputRegistered_) {
-                    LOG_INFO("InputMonitor", "Generic joystick input detected (non-combo button). This is a 'Play' action.");
-                }
-                anyInputRegistered_ = true;
-                return InputDetectionResult::PlayInput;
             }
         }
         else if (e.type == SDL_JOYBUTTONUP) {
+            // Releasing a combo button counts as interaction
+            bool isComboPart = false;
+            for (int idx : quitComboIndices_) if (e.jbutton.button == idx) { isComboPart = true; break; }
+            if (isComboPart) anyInputRegistered_ = true;
+
             joystickButtonState_[e.jbutton.which][e.jbutton.button] = false;
         }
     }
-    return InputDetectionResult::NoInput;
+
+    if (firedQuit) return InputDetectionResult::QuitInput;
+    return sawPlayActivity ? InputDetectionResult::PlayInput : InputDetectionResult::NoInput;
 }
 
 InputDetectionResult InputMonitor::pollKeyboard_() {
     if (!kb_) return InputDetectionResult::NoInput;
 
-    bool sawPlay = false;
-    bool firedQuit = false;
+    bool sawPlayActivity = false;
+    bool firedSingleQuit = false;
 
     kb_->poll([&](int code, bool down) {
         if (down) {
             kbPressed_.insert(code);
             kbDownTs_[code] = nowMs();
 
-            // Single-key quit (edge)
-            for (int s : kbSingles_) if (s == code) {
-                firedQuit = true;
+            // 1. Check if it's a single quit key
+            bool isSingle = false;
+            for (int s : kbSingles_) if (s == code) { isSingle = true; break; }
+
+            if (isSingle) {
                 if (!anyInputRegistered_) {
                     firstInputWasQuit_ = true;
-                    LOG_INFO("InputMonitor", "Keyboard single quit (first input).");
+                    LOG_INFO("InputMonitor", "Single quit key (first input).");
                 }
-                else {
-                    LOG_INFO("InputMonitor", "Keyboard single quit.");
-                }
+                firedSingleQuit = true;
                 anyInputRegistered_ = true;
-                break;
             }
+            else {
+                // 2. Check if it's part of a combo
+                bool isComboPart = false;
+                for (int c : kbCombo_) if (c == code) { isComboPart = true; break; }
 
-            // Mark generic Play if this key isn’t part of the combo set
-            bool isComboKey = false;
-            for (int k : kbCombo_) { if (k == code) { isComboKey = true; break; } }
-            if (!isComboKey) sawPlay = true;
-
+                // If it's NOT a combo key and NOT a single quit, it's definitely PLAY
+                if (!isComboPart) {
+                    anyInputRegistered_ = true;
+                    sawPlayActivity = true;
+                }
+            }
         }
-        else { // key up
+        else {
+            // Key release: if it was a combo key that was never finished, 
+            // the user interacted with the game, so it counts as activity now.
+            bool isComboPart = false;
+            for (int c : kbCombo_) if (c == code) { isComboPart = true; break; }
+            if (isComboPart) anyInputRegistered_ = true;
+
             kbPressed_.erase(code);
-            kbDownTs_.erase(code);
         }
         });
 
-    if (firedQuit) return InputDetectionResult::QuitInput;
+    if (firedSingleQuit) return InputDetectionResult::QuitInput;
 
-    // Combo check (?200 ms window), no modifiers
+    // 3. Evaluate Combo
     if (!kbCombo_.empty()) {
         bool allDown = true;
         int64_t earliest = INT64_MAX, latest = 0;
         for (int k : kbCombo_) {
-            if (!kbPressed_.count(k)) { allDown = false; break; }
-            auto it = kbDownTs_.find(k);
-            if (it == kbDownTs_.end()) { allDown = false; break; }
-            earliest = std::min(earliest, it->second);
-            latest = std::max(latest, it->second);
+            if (kbPressed_.find(k) == kbPressed_.end()) { allDown = false; break; }
+            earliest = std::min(earliest, kbDownTs_[k]);
+            latest = std::max(latest, kbDownTs_[k]);
         }
+
         if (allDown && (latest - earliest) <= 200) {
             if (!anyInputRegistered_) {
                 firstInputWasQuit_ = true;
-                LOG_INFO("InputMonitor", "Keyboard quit combo (first input).");
-            }
-            else {
-                LOG_INFO("InputMonitor", "Keyboard quit combo.");
+                LOG_INFO("InputMonitor", "Quit combo (first input).");
             }
             anyInputRegistered_ = true;
             return InputDetectionResult::QuitInput;
         }
     }
 
-    if (sawPlay) {
-        if (!anyInputRegistered_) {
-            LOG_INFO("InputMonitor", "Generic keyboard input detected. This is a 'Play' action.");
-        }
-        anyInputRegistered_ = true;
-        return InputDetectionResult::PlayInput;
-    }
-
-    return InputDetectionResult::NoInput;
+    if (sawPlayActivity) return InputDetectionResult::PlayInput;
+    return kbPressed_.empty() ? InputDetectionResult::NoInput : InputDetectionResult::PlayInput;
 }
