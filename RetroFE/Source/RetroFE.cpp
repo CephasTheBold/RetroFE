@@ -838,6 +838,10 @@ bool RetroFE::run() {
 	attract_.shouldLaunch = attractModeLaunch;
 	attract_.setLaunchFrequencyRange(Utils::convertInt(attMinMaxVec[0]), Utils::convertInt(attMinMaxVec[1]));
 
+	attract_.setPlaylistValidator([this](const std::string& playlistName) {
+		return isInAttractModeSkipPlaylist(playlistName); //
+		});
+
 	int fps = 60;
 	int fpsIdle = 60;
 	config_.getProperty(OPTION_FPS, fps);
