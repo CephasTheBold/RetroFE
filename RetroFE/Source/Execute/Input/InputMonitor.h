@@ -30,29 +30,17 @@
 #include "../../Utility/Utils.h"         // For listToVector
 #include "../../Utility/Log.h"
 
-/**
- * @brief Represents the type of input detected during a poll.
- */
 enum class InputDetectionResult {
-    NoInput,        // No relevant input was detected.
-    PlayInput,      // A generic input (not the quit combo) was detected.
-    QuitInput       // The specific quit combo was detected.
+    NoInput,
+    PlayInput,
+    QuitInput
 };
 
-/**
- * @brief Manages and monitors user input during game execution.
- *
- * This class encapsulates the logic for detecting a specific "quit combo"
- * from joystick input. It manages its own temporary SDL joystick session
- * and keeps track of input state to differentiate between a user intending
- * to quit versus a user just starting to play.
- */
 class InputMonitor {
 public:
-    // Constructor is now just a declaration. Its implementation will move to the .cpp file.
     explicit InputMonitor(Configuration& config);
 
-    InputDetectionResult checkInputEvents();            // NEW: keyboard first, then SDL joystick
+    InputDetectionResult checkInputEvents();
 
     bool wasQuitFirstInput() const {
         return firstInputWasQuit_;
@@ -61,6 +49,8 @@ public:
     void reset() {
         joystickButtonState_.clear();
         joystickButtonTimeState_.clear();
+        kbPressed_.clear();
+        kbDownTs_.clear();
         anyInputRegistered_ = false;
         firstInputWasQuit_ = false;
     }
@@ -69,24 +59,21 @@ public:
     InputMonitor& operator=(const InputMonitor&) = delete;
 
 private:
-
     std::unique_ptr<IKeyboardBackend> kb_;
-    std::vector<int> kbSingles_, kbCombo_;             // platform codes (evdev/VK)
+    std::vector<int> kbSingles_, kbCombo_;
     std::unordered_set<int> kbPressed_;
     std::unordered_map<int, int64_t> kbDownTs_;
     static int64_t nowMs();
-    void onKbEvent_(int code, bool down);
-    InputDetectionResult pollKeyboard_();
-    InputDetectionResult pollJoystickSDL_();
-    // --- UPDATED Configuration State ---
-    std::set<int> singleQuitButtonIndices_; // <-- NEW: For `quit = joyButton0`
-    std::vector<int> quitComboIndices_;     // <-- EXISTING: For `controls.quitCombo = ...`
 
-    // --- Dynamic Input State (Unchanged) ---
+    InputDetectionResult pollKeyboard_();
+    InputDetectionResult pollSdlEvents_(); // Renamed from pollJoystickSDL_
+
+    std::set<int> singleQuitButtonIndices_;
+    std::vector<int> quitComboIndices_;
+
     std::map<SDL_JoystickID, std::map<int, bool>> joystickButtonState_;
     std::map<SDL_JoystickID, std::map<int, std::chrono::high_resolution_clock::time_point>> joystickButtonTimeState_;
 
-    // --- High-Level Logic State (Unchanged) ---
     bool anyInputRegistered_ = false;
     bool firstInputWasQuit_ = false;
 };
