@@ -287,54 +287,47 @@ bool ReloadableHiscores::update(float dt) {
 				// Use authoritative geometric values from cache
 				float drawableHeight = lastComputedDrawableHeight_;
 				float rowPadding = lastComputedRowPadding_;
-				// paddingBetweenColumns is used by draw, not directly here for height
-
 				size_t rowsToRender = std::min(table.rows.size(), maxRows_);
 
-				// Calculate conceptual heights based on cached scaled values
-				float titleRowHeight = table.id.empty() ? 0.0f : (drawableHeight + rowPadding);
-				float columnHeaderRowHeight = (drawableHeight + rowPadding); // Assumes headers always take one row height
+				// 1. Calculate the total number of rows with content
+				int totalRows = 0;
+				if (!table.id.empty()) totalRows++;      // Title row
+				totalRows++;                             // Column header row (assumed always present)
+				totalRows += static_cast<int>(rowsToRender);
 
-				// This is the total height of the static header part (title + column names)
-				// It should match headerTextureHeight_ if rendering was successful.
-				float conceptualHeaderTotalHeight = titleRowHeight + columnHeaderRowHeight;
+				// 2. Define the Trigger Height (The "Visible Footprint")
+				// We only count the gaps BETWEEN rows. This prevents 
+				// scrolling if the table fits perfectly to the last pixel of text.
+				float visibleFootprint = (totalRows > 0)
+					? (drawableHeight * totalRows) + (rowPadding * (totalRows - 1))
+					: 0.0f;
 
-				// Height of all renderable rows
-				float conceptualRowsTotalHeight = (drawableHeight + rowPadding) * static_cast<float>(rowsToRender);
+				// 3. Define the Completion Target
+				// We keep the trailing padding here so the scroll finishes 
+				// cleanly by moving the entire block (including its bottom margin) out of view.
+				float scrollCompletionTarget = (drawableHeight + rowPadding) * totalRows;
 
-				// Total conceptual height of the table content to be displayed
-				float totalConceptualTableHeight = conceptualHeaderTotalHeight + conceptualRowsTotalHeight;
-
-				// The height used for scroll completion in the original code seemed to be this total conceptual height.
-				float scrollCompletionTarget = totalConceptualTableHeight;
-
-				// LOG_DEBUG("ReloadableHiscores", "Total Conceptual Table Height: " + std::to_string(totalConceptualTableHeight));
-				// LOG_DEBUG("ReloadableHiscores", "Scroll Completion Target: " + std::to_string(scrollCompletionTarget));
-
-				// Determine if scrolling is required based on actual rendered texture heights vs view.
-				// More accurately, compare conceptual total height to available view height.
-				bool needsScrolling = (totalConceptualTableHeight > baseViewInfo.Height);
+				// Trigger scrolling ONLY if the ink/text footprint exceeds the view
+				bool needsScrolling = (visibleFootprint > baseViewInfo.Height);
 
 				if (needsScrolling) {
 					currentPosition_ += scrollingSpeed_ * dt;
-					needsRedraw_ = true; // Keep redrawing while scrolling
-
-					// LOG_DEBUG("ReloadableHiscores", "Scrolling... Current Position: " + std::to_string(currentPosition_));
+					needsRedraw_ = true;
 
 					if (currentPosition_ >= scrollCompletionTarget) {
 						if (highScoreTable_->tables.size() > 1) {
 							currentTableIndex_ = (currentTableIndex_ + 1) % highScoreTable_->tables.size();
-							waitEndTime_ = startTime_;    // Pause before next table starts scrolling
-							currentPosition_ = 0.0f;      // Reset scroll for the new table
-							tableDisplayTimer_ = 0.0f;
-							reloadTexture(true);          // Reload textures for the new table
-							LOG_INFO("ReloadableHiscores", "Switched to table index (scrolling): " + std::to_string(currentTableIndex_));
-						}
-						else { // Single table, reset scroll
+							waitEndTime_ = startTime_;
 							currentPosition_ = 0.0f;
-							waitEndTime_ = startTime_;    // Pause before scrolling starts again
+							tableDisplayTimer_ = 0.0f;
+							reloadTexture(true);
+							LOG_INFO("ReloadableHiscores", "Switched table (scrolling) to index: " + std::to_string(currentTableIndex_));
+						}
+						else {
+							currentPosition_ = 0.0f;
+							waitEndTime_ = startTime_;
 							needsRedraw_ = true;
-							LOG_INFO("ReloadableHiscores", "Scroll reset for single scrolling table.");
+							LOG_INFO("ReloadableHiscores", "Scroll reset for single table.");
 						}
 					}
 				}
