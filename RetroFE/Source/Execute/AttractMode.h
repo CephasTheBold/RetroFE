@@ -16,6 +16,7 @@
 #pragma once
 
 #include <string>
+#include <functional>
 
 class Page;
 
@@ -50,6 +51,9 @@ public:
     State getState() const { return currentState_; }
     void setLaunchFrequencyRange(int minCycles, int maxCycles);
 
+    using PlaylistValidator = std::function<bool(const std::string&)>;
+    void setPlaylistValidator(PlaylistValidator validator) { playlistValidator_ = validator; }
+
 private:
     bool isActive_;
     bool isSet_;
@@ -76,5 +80,7 @@ private:
 
     // New helper method to update launch target
     void updateLaunchTarget();
+
+    PlaylistValidator playlistValidator_;
 
 };

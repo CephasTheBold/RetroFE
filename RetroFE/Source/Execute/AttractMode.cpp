@@ -82,10 +82,10 @@ void AttractMode::reset(bool set) {
 }
 
 int AttractMode::update(float dt, Page& page) {
-    
+
     if (idleTime <= 0)
         return 0;
-    
+
     // Track total time for state management
     float currentTime = elapsedTime_ + dt;
 
@@ -103,7 +103,7 @@ int AttractMode::update(float dt, Page& page) {
 
     // FIRST - Handle state transitions for playlist/collection changes
 
-// Check for playlist changes 
+    // Check for playlist changes 
     if (!isActive_ && elapsedPlaylistTime_ > idlePlaylistTime && idlePlaylistTime > 0)
     {
         // Reset timers when changing playlists
@@ -111,7 +111,7 @@ int AttractMode::update(float dt, Page& page) {
         elapsedPlaylistTime_ = 0;
         setState(State::COOLDOWN, 0);
         cooldownElapsedTime_ = 0;
-        cooldownAfterSwitch_ = true;  // <--- Add this
+        cooldownAfterSwitch_ = true;
         return 1;  // Signal playlist change
     }
 
@@ -124,7 +124,7 @@ int AttractMode::update(float dt, Page& page) {
         elapsedCollectionTime_ = 0;
         setState(State::COOLDOWN, 0);
         cooldownElapsedTime_ = 0;
-        cooldownAfterSwitch_ = true;  // <--- Add this
+        cooldownAfterSwitch_ = true;
         return 2;  // Signal collection change
     }
 
@@ -150,7 +150,7 @@ int AttractMode::update(float dt, Page& page) {
 
     // THIRD - Handle the active state machine
 
-// Handle cooldown and launch states first - these have priority
+    // Handle cooldown and launch states first - these have priority
     if (currentState_ == State::COOLDOWN) {
         cooldownElapsedTime_ += dt;
 
@@ -169,7 +169,6 @@ int AttractMode::update(float dt, Page& page) {
             else {
                 LOG_INFO("AttractMode", "Launch sequence initiated");
                 setState(State::LAUNCH_READY, elapsedTime_);
-                // Note: Don't reset cooldownAfterSwitch_ here (should already be false)
                 elapsedTime_ = 0;
                 isActive_ = false;
                 cooldownElapsedTime_ = 0.0f;
@@ -190,6 +189,11 @@ int AttractMode::update(float dt, Page& page) {
             // Jukebox-specific logic
             if (!isActive_ && !page.isJukeboxPlaying() && elapsedTime_ > 1)
             {
+                // VALIDATION CHECK: Jukebox entry
+                if (playlistValidator_ && playlistValidator_(page.getPlaylistName())) {
+                    return 1;
+                }
+
                 isActive_ = true;
                 isSet_ = true;
                 elapsedTime_ = 0;
@@ -205,6 +209,11 @@ int AttractMode::update(float dt, Page& page) {
             if (!isActive_ && ((elapsedTime_ > idleTime && idleTime > 0) ||
                 (isSet_ && elapsedTime_ > idleNextTime && idleNextTime > 0)))
             {
+                // VALIDATION CHECK: Standard entry
+                if (playlistValidator_ && playlistValidator_(page.getPlaylistName())) {
+                    return 1;
+                }
+
                 if (!isSet_)
                     elapsedPlaylistTime_ = 0;
                 isActive_ = true;
@@ -220,7 +229,6 @@ int AttractMode::update(float dt, Page& page) {
         // Handle active attract mode scrolling
         if (isActive_)
         {
-            // Scroll if we're within active time
             if (elapsedTime_ < activeTime_)
             {
                 if (page.isMenuIdle())
@@ -233,30 +241,26 @@ int AttractMode::update(float dt, Page& page) {
                     }
                 }
 
-                // Make sure we're in SCROLLING state
                 if (currentState_ != State::SCROLLING) {
                     setState(State::SCROLLING, currentTime);
                 }
             }
-            else  // Scrolling phase completed
+            else
             {
-                // IMPORTANT: Only increment cycle counter when transitioning FROM SCROLLING
                 if (currentState_ == State::SCROLLING) {
                     idleCycleCount_++;
                     LOG_INFO("AttractMode", "Idle cycle completed: " + std::to_string(idleCycleCount_) +
                         "/" + std::to_string(targetLaunchCycles_) + " cycles");
 
-                    // Check if we've reached target cycles
                     if (idleCycleCount_ >= targetLaunchCycles_) {
                         LOG_INFO("AttractMode", "Target of " + std::to_string(targetLaunchCycles_) +
                             " cycles reached, preparing for launch");
                         setState(State::COOLDOWN, currentTime);
                         cooldownElapsedTime_ = 0.0f;
-                        idleCycleCount_ = 0;  // Reset counter
+                        idleCycleCount_ = 0;
                         updateLaunchTarget();
                     }
                     else {
-                        // Not enough cycles, go back to IDLE
                         setState(State::IDLE, currentTime);
                     }
                 }
@@ -265,9 +269,13 @@ int AttractMode::update(float dt, Page& page) {
     }
     else  // Original attract mode behavior without launching
     {
-        // Normal attract mode without launching capability
         if (page.isJukebox()) {
             if (!isActive_ && !page.isJukeboxPlaying() && elapsedTime_ > 10) {
+                // VALIDATION CHECK: Jukebox (non-launch) entry
+                if (playlistValidator_ && playlistValidator_(page.getPlaylistName())) {
+                    return 1;
+                }
+
                 isActive_ = true;
                 isSet_ = true;
                 elapsedTime_ = 0;
@@ -276,10 +284,14 @@ int AttractMode::update(float dt, Page& page) {
             }
         }
         else {
-            // Enable attract mode when idling for the expected time
             if (!isActive_ && ((elapsedTime_ > idleTime && idleTime > 0) ||
                 (isSet_ && elapsedTime_ > idleNextTime && idleNextTime > 0)))
             {
+                // VALIDATION CHECK: Standard (non-launch) entry
+                if (playlistValidator_ && playlistValidator_(page.getPlaylistName())) {
+                    return 1;
+                }
+
                 if (!isSet_)
                     elapsedPlaylistTime_ = 0;
                 isActive_ = true;
@@ -303,12 +315,11 @@ int AttractMode::update(float dt, Page& page) {
                 elapsedTime_ = 0;
                 isActive_ = false;
                 setState(State::IDLE, currentTime);
-                // NOTE: We DO NOT increment idleCycleCount_ in the non-launch path
             }
         }
     }
 
-    return 0;  // Continue attract mode
+    return 0;
 }
 
 bool AttractMode::isActive() const
