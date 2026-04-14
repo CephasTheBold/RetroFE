@@ -2,11 +2,15 @@
 #define RETROFE_IMAGE_H
 
 #include "Component.h"
+#include "../../Utility/ThreadPool.h"
 #include <string>
 #include <vector>
 #include <unordered_map>
 #include <unordered_set>
 #include <string_view>
+#include <future>
+#include <memory>
+#include <limits>
 #include <SDL2/SDL_image.h>
 
 struct SDL_Texture;
@@ -27,9 +31,24 @@ public:
     static void cleanupTextureCache();
 
 private:
+    enum class LoadStatus { Unloaded, Loading, Ready, Error };
+
+    struct SurfaceDeleter {
+        void operator()(SDL_Surface* s) const { if (s) SDL_FreeSurface(s); }
+    };
+    using SharedSurface = std::shared_ptr<SDL_Surface>;
+
+    struct AsyncLoadResult {
+        SharedSurface staticSurface;
+        std::vector<SharedSurface> animatedSurfaces;
+        std::vector<int> frameDelays;
+        int w = 0, h = 0;
+        bool success = false;
+    };
+
     struct CachedImage {
         SDL_Texture* texture = nullptr;
-        std::vector<SDL_Surface*> animatedSurfaces;
+        std::vector<SharedSurface> animatedSurfaces;
         std::vector<int> frameDelays;
     };
 
@@ -41,45 +60,42 @@ private:
                 return monitor == other.monitor && fullPath == other.fullPath;
             }
         };
-
         struct CacheKeyHash {
             size_t operator()(const CacheKey& k) const {
                 return std::hash<std::string_view>{}(k.fullPath) ^ (std::hash<int>{}(k.monitor) << 1);
             }
         };
-
         std::unordered_set<std::string> fullPaths_;
         CacheKey getKey(const std::string& filePath, int monitor);
     };
 
-    struct LoadContext {
-        const std::string& filePath;
-        PathCache::CacheKey cacheKey;
-        CachedImage& newCachedImage;
-        ViewInfo& baseViewInfo;
-        bool useCache;
-    };
-
-    bool loadStaticImage(SDL_RWops* rw, LoadContext& ctx);
-    bool loadAnimatedImage(SDL_RWops* rw, LoadContext& ctx);
-    bool loadFromCache(LoadContext& ctx);
+    // Internal Logic
+    bool startAsyncLoad(const std::string& path);
+    void finalizeLoad();
+    bool loadFromCache(const std::string& filePath);
 
     void resetAnimationState();
-    void clearInstanceResourcesForRetry();
     bool createAnimatedStreamingTexture(int width, int height);
     void primeAnimatedTextureIfNeeded();
     static void ensureCacheReserved();
 
     std::string file_;
     std::string altFile_;
+    std::string currentLoadingPath_; // NEW: Tracks which file is in-flight
+
+    LoadStatus status_ = LoadStatus::Unloaded;
+    std::shared_future<AsyncLoadResult> loadTask_;
 
     SDL_Texture* texture_ = nullptr;
     SDL_Texture* animatedTexture_ = nullptr;
-    std::vector<SDL_Surface*> animatedSurfaces_;
+    std::vector<SharedSurface> animatedSurfaces_;
     std::vector<int> frameDelays_;
 
     int currentFrame_ = 0;
-    Uint32 lastFrameTime_ = 0; // 0 indicates the animation hasn't started yet
+    Uint32 lastFrameTime_ = 0;
+    Uint32 totalCycleTime_ = 0;
+    Uint32 animationStartTime_ = 0;
+    size_t lastRenderedFrame_ = std::numeric_limits<size_t>::max();
 
     bool useTextureCaching_;
     bool isUsingCachedStaticTexture_ = false;
@@ -87,6 +103,7 @@ private:
 
     static PathCache pathCache_;
     static std::unordered_map<PathCache::CacheKey, CachedImage, PathCache::CacheKeyHash> textureCache_;
+    static std::unordered_map<std::string, std::shared_future<AsyncLoadResult>> loadingTasks_;
 };
 
 #endif
