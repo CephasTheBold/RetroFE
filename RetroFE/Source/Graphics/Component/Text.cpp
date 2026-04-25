@@ -397,5 +397,9 @@ bool Text::recycleAsText(const std::string& newText) {
         textData_ = newText;
         needsUpdate_ = true;
     }
+
+    baseViewInfo.ImageWidth = 0;
+    baseViewInfo.ImageHeight = 0;
+
     return true;
 }

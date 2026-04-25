@@ -344,6 +344,10 @@ bool Image::recycleAsImage(const std::string& newFilePath, const std::string& ne
 
     // Tear down the old texture, swap the paths, and start the async load
     freeGraphicsMemory();
+
+    baseViewInfo.ImageWidth = 0;
+    baseViewInfo.ImageHeight = 0;
+
     file_ = newFilePath;
     altFile_ = newAltPath;
     allocateGraphicsMemory();
