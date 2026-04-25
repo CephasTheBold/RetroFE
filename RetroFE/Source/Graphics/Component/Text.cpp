@@ -391,3 +391,11 @@ void Text::updateGlyphPositions(FontManager* font, float scale, float maxWidth) 
     cachedWidth_ = static_cast<float>(penX);
     cachedHeight_ = static_cast<float>(mip->height) * scale + (2.0f * outline_f * scale);
 }
+
+bool Text::recycleAsText(const std::string& newText) {
+    if (textData_ != newText) {
+        textData_ = newText;
+        needsUpdate_ = true;
+    }
+    return true;
+}

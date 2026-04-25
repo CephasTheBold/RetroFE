@@ -325,4 +325,21 @@ void Image::cleanupTextureCache() {
     loadingTasks_.clear();
 }
 
+bool Image::recycleAsImage(const std::string& newFilePath, const std::string& newAltPath) {
+    if (newFilePath.empty() && newAltPath.empty()) return false;
+
+    // Skip if we're already rendering this exact primary file (and alt file matches)
+    if (file_ == newFilePath && altFile_ == newAltPath && status_ != LoadStatus::Error) {
+        return true;
+    }
+
+    // Tear down the old texture, swap the paths, and start the async load
+    freeGraphicsMemory();
+    file_ = newFilePath;
+    altFile_ = newAltPath;
+    allocateGraphicsMemory();
+
+    return true;
+}
+
 std::string_view Image::filePath() { return file_; }

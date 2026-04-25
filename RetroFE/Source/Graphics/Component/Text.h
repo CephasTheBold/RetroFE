@@ -49,6 +49,8 @@ private:
     FontManager       *fontInst_;
     void updateGlyphPositions(FontManager* font, float scale, float maxWidth);
 
+    bool recycleAsText(const std::string& newText) override;
+
 
     std::vector<CachedGlyphPosition> cachedPositions_;
     float cachedWidth_ = 0;

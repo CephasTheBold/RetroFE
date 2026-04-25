@@ -967,6 +967,11 @@ void ScrollingList::resetTweens(Component* c, std::shared_ptr<AnimationEvents> s
 bool ScrollingList::allocateTexture(size_t index, const Item* item) {
     if (index >= components_.size()) return false;
 
+    // --- RECYCLING 1: Grab the existing component to attempt recycling ---
+    Component* existingComponent = components_[index];
+    components_[index] = nullptr; // Clear the slot temporarily so we own it
+    // ---------------------------------------------------------------------
+
     Component* t = nullptr;
     std::string layoutName;
     config_.getProperty(OPTION_LAYOUT, layoutName);
@@ -1035,13 +1040,15 @@ bool ScrollingList::allocateTexture(size_t index, const Item* item) {
             imageName += "-selected";
         }
 
+        // --- RECYCLING 2: Pass existingComponent to the Builder ---
         return imageBuild.CreateImage(
             imagePath,
             page,
             imageName,
             baseViewInfo.Monitor,
             baseViewInfo.Additive,
-            useTextureCaching_
+            useTextureCaching_,
+            existingComponent // <-- Pass for recycling
         );
         };
 
@@ -1052,24 +1059,28 @@ bool ScrollingList::allocateTexture(size_t index, const Item* item) {
         const std::string fallbackName = imageType_;
 
         if (isSelectedItem) {
+            // --- RECYCLING 3: Pass existingComponent to the Builder ---
             if (Component* c = imageBuild.CreateImage(
                 imagePath,
                 page,
                 fallbackName + "-selected",
                 baseViewInfo.Monitor,
                 baseViewInfo.Additive,
-                useTextureCaching_)) {
+                useTextureCaching_,
+                existingComponent)) { // <-- Pass for recycling
                 return c;
             }
         }
 
+        // --- RECYCLING 4: Pass existingComponent to the Builder ---
         return imageBuild.CreateImage(
             imagePath,
             page,
             fallbackName,
             baseViewInfo.Monitor,
             baseViewInfo.Additive,
-            useTextureCaching_
+            useTextureCaching_,
+            existingComponent // <-- Pass for recycling
         );
         };
 
@@ -1098,11 +1109,9 @@ bool ScrollingList::allocateTexture(size_t index, const Item* item) {
         }
 
         if (!t) {
-            // Try video at this location
             t = tryVideo(videoPath, name);
         }
         if (!t) {
-            // Immediately fall back to image at the same location
             t = tryImageWithName(imagePath, name);
         }
         if (t) break;
@@ -1157,7 +1166,6 @@ bool ScrollingList::allocateTexture(size_t index, const Item* item) {
         }
 
         if (!t) {
-            // system: historically used videoType_ as logical name
             t = tryVideo(videoPath, videoType_);
         }
         if (!t) {
@@ -1170,7 +1178,6 @@ bool ScrollingList::allocateTexture(size_t index, const Item* item) {
         const std::string romPath = item->filepath;
 
         if (!t) {
-            // ROM video: use videoType_ as logical name (matches previous behavior)
             t = tryVideo(romPath, videoType_);
         }
         if (!t) {
@@ -1178,13 +1185,28 @@ bool ScrollingList::allocateTexture(size_t index, const Item* item) {
         }
     }
 
+    // -------- Text Fallback & Recycling --------
     if (!t && textFallback_) {
-        t = new Text(item->title, page, fontInst_, baseViewInfo.Monitor);
+        // --- RECYCLING 5: Attempt Text Recycling ---
+        if (existingComponent && existingComponent->recycleAsText(item->title)) {
+            t = existingComponent;
+        }
+        else {
+            t = new Text(item->title, page, fontInst_, baseViewInfo.Monitor);
+        }
     }
 
     if (t) {
         components_[index] = t;
     }
+
+    // --- RECYCLING 6: Cleanup ---
+    // If we didn't recycle the existing component (because the type changed or recycling failed), 
+    // it will not be equal to 't'. We must delete it to prevent a memory leak.
+    if (existingComponent != nullptr && existingComponent != t) {
+        delete existingComponent;
+    }
+    // ----------------------------
 
     return true;
 }
@@ -1279,7 +1301,7 @@ void ScrollingList::scroll(bool forward) {
     }
 
     // Rebuild only the exiting slot (consider switching to recycle/retarget later)
-    deallocateTexture(exitIndex);
+    //deallocateTexture(exitIndex);
     allocateTexture(exitIndex, itemToScroll);
 
 

@@ -75,7 +75,9 @@ public:
     virtual void setImage(const std::string&, int = -1) {};
     int getId( ) const;
     std::string playlistName;
-    
+
+    virtual bool recycleAsImage(const std::string& newFilePath, const std::string& newAltPath = "") { return false; }
+    virtual bool recycleAsText(const std::string& newText) { return false; }
 
 protected:
     Page &page;

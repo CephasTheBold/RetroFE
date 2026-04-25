@@ -44,7 +44,9 @@ static inline std::string makePrefix(const std::string& path, const std::string&
 
 Image* ImageBuilder::CreateImage(const std::string& path, Page& p,
     const std::string& name, int monitor,
-    bool additive, bool useTextureCaching) {
+    bool additive, bool useTextureCaching,
+    Component* recycleTarget) { // <-- NEW parameter
+
     Image* image = nullptr;
     const std::string prefix = makePrefix(path, name);
 
@@ -52,6 +54,18 @@ Image* ImageBuilder::CreateImage(const std::string& path, Page& p,
     if (Utils::findMatchingFile(std::string_view(prefix),
         std::begin(kImgExts), std::end(kImgExts),
         file)) {
+
+        // --- NEW RECYCLING LOGIC ---
+        // If we passed in an existing component, ask it to recycle.
+        // recycleAsImage() will ONLY return true if the object is actually 
+        // an Image class that successfully updated its file path.
+        if (recycleTarget && recycleTarget->recycleAsImage(file)) {
+            // Safe to cast because we know it succeeded in recycling as an Image
+            return static_cast<Image*>(recycleTarget);
+        }
+        // ---------------------------
+
+        // If recycling failed (or recycleTarget was null/a Video), allocate normally
         image = new Image(file, "", p, monitor, additive, useTextureCaching);
     }
     return image;

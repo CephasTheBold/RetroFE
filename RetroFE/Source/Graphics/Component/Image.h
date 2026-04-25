@@ -30,6 +30,9 @@ public:
 
     static void cleanupTextureCache();
 
+    bool recycleAsImage(const std::string& newFilePath, const std::string& newAltPath = "") override;
+
+
 private:
     enum class LoadStatus { Unloaded, Loading, Ready, Error };
 
