@@ -218,6 +218,17 @@ bool SDL::initialize(Configuration& config) {
 	LOG_INFO("SDL", "Number of displays found: " + std::to_string(numDisplays));
 	LOG_INFO("SDL", "Number of screens requested: " + std::to_string(screenCount_));
 
+	// --- OPENGL SYSTEM RAM OPTIMIZATIONS ---
+	// Force Core Profile to strip legacy OpenGL state and save RAM
+	SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
+
+	// Disable depth and stencil buffers to prevent VRAM/System RAM backing allocation
+	SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 0);
+	SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 0);
+	// ---------------------------------------
+
 	// --- Per-screen initialization loop ---
 	for (int logicalScreen = 0; logicalScreen < screenCount_; ++logicalScreen)
 	{
@@ -423,8 +434,6 @@ bool SDL::initialize(Configuration& config) {
 			else
 			{
 				// ensure vector sized once before the per-screen loop (or here; harmless)
-// ensure vector sized once before the per-screen loop (or here; harmless)
-// Ensure vector is sized for our screens
 				renderTargets_.resize(screenCount_, nullptr);
 
 				// Create the SINGLE offscreen render target for compositing
