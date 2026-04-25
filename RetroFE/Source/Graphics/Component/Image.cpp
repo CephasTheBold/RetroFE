@@ -284,6 +284,15 @@ void Image::draw() {
 void Image::freeGraphicsMemory() {
     if (status_ == LoadStatus::Loading && loadTask_.valid()) {
         loadTask_.wait(); // Safe destruction: wait for background thread to finish
+
+        // --- FIX: System RAM Leak ---
+        // Erase the task from the global map. If no other component is actively 
+        // sharing this future, the uncompressed SDL_Surfaces will be correctly destroyed.
+        {
+            std::lock_guard<std::mutex> lock(g_ImageCacheMutex);
+            loadingTasks_.erase(currentLoadingPath_);
+        }
+        // -----------------------------
     }
 
     if (animatedTexture_) SDL_DestroyTexture(animatedTexture_);

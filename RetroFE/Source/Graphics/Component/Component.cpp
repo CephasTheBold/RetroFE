@@ -52,14 +52,14 @@ void Component::freeGraphicsMemory() {
     newScrollItemSelected = false;
     menuIndex_ = -1;
 
-    // Clear the locally owned animation data to release contiguous vector memory
-    currentAnimation_.Clear();
+    // --- UPDATE THIS ---
+    activeAnimation_ = nullptr; // Just drop the pointer, the shared_ptr owns the memory
+    // -------------------
 
     currentTweenIndex_ = 0;
     currentTweenComplete_ = true;
     elapsedTweenTime_ = 0;
 
-    // Standard SDL resource cleanup
     if (backgroundTexture_) {
         SDL_DestroyTexture(backgroundTexture_);
         backgroundTexture_ = nullptr;
@@ -161,7 +161,11 @@ bool Component::update(float dt) {
 
         if (newTweens && newTweens->size() > 0) {
             animationType_ = animationRequestedType_;
-            currentAnimation_ = *newTweens;  // DEEP COPY: Ensures local ownership
+
+            // --- UPDATE THIS ---
+            activeAnimation_ = newTweens;  // FAST POINTER ASSIGNMENT (No allocations!)
+            // -------------------
+
             currentTweenIndex_ = 0;
             elapsedTweenTime_ = 0;
             storeViewInfo_ = baseViewInfo;
@@ -180,7 +184,10 @@ bool Component::update(float dt) {
         }
 
         if (idleTweens && idleTweens->size() > 0) {
-            currentAnimation_ = *idleTweens; // DEEP COPY
+            // --- UPDATE THIS ---
+            activeAnimation_ = idleTweens; // FAST POINTER ASSIGNMENT
+            // -------------------
+
             currentTweenIndex_ = 0;
             elapsedTweenTime_ = 0;
             storeViewInfo_ = baseViewInfo;
@@ -192,7 +199,11 @@ bool Component::update(float dt) {
     if (!currentTweenComplete_) {
         currentTweenComplete_ = animate();
         if (currentTweenComplete_) {
-            currentAnimation_.Clear(); // Free memory once finished
+
+            // --- UPDATE THIS ---
+            activeAnimation_ = nullptr; // Free the active state once finished
+            // -------------------
+
             currentTweenIndex_ = 0;
         }
     }
@@ -221,15 +232,17 @@ void Component::draw()
 }
 
 bool Component::animate() {
-    // Check if we have any animation data to process
-    if (currentAnimation_.size() == 0 || currentTweenIndex_ >= currentAnimation_.size()) {
+    // Check if we have any animation data to process via the pointer
+    if (!activeAnimation_ || activeAnimation_->size() == 0 || currentTweenIndex_ >= activeAnimation_->size()) {
         return true; // Animation is finished or empty
     }
 
     bool currentDone = true;
-    // Get the current TweenSet from the contiguous vector
-    TweenSet* tweens = currentAnimation_.tweenSet(currentTweenIndex_);
+
+    // Get the current TweenSet from the master definition
+    TweenSet* tweens = activeAnimation_->tweenSet(currentTweenIndex_);
     if (!tweens) return true;
+    // -------------------
 
     for (unsigned int i = 0; i < tweens->size(); i++) {
         const Tween* tween = tweens->getTween(i);
@@ -328,8 +341,9 @@ bool Component::animate() {
         storeViewInfo_ = baseViewInfo;
     }
 
+    // --- UPDATE THIS ---
     // Return true if we have completed all sets in the animation
-    return (currentTweenIndex_ >= currentAnimation_.size());
+    return (currentTweenIndex_ >= activeAnimation_->size());
 }
 
 bool Component::isPlaying()

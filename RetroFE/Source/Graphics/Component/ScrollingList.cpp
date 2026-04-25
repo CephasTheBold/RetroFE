@@ -256,8 +256,9 @@ void ScrollingList::reallocateSpritePoints() {
         Component* comp = components_[i];
         if (!comp) continue;
 
+        // Pull the heavy video out so it can be pooled cleanly
         if (auto* videoComp = dynamic_cast<VideoComponent*>(comp)) {
-            auto video = videoComp->extractVideo();  // move videoInst_ out
+            auto video = videoComp->extractVideo();
             if (video)
                 pooledVideos.push_back(std::move(video));
         }
@@ -268,20 +269,19 @@ void ScrollingList::reallocateSpritePoints() {
         VideoPool::releaseVideoBatch(std::move(pooledVideos), monitor, listId_);
     }
 
-    // --- Step 3: Destroy all components ---
-    for (size_t i = 0; i < scrollPointsSize; ++i) {
-        deallocateTexture(i);  // deletes VideoComponent or others
-    }
-
-    // --- Step 4: Wait for releases to complete ---
+    // --- Step 3: Wait for releases to complete ---
     ThreadPool::getInstance().wait();
 
-    // --- Step 5: Reallocate components and assign tweens ---
+    // --- Step 4: Reallocate components and assign tweens ---
     for (size_t i = 0; i < scrollPointsSize; ++i) {
         size_t index = loopIncrement(itemIndex_, i, itemsSize);
         Item const* item = (*items_)[index];
 
-        allocateTexture(i, item);  // creates VideoComponent or others
+        // --- RECYCLING ---
+        // allocateTexture will automatically grab components_[i].
+        // If it was an Image or Text, it recycles it. 
+        // If it was a now-empty VideoComponent, it safely deletes it.
+        allocateTexture(i, item);
 
         Component* c = components_[i];
         if (c) {
@@ -320,6 +320,9 @@ void ScrollingList::destroyItems()
 
 void ScrollingList::setPoints(std::vector<ViewInfo*>* scrollPoints,
     std::shared_ptr<std::vector<std::shared_ptr<AnimationEvents>>> tweenPoints) {
+    
+    deallocateSpritePoints();
+
     clearPoints();
     clearTweenPoints();
 

@@ -87,7 +87,7 @@ private:
     bool animate();
 
     std::shared_ptr<AnimationEvents> tweens_;
-    Animation currentAnimation_; // Value type: component owns its current animation state
+    Animation* activeAnimation_ = nullptr;
     SDL_Texture *backgroundTexture_;
     bool         pauseOnScroll_;
     ViewInfo     storeViewInfo_;
