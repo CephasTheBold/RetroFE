@@ -201,7 +201,7 @@ bool Component::update(float dt) {
 // used to draw lines in the layout using <container>
 void Component::draw()
 {
-    if (backgroundTexture_ && baseViewInfo.Alpha > 0.0f) {
+    if (backgroundTexture_ && baseViewInfo.Alpha > 0.0f && baseViewInfo.BackgroundAlpha > 0.0f) {
         SDL_FRect rect = { 0,0,0,0 };
         rect.h = baseViewInfo.ScaledHeight();
         rect.w = baseViewInfo.ScaledWidth();
