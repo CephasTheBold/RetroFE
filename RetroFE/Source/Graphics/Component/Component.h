@@ -24,6 +24,7 @@
 #include "../Animate/AnimationEvents.h"
 #include "../../Collection/Item.h"
 #include <memory>
+#include <map>
 
 class Component
 {
@@ -89,6 +90,7 @@ private:
     std::shared_ptr<AnimationEvents> tweens_;
     Animation currentAnimation_;
     SDL_Texture *backgroundTexture_;
+    std::map<int, SDL_Texture*> Component::sharedBackgroundTextures_;
     bool         pauseOnScroll_;
     ViewInfo     storeViewInfo_;
     unsigned int currentTweenIndex_;

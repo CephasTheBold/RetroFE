@@ -59,27 +59,25 @@ void Component::freeGraphicsMemory() {
     currentTweenComplete_ = true;
     elapsedTweenTime_ = 0;
 
-    // Standard SDL resource cleanup
-    if (backgroundTexture_) {
-        SDL_DestroyTexture(backgroundTexture_);
-        backgroundTexture_ = nullptr;
-    }
+    backgroundTexture_ = nullptr;
 }
 
 // used to draw lines in the layout using <container>
-void Component::allocateGraphicsMemory()
-{
-    if (!backgroundTexture_) {
-        // make a 4x4 pixel wide surface to be stretched during rendering, make it a white background so we can use
-        // color  later
+void Component::allocateGraphicsMemory() {
+    int monitor = baseViewInfo.Monitor;
+
+    // --- SHARED TEXTURE LOGIC ---
+    if (sharedBackgroundTextures_.find(monitor) == sharedBackgroundTextures_.end()) {
+
         SDL_Surface* surface = SDL_CreateRGBSurface(0, 4, 4, 32, 0, 0, 0, 0);
-        SDL_FillRect(surface, nullptr, SDL_MapRGB(surface->format, 255, 255, 255));
-
-        backgroundTexture_ = SDL_CreateTextureFromSurface(SDL::getRenderer(baseViewInfo.Monitor), surface);
-
+        SDL_FillRect(surface, NULL, SDL_MapRGBA(surface->format, 255, 255, 255, 255));
+        sharedBackgroundTextures_[monitor] = SDL_CreateTextureFromSurface(SDL::getRenderer(monitor), surface);
+        SDL_SetTextureBlendMode(sharedBackgroundTextures_[monitor], SDL_BLENDMODE_BLEND);
         SDL_FreeSurface(surface);
-        SDL_SetTextureBlendMode(backgroundTexture_, SDL_BLENDMODE_BLEND);
     }
+
+    // Point this component's local pointer to the shared master texture
+    backgroundTexture_ = sharedBackgroundTextures_[monitor];
 }
 
 
