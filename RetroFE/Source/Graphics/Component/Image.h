@@ -53,6 +53,8 @@ private:
         SDL_Texture* texture = nullptr;
         std::vector<SharedSurface> animatedSurfaces;
         std::vector<int> frameDelays;
+        int w = 0;
+        int h = 0;
     };
 
     struct PathCache {

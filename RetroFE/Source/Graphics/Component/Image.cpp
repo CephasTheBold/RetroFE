@@ -160,6 +160,8 @@ void Image::finalizeLoad() {
             ci.texture = texture_;
             ci.animatedSurfaces = animatedSurfaces_;
             ci.frameDelays = frameDelays_;
+            ci.w = res.w;
+            ci.h = res.h;
             textureCache_[key] = ci;
             isUsingCachedStaticTexture_ = (texture_ != nullptr);
             isUsingCachedSurfaces_ = !animatedSurfaces_.empty();
@@ -181,6 +183,12 @@ bool Image::loadFromCache(const std::string& filePath) {
     if (it == textureCache_.end()) return false;
 
     const CachedImage& ci = it->second;
+
+    // --- 1. Restore dimensions instantly before doing anything else! ---
+    baseViewInfo.ImageWidth = (float)ci.w;
+    baseViewInfo.ImageHeight = (float)ci.h;
+    // -------------------------------------------------------------------
+
     if (ci.texture) {
         texture_ = ci.texture;
         isUsingCachedStaticTexture_ = true;
@@ -189,15 +197,17 @@ bool Image::loadFromCache(const std::string& filePath) {
         animatedSurfaces_ = ci.animatedSurfaces;
         frameDelays_ = ci.frameDelays;
         isUsingCachedSurfaces_ = true;
+
+        // This now correctly uses the restored dimensions instead of 0,0
         createAnimatedStreamingTexture((int)baseViewInfo.ImageWidth, (int)baseViewInfo.ImageHeight);
     }
 
     if (texture_ || animatedTexture_) {
-        baseViewInfo.ImageWidth = (float)ci.animatedSurfaces.empty() ? baseViewInfo.ImageWidth : (float)animatedSurfaces_[0]->w;
-        // Logic for setting width/height from query or cache
+        // No more dimension logic here, just prime and return!
         primeAnimatedTextureIfNeeded();
         return true;
     }
+
     return false;
 }
 
