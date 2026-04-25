@@ -114,7 +114,7 @@ private:
 		std::shared_ptr<AsyncState> state;
 
 		// Raw pointer to the instance; set to nullptr during teardown to detach safely
-		GStreamerVideo* self = nullptr;
+		std::atomic<GStreamerVideo*> self{ nullptr };
 	};
 
 	// One ctx per pipeline/appsink set. Owned by this instance while pipeline_ exists.
@@ -144,8 +144,7 @@ private:
 	int allocatedWidth_{ 0 };
 	int allocatedHeight_{ 0 };
 	SDL_PixelFormatEnum allocatedFormat_{ SDL_PIXELFORMAT_UNKNOWN };
-	int allocatedRingCount_{ 0 };
-	
+	bool isTextureReady_{ false };
 	int monitor_;
 	bool softOverlay_;
 	int perspectiveCorners_[8]{ 0 };
@@ -155,7 +154,6 @@ private:
 
 	// === GStreamer and SDL resource pointers ===
 	GstElement* pipeline_{ nullptr };   // top-level pipeline
-	GstElement* playbin_{ nullptr };
 	GstElement* videoSink_{ nullptr };
 	GstElement* perspective_{ nullptr };
 	int lastPerspectiveW_{ -1 };
@@ -172,12 +170,6 @@ private:
 	// === Static/shared ===
 	static bool initialized_;
 	static bool pluginsInitialized_;
-
-	static constexpr int kVideoRing = 3;
-	SDL_Texture* videoTexRing_[3]{ nullptr, nullptr, nullptr };
-	int          videoRingCount_{ kVideoRing };
-	int          videoWriteIdx_{ 0 };
-	int          videoDrawIdx_{ -1 };  // last slot published for rendering
 
 	// Small helper so every callback early-outs the same way
 	inline bool isCurrentSession(uint64_t s) const {

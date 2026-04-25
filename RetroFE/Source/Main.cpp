@@ -320,6 +320,8 @@ int main(int argc, char** argv)
     std::string gstPluginPath = Utils::combinePath(Configuration::absolutePath, "retrofe");
     Utils::setEnvVar("GST_PLUGIN_PATH", gstPluginPath);
     Utils::setEnvVar("FREI0R_PATH", gstPluginPath);
+	Utils::setEnvVar("GST_PLUGIN_SCANNER", Utils::combinePath(Configuration::absolutePath, "retrofe", "gst-plugin-scanner.exe"));
+	Utils::setEnvVar("GST_REGISTRY", Utils::combinePath(Configuration::absolutePath, "retrofe", "registry.bin"));
 #endif
 
     gst_debug_set_default_threshold(GST_LEVEL_ERROR);

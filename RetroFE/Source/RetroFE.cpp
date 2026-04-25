@@ -201,10 +201,15 @@ void RetroFE::render() {
 	// --- 1. Clear render targets & draw ---
 	for (int i = 0; i < SDL::getScreenCount(); ++i) {
 		SDL_Renderer* rr = SDL::getRenderer(i);
-		SDL_Texture* rt = SDL::getRenderTarget(i);    // ring[writeIdx]
+		SDL_Texture* rt = SDL::getRenderTarget(i);
 		if (!rr || !rt) continue;
 
-		SDL_SetRenderTarget(rr, rt);
+		if (SDL_SetRenderTarget(rr, rt) < 0 || SDL_RenderClear(rr) < 0) {
+			LOG_ERROR("SDL", "Render state failed: " + std::string(SDL_GetError()));
+			reboot_ = true;
+			setState(RETROFE_QUIT_REQUEST);
+			break;
+		}
 		SDL_SetRenderDrawColor(rr, 0, 0, 0, 255);
 		SDL_RenderClear(rr);
 
@@ -227,7 +232,6 @@ void RetroFE::render() {
 		SDL_RenderCopy(rr, rt, nullptr, nullptr);
 		SDL_RenderPresent(rr);
 
-		SDL::advanceRenderTarget(i);
 	}
 
 	// --- 3. Timing for THIS render() call ---
@@ -3270,7 +3274,7 @@ RetroFE::RETROFE_STATE RetroFE::processUserInput(Page* page) {
 				return RETROFE_HIGHLIGHT_REQUEST;
 			}
 			attract_.reset();
-		
+
 			if (infoExitOnScroll) {
 				if (RETROFE_STATE s = handleInfoExitOr(RETROFE_SCROLL_PLAYLIST_FORWARD); s != RETROFE_IDLE)
 					return s;
@@ -3284,7 +3288,7 @@ RetroFE::RETROFE_STATE RetroFE::processUserInput(Page* page) {
 				return RETROFE_HIGHLIGHT_REQUEST;
 			}
 			attract_.reset();
-			
+
 			if (infoExitOnScroll) {
 				if (RETROFE_STATE s = handleInfoExitOr(RETROFE_SCROLL_PLAYLIST_BACK); s != RETROFE_IDLE)
 					return s;
@@ -3382,7 +3386,7 @@ RetroFE::RETROFE_STATE RetroFE::processUserInput(Page* page) {
 
 			if (infoExitOnScroll){
 				if (RETROFE_STATE s = handleInfoExitOr(RETROFE_SCROLL_BACK); s != RETROFE_IDLE)
-				return s;
+					return s;
 			}
 			return RETROFE_SCROLL_BACK;
 		}

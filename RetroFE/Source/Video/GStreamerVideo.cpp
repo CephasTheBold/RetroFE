@@ -190,7 +190,7 @@ GStreamerVideo::~GStreamerVideo() {
 	}
 	// Detach callbacks from this instance immediately (no UAF even if callbacks fire late)
 	if (cbCtx_) {
-		cbCtx_->self = nullptr;
+		cbCtx_->self.store(nullptr, std::memory_order_release); // <--- ATOMIC STORE
 	}
 	try {
 		stop();
@@ -206,7 +206,7 @@ gboolean GStreamerVideo::busCallback(GstBus* /*bus*/, GstMessage* msg, gpointer 
 	if (!ctx || !ctx->state || !ctx->state->alive.load(std::memory_order_acquire))
 		return TRUE;
 
-	auto* video = ctx->self;
+	auto* video = ctx->self.load(std::memory_order_acquire);
 	if (!video) return TRUE;
 
 	if (!video->pipeline_) return TRUE;
@@ -409,9 +409,7 @@ void GStreamerVideo::setNumLoops(int n) {
 }
 
 SDL_Texture* GStreamerVideo::getTexture() const {
-	// If the index is -1, we are logically unloaded; return null even if 
-	// the pointer hasn't been cleared yet.
-	if (videoDrawIdx_ == -1) return nullptr;
+	if (!isTextureReady_) return nullptr;
 	return texture_;
 }
 
@@ -455,19 +453,14 @@ namespace {
 }
 
 void GStreamerVideo::destroyTextures() {
-	const int cap = static_cast<int>(std::size(videoTexRing_));
-	for (int i = 0; i < cap; ++i) {
-		if (videoTexRing_[i]) {
-			SDL_DestroyTexture(videoTexRing_[i]);
-			videoTexRing_[i] = nullptr;
-		}
+	if (texture_) {
+		SDL_DestroyTexture(texture_);
+		texture_ = nullptr;
 	}
-	texture_ = nullptr;
-	videoDrawIdx_ = -1;
+	isTextureReady_ = false;
 	allocatedWidth_ = 0;
 	allocatedHeight_ = 0;
 	allocatedFormat_ = SDL_PIXELFORMAT_UNKNOWN;
-	allocatedRingCount_ = 0;
 }
 
 // name=GStreamerVideo.cpp (stop replacement)
@@ -478,7 +471,7 @@ bool GStreamerVideo::stop() {
 
 	// 0) Detach callbacks immediately to avoid any UAF.
 	if (cbCtx_) {
-		cbCtx_->self = nullptr;
+		cbCtx_->self.store(nullptr, std::memory_order_release); // <--- ATOMIC STORE
 	}
 
 	// 1) Snapshot what we need under the mutex, then release it.
@@ -498,7 +491,6 @@ bool GStreamerVideo::stop() {
 		targetState_.store(IVideo::VideoState::None, std::memory_order_release);
 
 		pipeline = pipeline_;
-		playbin = playbin_;
 		videoSink = videoSink_;
 		audioSink = audioSink_;
 		padProbeId = padProbeId_;
@@ -573,7 +565,6 @@ bool GStreamerVideo::stop() {
 	// 7) Clear member pointers after teardown (no lock needed if stop is destructor-only;
 	//    if stop can be called concurrently, you’d want the mutex here).
 	pipeline_ = nullptr;
-	playbin_ = nullptr;
 	videoSink_ = nullptr;
 	audioSink_ = nullptr;
 	perspective_ = nullptr;
@@ -614,18 +605,17 @@ bool GStreamerVideo::unload() {
 	std::lock_guard<std::mutex> lock(asyncState_->mutex);
 
 	// Invalidate the session so any lingering ThreadPool tasks instantly abort
-	currentPlaySessionId_.store(nextUniquePlaySessionId_++, std::memory_order_release); // <--- ADD THIS
+	currentPlaySessionId_.store(nextUniquePlaySessionId_++, std::memory_order_release);
 
 	// 1. Lock out UI spam
 	targetState_.store(IVideo::VideoState::None, std::memory_order_release);
 
 	// 2. STOP THE INTERNAL CLOCK (Fixes the "Ghost State")
-	// Tell GStreamer to stop pushing data while it sits in the pool
 	gst_element_set_state(pipeline_, GST_STATE_PAUSED);
 
 	// 3. Visual & Audio disconnect
-	videoDrawIdx_ = -1;
-	texture_ = nullptr;
+	isTextureReady_ = false; // <-- The UI now receives nullptr from getTexture()
+	// Do NOT destroy or nullify texture_ here! It lives on in VRAM.
 
 	dimensions_.store({ -1, -1 }, std::memory_order_release);
 
@@ -728,19 +718,19 @@ bool GStreamerVideo::createPipelineIfNeeded() {
 		return true;
 	}
 
-	// Create playbin3 and appsink elements.
-	pipeline_ = gst_pipeline_new(nullptr);
-	playbin_ = gst_element_factory_make("playbin3", "player");
-
-	gst_bin_add(GST_BIN(pipeline_), playbin_);
+	// FIX: Make playbin3 the top-level pipeline. 
+	// We assign it to pipeline_ and keep playbin_ as an alias so the rest 
+	// of the class doesn't need to be rewritten.
+	pipeline_ = gst_element_factory_make("playbin3", "player");
 
 	videoSink_ = gst_element_factory_make("appsink", "video_sink");
 
-	if (!pipeline_ || !playbin_ || !videoSink_) {
+	if (!pipeline_ || !videoSink_) {
 		LOG_DEBUG("Video", "Could not create GStreamer elements");
 		hasError_.store(true, std::memory_order_release);
 		return false;
 	}
+
 	audioSink_ = gst_element_factory_make("appsink", "audio_sink");
 	if (!audioSink_) {
 		LOG_ERROR("GStreamerVideo", "Could not create audio appsink");
@@ -753,7 +743,7 @@ bool GStreamerVideo::createPipelineIfNeeded() {
 		cbCtx_ = new CallbackCtx;
 		g_ref_count_init(&cbCtx_->ref);   // initial refcount = 1 (owned by this instance)
 		cbCtx_->state = asyncState_;
-		cbCtx_->self = this;
+		cbCtx_->self.store(this, std::memory_order_release); // <--- ATOMIC STORE
 	}
 
 	g_object_set(audioSink_,
@@ -768,7 +758,6 @@ bool GStreamerVideo::createPipelineIfNeeded() {
 		nullptr);
 
 	// --- ONE-TIME CALLBACK REGISTRATION (AUDIO) ---
-	// GStreamer takes 'this' directly. No memory allocation, no leaks.
 	GstAppSinkCallbacks audioCbs = {};
 	audioCbs.new_sample = &GStreamerVideo::on_audio_new_sample;
 
@@ -814,7 +803,7 @@ bool GStreamerVideo::createPipelineIfNeeded() {
 	// Set playbin flags and properties.
 	gint flags = GST_PLAY_FLAG_VIDEO | GST_PLAY_FLAG_AUDIO;
 	flags &= ~(1 << 4);  // Clear GST_PLAY_FLAG_SOFT_VOLUME
-	g_object_set(playbin_, "flags", flags, "instant-uri", TRUE, nullptr);
+	g_object_set(pipeline_, "flags", flags, "instant-uri", TRUE, nullptr);
 	g_object_set(pipeline_, "async-handling", TRUE, nullptr);
 
 	// Configure appsink.
@@ -858,7 +847,7 @@ bool GStreamerVideo::createPipelineIfNeeded() {
 		else {
 			videoCaps = gst_caps_from_string(
 				"video/x-raw,format=(string)I420,pixel-aspect-ratio=(fraction)1/1");
-			elementSetupHandlerId_ = g_signal_connect(playbin_, "element-setup",
+			elementSetupHandlerId_ = g_signal_connect(pipeline_, "element-setup",
 				G_CALLBACK(elementSetupCallback), this);
 			sdlFormat_ = SDL_PIXELFORMAT_IYUV;
 			LOG_DEBUG("GStreamerVideo", "SDL pixel format: SDL_PIXELFORMAT_IYUV (HW accel: false)");
@@ -908,21 +897,18 @@ bool GStreamerVideo::createPipelineIfNeeded() {
 		}
 		gst_object_ref_sink(videoBin);
 		// Set the bin as the video-sink.
-		g_object_set(playbin_, "video-sink", videoBin, nullptr);
+		g_object_set(pipeline_, "video-sink", videoBin, nullptr);
 		gst_object_unref(videoBin);
-
-		// PAD PROBE CODE REMOVED FROM HERE!
 	}
 	else {
 		// Simple pipeline: set appsink directly as video-sink.
-		g_object_set(playbin_, "video-sink", videoSink_, nullptr);
+		g_object_set(pipeline_, "video-sink", videoSink_, nullptr);
 	}
 
 	// --- THE UNIVERSAL PAD PROBE ---
-	// We attach this regardless of perspective, passing 'this' directly.
 	GstPad* sinkPad = gst_element_get_static_pad(videoSink_, "sink");
 	if (sinkPad) {
-		if (padProbeId_ != 0) { // Remove any existing probe on this pad from this instance
+		if (padProbeId_ != 0) {
 			gst_pad_remove_probe(sinkPad, padProbeId_);
 			padProbeId_ = 0;
 		}
@@ -943,7 +929,7 @@ bool GStreamerVideo::createPipelineIfNeeded() {
 		return false;
 	}
 
-	g_object_set(playbin_, "audio-sink", audioSink_, nullptr);
+	g_object_set(pipeline_, "audio-sink", audioSink_, nullptr);
 
 	if (GstBus* bus = gst_element_get_bus(pipeline_)) {
 		busWatchId_ = GlibLoop::instance().addBusWatch(
@@ -1017,17 +1003,13 @@ bool GStreamerVideo::play(const std::string& file) {
 
 			gst_element_set_state(pipeline_, GST_STATE_PAUSED);
 			
-			gst_element_send_event(pipeline_, gst_event_new_flush_start());
-
 			// Pass nullptr to keep the Pad Probe alive for the new video!
 			detachAndDrainSink(videoSink_, nullptr);
 			guint noProbe = 0;
 			detachAndDrainSink(audioSink_, &noProbe);
 
-			gst_element_send_event(pipeline_, gst_event_new_flush_stop(TRUE));
-
 			gchar* uri = gst_filename_to_uri(file.c_str(), nullptr);
-			g_object_set(playbin_, "uri", uri, nullptr);
+			g_object_set(pipeline_, "uri", uri, nullptr);
 			g_free(uri);
 
 			LOG_DEBUG("GStreamerVideo", "instant-uri switch complete. Prerolling.");
@@ -1052,7 +1034,7 @@ bool GStreamerVideo::play(const std::string& file) {
 			detachAndDrainSink(audioSink_, &noProbe);
 
 			gchar* uri = gst_filename_to_uri(file.c_str(), nullptr);
-			g_object_set(playbin_, "uri", uri, nullptr);
+			g_object_set(pipeline_, "uri", uri, nullptr);
 			g_free(uri);
 
 			gst_element_set_state(pipeline_, GST_STATE_PAUSED);
@@ -1074,7 +1056,7 @@ GstPadProbeReturn GStreamerVideo::padProbeCallback(GstPad* /*pad*/, GstPadProbeI
 		return GST_PAD_PROBE_OK;
 	}
 
-	auto* self = ctx->self;
+	auto* self = ctx->self.load(std::memory_order_acquire);
 	if (!self) return GST_PAD_PROBE_OK;
 
 	// Lifetime gate: ignore everything during teardown
@@ -1210,7 +1192,7 @@ GstFlowReturn GStreamerVideo::on_new_preroll(GstAppSink* sink, gpointer user_dat
 		return GST_FLOW_OK;
 	}
 
-	auto* self = ctx->self;
+	auto* self = ctx->self.load(std::memory_order_acquire);
 	if (!self) return GST_FLOW_OK;
 
 	// If we're logically unloaded/hidden, don't stage frames.
@@ -1253,7 +1235,7 @@ GstFlowReturn GStreamerVideo::on_new_sample(GstAppSink* sink, gpointer user_data
 		return GST_FLOW_OK;
 	}
 
-	auto* self = ctx->self;
+	auto* self = ctx->self.load(std::memory_order_acquire);
 	if (!self) return GST_FLOW_OK;
 
 	// Minimal anti-flash gate for unload / hidden
@@ -1295,7 +1277,7 @@ GstFlowReturn GStreamerVideo::on_audio_new_sample(GstAppSink* sink, gpointer use
 		return GST_FLOW_OK;
 	}
 
-	auto* self = ctx->self;
+	auto* self = ctx->self.load(std::memory_order_acquire);
 	if (!self) return GST_FLOW_OK;
 
 	// Don't even pull if logically unloaded
@@ -1332,7 +1314,7 @@ GstFlowReturn GStreamerVideo::on_audio_new_sample(GstAppSink* sink, gpointer use
 }
 
 void GStreamerVideo::createSdlTexture() {
-	if (targetState_.load(std::memory_order_acquire) == IVideo::VideoState::None || !playbin_) {
+	if (targetState_.load(std::memory_order_acquire) == IVideo::VideoState::None || !pipeline_) {
 		return;
 	}
 
@@ -1341,20 +1323,11 @@ void GStreamerVideo::createSdlTexture() {
 	int w = current.w;
 	int h = current.h;
 
-	const int cap = static_cast<int>(std::size(videoTexRing_));
-	const int n = std::min(videoRingCount_, cap);
-
-	// 2. Compare against our non-atomic "allocated" cache
+	// 2. Compare against our non-atomic "allocated" cache AND check for texture existence
 	bool needsRecreate = (allocatedWidth_ != w ||
 		allocatedHeight_ != h ||
 		allocatedFormat_ != sdlFormat_ ||
-		allocatedRingCount_ != n);
-
-	if (!needsRecreate) {
-		for (int i = 0; i < n; ++i) {
-			if (!videoTexRing_[i]) { needsRecreate = true; break; }
-		}
-	}
+		texture_ == nullptr);
 
 	if (!needsRecreate) return;
 
@@ -1366,32 +1339,27 @@ void GStreamerVideo::createSdlTexture() {
 
 	destroyTextures();
 
-	LOG_INFO("GStreamerVideo", "Creating SDL video texture RING: " +
+	LOG_INFO("GStreamerVideo", "Creating SDL video texture: " +
 		std::to_string(w) + "x" + std::to_string(h) +
-		" fmt=" + std::string(SDL_GetPixelFormatName(sdlFormat_)) +
-		" slots=" + std::to_string(n));
+		" fmt=" + std::string(SDL_GetPixelFormatName(sdlFormat_)));
 
-	for (int i = 0; i < n; ++i) {
-		SDL_Texture* t = SDL_CreateTexture(
-			SDL::getRenderer(monitor_), sdlFormat_, SDL_TEXTUREACCESS_STREAMING, w, h);
-		if (!t) {
-			LOG_ERROR("GStreamerVideo", std::string("SDL_CreateTexture failed: ") + SDL_GetError());
-			destroyTextures();
-			return;
-		}
-		SDL_SetTextureBlendMode(t, softOverlay_ ? softOverlayBlendMode : SDL_BLENDMODE_BLEND);
-		SDL_SetTextureScaleMode(t, SDL_ScaleModeLinear);
-		videoTexRing_[i] = t;
+	texture_ = SDL_CreateTexture(
+		SDL::getRenderer(monitor_), sdlFormat_, SDL_TEXTUREACCESS_STREAMING, w, h);
+
+	if (!texture_) {
+		LOG_ERROR("GStreamerVideo", std::string("SDL_CreateTexture failed: ") + SDL_GetError());
+		destroyTextures();
+		return;
 	}
+
+	SDL_SetTextureBlendMode(texture_, softOverlay_ ? softOverlayBlendMode : SDL_BLENDMODE_BLEND);
+	SDL_SetTextureScaleMode(texture_, SDL_ScaleModeLinear);
 
 	// 4. Update the "last allocated" state
 	allocatedWidth_ = w;
 	allocatedHeight_ = h;
 	allocatedFormat_ = sdlFormat_;
-	allocatedRingCount_ = n;
-
-	videoWriteIdx_ = 0;
-	videoDrawIdx_ = -1;
+	isTextureReady_ = false;
 }
 
 void GStreamerVideo::volumeUpdate() {
@@ -1448,17 +1416,12 @@ void GStreamerVideo::draw() {
 		return;
 	}
 
-	// Pick a write slot
-	int write = videoWriteIdx_;
-	if (write == videoDrawIdx_) write = (write + 1) % videoRingCount_;
-	SDL_Texture* t = videoTexRing_[write];
-
 	bool ok = false;
-	if (t) {
+	if (texture_) {
 		switch (sdlFormat_) {
-			case SDL_PIXELFORMAT_IYUV:     ok = updateTextureFromFrameIYUV(t, &frame); break;
-			case SDL_PIXELFORMAT_NV12:     ok = updateTextureFromFrameNV12(t, &frame); break;
-			case SDL_PIXELFORMAT_ABGR8888: ok = updateTextureFromFrameRGBA(t, &frame); break;
+			case SDL_PIXELFORMAT_IYUV:     ok = updateTextureFromFrameIYUV(texture_, &frame); break;
+			case SDL_PIXELFORMAT_NV12:     ok = updateTextureFromFrameNV12(texture_, &frame); break;
+			case SDL_PIXELFORMAT_ABGR8888: ok = updateTextureFromFrameRGBA(texture_, &frame); break;
 			default: break;
 		}
 	}
@@ -1468,12 +1431,8 @@ void GStreamerVideo::draw() {
 	gst_buffer_unref(buf);
 
 	if (ok) {
-		videoDrawIdx_ = write;
-		texture_ = t;
-		videoWriteIdx_ = (write + 1) % videoRingCount_;
-	}
-	else {
-		texture_ = nullptr;
+		// Safe to expose to getTexture() now!
+		isTextureReady_ = true;
 	}
 }
 
@@ -1860,7 +1819,7 @@ void GStreamerVideo::restart() {
 }
 
 void GStreamerVideo::loop() {
-	if (!pipeLineReady_.load(std::memory_order_acquire) || !playbin_) return;
+	if (!pipeLineReady_.load(std::memory_order_acquire) || !pipeline_) return;
 
 	auto state = asyncState_; // <--- Grab the shared state
 	const std::string fileForLog = currentFile_;
@@ -1883,14 +1842,14 @@ void GStreamerVideo::loop() {
 
 unsigned long long GStreamerVideo::getCurrent() {
 	gint64 ret = 0;
-	if (!gst_element_query_position(playbin_, GST_FORMAT_TIME, &ret) || !pipeLineReady_.load(std::memory_order_acquire))
+	if (!gst_element_query_position(pipeline_, GST_FORMAT_TIME, &ret) || !pipeLineReady_.load(std::memory_order_acquire))
 		ret = 0;
 	return (unsigned long long)ret;
 }
 
 unsigned long long GStreamerVideo::getDuration() {
 	gint64 ret = 0;
-	if (!gst_element_query_duration(playbin_, GST_FORMAT_TIME, &ret) || !pipeLineReady_.load(std::memory_order_acquire))
+	if (!gst_element_query_duration(pipeline_, GST_FORMAT_TIME, &ret) || !pipeLineReady_.load(std::memory_order_acquire))
 		ret = 0;
 	return (unsigned long long)ret;
 }

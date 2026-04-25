@@ -32,7 +32,7 @@
 
 std::vector<SDL_Window*>    SDL::window_;
 std::vector<SDL_Renderer*>  SDL::renderer_;
-std::vector<SDL::MonitorRT> SDL::renderTargets_;
+static std::vector<SDL_Texture*> renderTargets_;
 std::vector<int>            SDL::displayWidth_;
 std::vector<int>            SDL::displayHeight_;
 std::vector<int>            SDL::windowWidth_;
@@ -423,9 +423,11 @@ bool SDL::initialize(Configuration& config) {
 			else
 			{
 				// ensure vector sized once before the per-screen loop (or here; harmless)
-				renderTargets_.resize(screenCount_);
+// ensure vector sized once before the per-screen loop (or here; harmless)
+// Ensure vector is sized for our screens
+				renderTargets_.resize(screenCount_, nullptr);
 
-				// Create the ring for THIS logicalScreen
+				// Create the SINGLE offscreen render target for compositing
 				{
 					SDL_Renderer* r = renderer_[logicalScreen];
 					if (!r) return false;
@@ -433,26 +435,25 @@ bool SDL::initialize(Configuration& config) {
 					const int w = windowWidth_[logicalScreen];
 					const int h = windowHeight_[logicalScreen];
 
-					auto& ring = renderTargets_[logicalScreen];
-					ring.ringCount = 2;         // or 3
-					ring.writeIdx = 0;
-					ring.width = w; ring.height = h;
+					SDL_Texture* t = SDL_CreateTexture(r, SDL_PIXELFORMAT_RGBA32,
+						SDL_TEXTUREACCESS_TARGET, w, h);
 
-					for (int i = 0; i < ring.ringCount; ++i) {
-						SDL_Texture* t = SDL_CreateTexture(r, SDL_PIXELFORMAT_RGBA32,
-							SDL_TEXTUREACCESS_TARGET, w, h);
-						if (!t) { /* log+return false */ }
-						SDL_SetTextureBlendMode(t, SDL_BLENDMODE_NONE);
-						SDL_SetTextureScaleMode(t, SDL_ScaleModeNearest);
-						// --- One-time init clear so contents are defined ---
-						SDL_SetRenderTarget(r, t);
-						SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE); // avoid accidental blending
-						SDL_SetRenderDrawColor(r, 0, 0, 0, 255);
-						SDL_RenderClear(r);
-						// (Optional) draw a background image/color here if you want a non-black default
-						SDL_SetRenderTarget(r, nullptr);
-						ring.rt[i] = t;
+					if (!t) {
+						LOG_ERROR("SDL", "Failed to create render target texture: " + std::string(SDL_GetError()));
+						return false;
 					}
+
+					// Use standard blend mode for compositing UI elements
+					SDL_SetTextureBlendMode(t, SDL_BLENDMODE_BLEND);
+					SDL_SetTextureScaleMode(t, SDL_ScaleModeLinear);
+
+					// --- One-time init clear so contents are defined ---
+					SDL_SetRenderTarget(r, t);
+					SDL_SetRenderDrawColor(r, 0, 0, 0, 255);
+					SDL_RenderClear(r);
+					SDL_SetRenderTarget(r, nullptr);
+
+					renderTargets_[logicalScreen] = t;
 				}
 
 				SDL_RendererInfo info;
@@ -482,7 +483,6 @@ bool SDL::initialize(Configuration& config) {
 						}
 					}
 				}
-
 				else
 				{
 					LOG_ERROR("SDL", "Could not retrieve renderer info for renderer " + screenIndex + " Error: " + SDL_GetError());
@@ -576,12 +576,14 @@ bool SDL::deInitialize(bool fullShutdown) { // The 'fullShutdown' parameter is k
 		LOG_WARNING("SDL", "Window 0 is NULL, cannot center mouse within it");
 	}
 
-	// Destroy render target textures
-	for (auto& ring : renderTargets_) {
-		for (auto& t : ring.rt) {
-			if (t) { SDL_DestroyTexture(t); t = nullptr; }
+// Destroy render target textures
+	for (auto& t : renderTargets_) {
+		if (t) {
+			SDL_DestroyTexture(t);
+			t = nullptr;
 		}
 	}
+	renderTargets_.clear();
 
 	// Destroy renderers and windows
 	for (auto renderer : renderer_)
@@ -659,15 +661,7 @@ SDL_Window* SDL::getWindow(int index) {
 // current target to render into for this frame
 SDL_Texture* SDL::getRenderTarget(int index) {
 	if (renderTargets_.empty()) return nullptr;
-	int i = (index < screenCount_) ? index : 0;
-	return renderTargets_[i].rt[renderTargets_[i].writeIdx];
-}
-
-void SDL::advanceRenderTarget(int index) {
-	if (renderTargets_.empty()) return;
-	int i = (index < screenCount_) ? index : 0;
-	auto& ring = renderTargets_[i];
-	ring.writeIdx = (ring.writeIdx + 1) % ring.ringCount;
+	return (index < screenCount_ ? renderTargets_[index] : renderTargets_[0]);
 }
 
 // Render a copy of a texture
