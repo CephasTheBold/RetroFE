@@ -982,27 +982,6 @@ bool ScrollingList::allocateTexture(size_t index, const Item* item) {
     std::string selectedItemName = getSelectedItemName();
     const bool isSelectedItem = (selectedImage_ && item->name == selectedItemName);
 
-    // Compose name candidates once
-    std::vector<std::string> names = {
-        item->name,
-        item->fullTitle
-    };
-    if (!item->cloneof.empty())        names.push_back(item->cloneof);
-    if (typeLC == "numberbuttons")     names.push_back(item->numberButtons);
-    if (typeLC == "numberplayers")     names.push_back(item->numberPlayers);
-    if (typeLC == "year")              names.push_back(item->year);
-    if (typeLC == "title")             names.push_back(item->title);
-    if (typeLC == "developer")         names.push_back(item->developer.empty() ? item->manufacturer : item->developer);
-    if (typeLC == "manufacturer")      names.push_back(item->manufacturer);
-    if (typeLC == "genre")             names.push_back(item->genre);
-    if (typeLC == "ctrltype")          names.push_back(item->ctrlType);
-    if (typeLC == "joyways")           names.push_back(item->joyWays);
-    if (typeLC == "rating")            names.push_back(item->rating);
-    if (typeLC == "score")             names.push_back(item->score);
-    if (typeLC.rfind("playlist", 0) == 0)
-        names.push_back(item->name);
-    names.emplace_back("default");
-
     ImageBuilder imageBuild;
     VideoBuilder videoBuild;
 
@@ -1088,7 +1067,15 @@ bool ScrollingList::allocateTexture(size_t index, const Item* item) {
         };
 
     // -------- Main media search loop --------
-    for (const auto& name : names) {
+        // Fetch the allocation-free string_view cache from the Item
+    const std::vector<std::string_view>& cachedNames = item->baseNameCandidates(typeLC);
+
+    // Iterate through the cached names, adding an extra iteration at the end for "default"
+    for (size_t iter = 0; iter <= cachedNames.size(); ++iter) {
+
+        // Convert the string_view to a string for the builder, or use "default" on the final pass
+        std::string name = (iter < cachedNames.size()) ? std::string(cachedNames[iter]) : "default";
+
         std::string imagePath;
         std::string videoPath;
 
