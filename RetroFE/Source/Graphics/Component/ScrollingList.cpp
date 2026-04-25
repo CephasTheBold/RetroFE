@@ -856,7 +856,6 @@ bool ScrollingList::update(float dt)
     for (unsigned int i = 0; i < scrollPointsSize; i++) {
         Component *c = components_[i];
         if (c) {
-            c->playlistName = playlistName;
             done &= c->update(dt);
         }
     }
@@ -1187,6 +1186,7 @@ bool ScrollingList::allocateTexture(size_t index, const Item* item) {
     }
 
     if (t) {
+        t->playlistName = playlistName;
         components_[index] = t;
     }
 
