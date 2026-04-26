@@ -41,11 +41,13 @@ public:
     unsigned long long getCurrent() override;
     unsigned long long getDuration() override;
     bool isPaused() override;
+    std::string_view filePath() override;
 
 private:
     Component* reloadTexture();
 
     // NEW: playlist change detection for playlist-driven media
+    bool isPlaylistDriven_;
     bool isPlaylistDrivenType_() const;
     std::string lastPlaylistName_;
     bool lastPlaylistNameInit_{ false };

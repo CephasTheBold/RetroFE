@@ -45,6 +45,7 @@ ReloadableMedia::ReloadableMedia(Configuration& config, bool systemMode, bool la
     , jukebox_(jukebox)
     , jukeboxNumLoops_(jukeboxNumLoops) {
     allocateGraphicsMemory();
+    isPlaylistDriven_ = isPlaylistDrivenType_();
 }
 
 ReloadableMedia::~ReloadableMedia() {
@@ -61,7 +62,7 @@ void ReloadableMedia::enableTextFallback_(bool value) {
 
 bool ReloadableMedia::update(float dt) {
     // --- Force reload on playlist change for playlist-driven types ---
-    if (isPlaylistDrivenType_()) {
+    if (isPlaylistDriven_) {
         const std::string curPlaylist = page.getPlaylistName();
 
         if (!lastPlaylistNameInit_) {
@@ -523,7 +524,10 @@ bool ReloadableMedia::isPlaylistDrivenType_() const {
 }
 
 
-std::string filePath() {
+std::string_view ReloadableMedia::filePath() {
+    if (loadedComponent_ != nullptr) {
+        return loadedComponent_->filePath();
+    }
     return "";
 }
 
