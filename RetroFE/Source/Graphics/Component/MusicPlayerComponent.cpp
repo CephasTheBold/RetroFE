@@ -25,6 +25,7 @@
 #include "../../Database/GlobalOpts.h"
 #include "../../Utility/Log.h"
 #include "../../Utility/Utils.h"
+#include "../../Video/GlibLoop.h"
 #include "../../SDL.h"
 #include "kiss_fft.h"
 #include <gst/app/gstappsink.h>
@@ -658,21 +659,19 @@ bool MusicPlayerComponent::update(float dt) {
 		return Component::update(dt);
 	}
 	if (gstreamerVisType_ != GStreamerVisType::None) {
-		// --- RESTORED LOGIC ---
-		// This loop now runs on the main thread, pulling from our private queue.
 		while (true) {
-			std::vector<Uint8> pcmBlock;
+			auto pcmBlock = std::make_shared<std::vector<Uint8>>();
 			{
 				std::lock_guard<std::mutex> lock(pcmMutex_);
-				if (pcmQueue_.empty()) {
-					break; // No more data this frame
-				}
-				pcmBlock = std::move(pcmQueue_.front());
+				if (pcmQueue_.empty()) break;
+				*pcmBlock = std::move(pcmQueue_.front());
 				pcmQueue_.pop_front();
 			}
 
-			// This can now safely block without hanging the audio thread.
-			pushToGst(pcmBlock.data(), static_cast<int>(pcmBlock.size()));
+			// Fire and forget - the UI thread continues immediately!
+			GlibLoop::instance().invoke([this, pcmBlock]() {
+				this->pushToGst(pcmBlock->data(), static_cast<int>(pcmBlock->size()));
+				});
 		}
 
 		updateGstTextureFromAppSink();
