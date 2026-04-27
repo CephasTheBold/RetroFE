@@ -15,6 +15,7 @@
  */
 
 #include "InputMonitor.h"
+#include "../../Database/GlobalOpts.h"
 #include <chrono>
 
 static inline int64_t ms_now() {
@@ -28,7 +29,10 @@ InputMonitor::InputMonitor(Configuration& config) {
     // Create platform-specific backend for keyboard polling
     kb_ = makeKeyboardBackend();
 
-    // --- Helper to trim whitespace if needed ---
+    // Check if GameController mode is enabled to allow semantic parsing
+    sdlGameController_ = false;
+    config.getProperty(OPTION_SDLGAMECONTROLLER, sdlGameController_);
+
     auto trim = [](std::string& s) {
         s.erase(0, s.find_first_not_of(" \t\r\n"));
         s.erase(s.find_last_not_of(" \t\r\n") + 1);
@@ -41,28 +45,29 @@ InputMonitor::InputMonitor(Configuration& config) {
         Utils::listToVector(quitBtnsStr, signals, ',');
         for (auto signal : signals) {
             trim(signal);
+            std::string sigLower = Utils::toLower(signal);
 
-            if (signal.rfind("joyButton", 0) == 0) {
-                // Joystick button
+            if (sigLower.rfind("joybutton", 0) == 0) {
                 try {
                     int idx = std::stoi(signal.substr(9));
                     singleQuitButtonIndices_.insert(idx);
-                    LOG_DEBUG("InputMonitor", "Registered single quit button index: " + std::to_string(idx));
                 }
-                catch (const std::exception& e) {
-                    LOG_ERROR("InputMonitor", "Failed to parse single quit button: " + signal + " (" + e.what() + ")");
+                catch (...) {}
+            }
+            else if (sigLower.rfind("gamepad", 0) == 0 && sdlGameController_) {
+                std::string btnName = Utils::replace(sigLower, "gamepad", "");
+                // Handle optional player index (e.g., gamepad0back)
+                if (!btnName.empty() && isdigit(btnName[0])) btnName.erase(0, 1);
+
+                SDL_GameControllerButton btn = SDL_GameControllerGetButtonFromString(btnName.c_str());
+                if (btn != SDL_CONTROLLER_BUTTON_INVALID) {
+                    singleQuitButtonIndices_.insert(static_cast<int>(btn));
+                    LOG_DEBUG("InputMonitor", "Registered gamepad single quit button: " + btnName);
                 }
             }
             else {
-                // Keyboard key
                 int keyCode = kb_ ? kb_->mapKeyName(signal) : -1;
-                if (keyCode >= 0) {
-                    kbSingles_.push_back(keyCode);
-                    LOG_DEBUG("InputMonitor", "Registered single quit keyboard key: " + signal);
-                }
-                else {
-                    LOG_WARNING("InputMonitor", "Unknown keyboard quit key: " + signal);
-                }
+                if (keyCode >= 0) kbSingles_.push_back(keyCode);
             }
         }
     }
@@ -74,33 +79,32 @@ InputMonitor::InputMonitor(Configuration& config) {
         Utils::listToVector(quitComboStr, signals, ',');
         for (auto signal : signals) {
             trim(signal);
+            std::string sigLower = Utils::toLower(signal);
 
-            if (signal.rfind("joyButton", 0) == 0) {
-                // Joystick button combo
+            if (sigLower.rfind("joybutton", 0) == 0) {
                 try {
                     int idx = std::stoi(signal.substr(9));
                     quitComboIndices_.push_back(idx);
-                    LOG_DEBUG("InputMonitor", "Registered combo quit button index: " + std::to_string(idx));
                 }
-                catch (const std::exception& e) {
-                    LOG_ERROR("InputMonitor", "Failed to parse combo quit button: " + signal + " (" + e.what() + ")");
+                catch (...) {}
+            }
+            else if (sigLower.rfind("gamepad", 0) == 0 && sdlGameController_) {
+                std::string btnName = Utils::replace(sigLower, "gamepad", "");
+                if (!btnName.empty() && isdigit(btnName[0])) btnName.erase(0, 1);
+
+                SDL_GameControllerButton btn = SDL_GameControllerGetButtonFromString(btnName.c_str());
+                if (btn != SDL_CONTROLLER_BUTTON_INVALID) {
+                    quitComboIndices_.push_back(static_cast<int>(btn));
+                    LOG_DEBUG("InputMonitor", "Registered gamepad quit combo button: " + btnName);
                 }
             }
             else {
-                // Keyboard combo key
                 int keyCode = kb_ ? kb_->mapKeyName(signal) : -1;
-                if (keyCode >= 0) {
-                    kbCombo_.push_back(keyCode);
-                    LOG_DEBUG("InputMonitor", "Registered combo quit keyboard key: " + signal);
-                }
-                else {
-                    LOG_WARNING("InputMonitor", "Unknown keyboard combo quit key: " + signal);
-                }
+                if (keyCode >= 0) kbCombo_.push_back(keyCode);
             }
         }
     }
 
-    // Tell backend which keys to monitor
     if (kb_) {
         kb_->setSingleQuitKeys(kbSingles_);
         kb_->setComboQuitKeys(kbCombo_);
@@ -127,26 +131,44 @@ InputDetectionResult InputMonitor::pollSdlEvents_() {
     bool firedQuit = false;
 
     while (SDL_PollEvent(&e)) {
-        // Mouse clicks are immediate PLAY activity
         if (e.type == SDL_MOUSEBUTTONDOWN) {
             anyInputRegistered_ = true;
             sawPlayActivity = true;
         }
-        else if (e.type == SDL_JOYBUTTONDOWN) {
-            int buttonIdx = e.jbutton.button;
+        else if (e.type == SDL_JOYBUTTONDOWN || e.type == SDL_CONTROLLERBUTTONDOWN) {
+            // If GameController mode is on, ignore raw JOY events for devices recognized as Controllers.
+            // SDL_GameControllerFromInstanceID returns a pointer if the joystick is currently open 
+            // as a GameController in this process.
+            if (sdlGameController_ && e.type == SDL_JOYBUTTONDOWN) {
+                if (SDL_GameControllerFromInstanceID(e.jbutton.which) != nullptr) {
+                    continue;
+                }
+            }
+
+            int buttonIdx = -1;
+            SDL_JoystickID joyId = -1;
+
+            if (e.type == SDL_CONTROLLERBUTTONDOWN) {
+                buttonIdx = e.cbutton.button;
+                joyId = e.cbutton.which;
+            }
+            else {
+                buttonIdx = e.jbutton.button;
+                joyId = e.jbutton.which;
+            }
 
             // 1. Single Quit
             if (singleQuitButtonIndices_.count(buttonIdx) > 0) {
                 if (!anyInputRegistered_) {
                     firstInputWasQuit_ = true;
-                    LOG_INFO("InputMonitor", "Joystick single quit (first input).");
+                    LOG_INFO("InputMonitor", "Gamepad single quit (first input).");
                 }
                 firedQuit = true;
                 anyInputRegistered_ = true;
             }
             else {
-                joystickButtonState_[e.jbutton.which][buttonIdx] = true;
-                joystickButtonTimeState_[e.jbutton.which][buttonIdx] = std::chrono::high_resolution_clock::now();
+                joystickButtonState_[joyId][buttonIdx] = true;
+                joystickButtonTimeState_[joyId][buttonIdx] = std::chrono::high_resolution_clock::now();
 
                 // 2. Combo Check
                 bool isComboPart = false;
@@ -157,13 +179,12 @@ InputDetectionResult InputMonitor::pollSdlEvents_() {
                     sawPlayActivity = true;
                 }
                 else {
-                    // Check if combo is now finished
                     bool allDown = true;
                     std::chrono::high_resolution_clock::time_point earliest, latest;
                     bool firstBtn = true;
                     for (int idx : quitComboIndices_) {
-                        if (!joystickButtonState_[e.jbutton.which][idx]) { allDown = false; break; }
-                        auto t = joystickButtonTimeState_[e.jbutton.which][idx];
+                        if (!joystickButtonState_[joyId][idx]) { allDown = false; break; }
+                        auto t = joystickButtonTimeState_[joyId][idx];
                         if (firstBtn) { earliest = latest = t; firstBtn = false; }
                         else { if (t < earliest) earliest = t; if (t > latest) latest = t; }
                     }
@@ -171,7 +192,7 @@ InputDetectionResult InputMonitor::pollSdlEvents_() {
                     if (allDown && std::chrono::duration_cast<std::chrono::milliseconds>(latest - earliest).count() <= 200) {
                         if (!anyInputRegistered_) {
                             firstInputWasQuit_ = true;
-                            LOG_INFO("InputMonitor", "Joystick quit combo (first input).");
+                            LOG_INFO("InputMonitor", "Gamepad quit combo (first input).");
                         }
                         firedQuit = true;
                         anyInputRegistered_ = true;
@@ -179,20 +200,36 @@ InputDetectionResult InputMonitor::pollSdlEvents_() {
                 }
             }
         }
-        else if (e.type == SDL_JOYBUTTONUP) {
-            // Releasing a combo button counts as interaction
+        else if (e.type == SDL_JOYBUTTONUP || e.type == SDL_CONTROLLERBUTTONUP) {
+            if (sdlGameController_ && e.type == SDL_JOYBUTTONUP) {
+                if (SDL_GameControllerFromInstanceID(e.jbutton.which) != nullptr) {
+                    continue;
+                }
+            }
+
+            int buttonIdx = -1;
+            SDL_JoystickID joyId = -1;
+
+            if (e.type == SDL_CONTROLLERBUTTONUP) {
+                buttonIdx = e.cbutton.button;
+                joyId = e.cbutton.which;
+            }
+            else {
+                buttonIdx = e.jbutton.button;
+                joyId = e.jbutton.which;
+            }
+
             bool isComboPart = false;
-            for (int idx : quitComboIndices_) if (e.jbutton.button == idx) { isComboPart = true; break; }
+            for (int idx : quitComboIndices_) if (buttonIdx == idx) { isComboPart = true; break; }
             if (isComboPart) anyInputRegistered_ = true;
 
-            joystickButtonState_[e.jbutton.which][e.jbutton.button] = false;
+            joystickButtonState_[joyId][buttonIdx] = false;
         }
     }
 
     if (firedQuit) return InputDetectionResult::QuitInput;
     return sawPlayActivity ? InputDetectionResult::PlayInput : InputDetectionResult::NoInput;
 }
-
 InputDetectionResult InputMonitor::pollKeyboard_() {
     if (!kb_) return InputDetectionResult::NoInput;
 

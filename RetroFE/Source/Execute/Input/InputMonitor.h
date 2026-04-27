@@ -71,6 +71,8 @@ private:
     std::set<int> singleQuitButtonIndices_;
     std::vector<int> quitComboIndices_;
 
+    bool sdlGameController_;
+
     std::map<SDL_JoystickID, std::map<int, bool>> joystickButtonState_;
     std::map<SDL_JoystickID, std::map<int, std::chrono::high_resolution_clock::time_point>> joystickButtonTimeState_;
 

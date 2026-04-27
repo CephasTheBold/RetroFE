@@ -53,8 +53,29 @@ bool UserInput::initialize()
 {
     sdlGameController_ = false;
     config_.getProperty(OPTION_SDLGAMECONTROLLER, sdlGameController_);
+
     if (sdlGameController_) {
         LOG_INFO("Input", "SDL GameController mode enabled");
+
+        // Get the directory where the executable is located
+        char* basePath = SDL_GetBasePath();
+        if (basePath) {
+            std::string dbPath = std::string(basePath) + "gamecontrollerdb.txt";
+            SDL_free(basePath); // SDL documentation requires freeing this pointer
+
+            int mappingsAdded = SDL_GameControllerAddMappingsFromFile(dbPath.c_str());
+
+            if (mappingsAdded >= 0) {
+                LOG_INFO("Input", "Loaded " << mappingsAdded << " controller mappings from: " << dbPath);
+            }
+            else {
+                // Not found is often fine as SDL has internal defaults, but useful to log
+                LOG_INFO("Input", "Optional gamecontrollerdb.txt not loaded: " << SDL_GetError());
+            }
+        }
+        else {
+            LOG_ERROR("Input", "Could not determine base path for gamecontrollerdb.txt");
+        }
     }
 
     // Optional keys
@@ -218,7 +239,8 @@ bool UserInput::HandleInputMapping(const std::string& token, KeyCode_E key, cons
                 if (sdlGameController_) {
                     keyHandlers_.push_back(std::pair<InputHandler*, KeyCode_E>(new GameControllerButtonHandler(joynum, static_cast<SDL_GameControllerButton>(button)), key));
                     LOG_INFO("Input", "Binding game controller button " + ss.str());
-                } else {
+                }
+                else {
                     keyHandlers_.push_back(std::pair<InputHandler*, KeyCode_E>(new JoyButtonHandler(joynum, button), key));
                     LOG_INFO("Input", "Binding joypad button " + ss.str());
                 }
@@ -244,10 +266,12 @@ bool UserInput::HandleInputMapping(const std::string& token, KeyCode_E key, cons
                         keyHandlers_.push_back(std::pair<InputHandler*, KeyCode_E>(new GameControllerButtonHandler(joynum, dpadButton), key));
                         LOG_INFO("Input", "Binding game controller D-pad " + joydesc);
                         found = true;
-                    } else {
+                    }
+                    else {
                         LOG_ERROR("Input", "Unsupported hat direction '" + joydesc + "' in GameController mode for " + configKey + ". Use up/down/left/right.");
                     }
-                } else {
+                }
+                else {
                     Uint8 hat = 0;
                     if (joydesc == "leftup") hat = SDL_HAT_LEFTUP;
                     else if (joydesc == "left") hat = SDL_HAT_LEFT;
@@ -296,12 +320,81 @@ bool UserInput::HandleInputMapping(const std::string& token, KeyCode_E key, cons
                 if (sdlGameController_) {
                     LOG_INFO("Input", "Binding game controller axis " + ss.str());
                     keyHandlers_.push_back(std::pair<InputHandler*, KeyCode_E>(new GameControllerAxisHandler(joynum, static_cast<SDL_GameControllerAxis>(axis), min, max), key));
-                } else {
+                }
+                else {
                     LOG_INFO("Input", "Binding joypad axis " + ss.str());
                     keyHandlers_.push_back(std::pair<InputHandler*, KeyCode_E>(new JoyAxisHandler(joynum, axis, min, max), key));
                 }
                 found = true;
             }
+        }
+else if (tokenLowered.find("gamepad") == 0) {
+    std::string padDesc = Utils::replace(tokenLowered, "gamepad", "");
+    int joynum = -1;
+
+    // Check if a specific controller index was provided (e.g., gamepad0a)
+    if (!padDesc.empty() && isdigit(padDesc.at(0))) {
+        std::stringstream ssjoy;
+        ssjoy << padDesc.at(0);
+        ssjoy >> joynum;
+        padDesc = padDesc.erase(0, 1);
+    }
+
+    if (sdlGameController_) {
+        bool isAxis = false;
+        Sint16 min = 0;
+        Sint16 max = 0;
+        int deadZone;
+
+        if (!config_.getProperty("controls.deadZone", deadZone)) {
+            deadZone = 3;
+        }
+
+        std::string axisDesc = padDesc;
+
+        // If it has a + or -, it's an analog axis direction
+        if (axisDesc.find("-") != std::string::npos) {
+            isAxis = true;
+            min = -32768;
+            max = -32768 / 100 * deadZone;
+            axisDesc = Utils::replace(axisDesc, "-", "");
+        }
+        else if (axisDesc.find("+") != std::string::npos) {
+            isAxis = true;
+            min = 32767 / 100 * deadZone;
+            max = 32767;
+            axisDesc = Utils::replace(axisDesc, "+", "");
+        }
+
+        if (isAxis) {
+            SDL_GameControllerAxis axis = SDL_GameControllerGetAxisFromString(axisDesc.c_str());
+
+            if (axis != SDL_CONTROLLER_AXIS_INVALID) {
+                keyHandlers_.push_back(std::pair<InputHandler*, KeyCode_E>(new GameControllerAxisHandler(joynum, axis, min, max), key));
+                LOG_INFO("Input", "Binding game controller semantic axis: " + padDesc);
+                found = true;
+            }
+            else {
+                LOG_ERROR("Input", "Invalid GameController axis name: " + padDesc);
+            }
+        }
+        else {
+            // No + or - found, so it must be a button
+            SDL_GameControllerButton button = SDL_GameControllerGetButtonFromString(padDesc.c_str());
+
+            if (button != SDL_CONTROLLER_BUTTON_INVALID) {
+                keyHandlers_.push_back(std::pair<InputHandler*, KeyCode_E>(new GameControllerButtonHandler(joynum, button), key));
+                LOG_INFO("Input", "Binding game controller semantic button: " + padDesc);
+                found = true;
+            }
+            else {
+                LOG_ERROR("Input", "Invalid GameController button name: " + padDesc);
+            }
+        }
+    }
+    else {
+        LOG_WARNING("Input", "Cannot map 'gamepad' string because SDL GameController mode is disabled.");
+    }
         }
     }
 
