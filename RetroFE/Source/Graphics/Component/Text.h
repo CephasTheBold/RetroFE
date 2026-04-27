@@ -28,11 +28,13 @@ class FontManager;
 class Text : public Component
 {
 
-    struct CachedGlyphPosition {
-        SDL_Rect sourceRect;  // Source rectangle in the texture atlas
-        float xOffset;          // Pre-calculated x offset
-        float yOffset;         // Pre-calculated y offset
-        float advance;       // Pre-calculated advance
+    struct CachedGlyph {
+        SDL_Rect srcOutline;
+        SDL_Rect srcFill;
+        float dstOutlineX, dstOutlineY, dstOutlineW, dstOutlineH;
+        float dstFillX, dstFillY, dstFillW, dstFillH;
+        SDL_Texture* outlineTex;
+        SDL_Texture* fillTex;
     };
 
 public:
@@ -52,7 +54,7 @@ private:
     bool recycleAsText(const std::string& newText) override;
 
 
-    std::vector<CachedGlyphPosition> cachedPositions_;
+    std::vector<CachedGlyph> cachedPositions_;
     float cachedWidth_ = 0;
     float cachedHeight_ = 0;
     float lastScale_ = 0;

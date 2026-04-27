@@ -33,117 +33,228 @@
 
 namespace {
 
-static float measureTextWidthExact(FontManager* f, const std::string& s, float scale) {
-    if (!f || s.empty()) return 0.0f;
-    const float targetH = scale * f->getMaxHeight();
-    const FontManager::MipLevel* mip = f->getMipLevelForSize((int)targetH);
-    if (!mip || !mip->fillTexture) {
-        return (float)f->getWidth(s) * scale;
-    }
-    const float k = (mip->height > 0) ? (targetH / mip->height) : 1.0f;
-    const bool hasOutline = (mip->outlineTexture != nullptr);
+	static float measureTextWidthExact(FontManager* f, const std::string& s, float scale) {
+		if (!f || s.empty()) return 0.0f;
+		const float targetH = scale * f->getMaxHeight();
+		const FontManager::MipLevel* mip = f->getMipLevelForSize((int)targetH);
+		if (!mip || !mip->fillTexture) {
+			return (float)f->getWidth(s) * scale;
+		}
+		const float k = (mip->height > 0) ? (targetH / mip->height) : 1.0f;
+		const bool hasOutline = (mip->outlineTexture != nullptr);
 
-    float penX = 0.0f, minX = 0.0f, maxX = 0.0f;
-    bool first = true;
-    Uint16 prev = 0;
+		float penX = 0.0f, minX = 0.0f, maxX = 0.0f;
+		bool first = true;
+		Uint32 prev = 0; // Use Uint32 for UTF-8
 
-    for (unsigned char uc : s) {
-        const Uint16 ch = (Uint16)uc;
-        if (prev) penX += f->getKerning(prev, ch) * scale;
+		const char* ptr = s.c_str();
+		const char* end = ptr + s.size();
 
-        auto it = mip->glyphs.find(ch);
-        if (it != mip->glyphs.end()) {
-            const auto& g = it->second;
+		while (ptr < end) {
+			uint32_t codepoint = 0;
+			unsigned char c = static_cast<unsigned char>(*ptr++);
 
-            float left = penX;
-            float right = penX + g.fillW * k;
+			if (c < 0x80) { codepoint = c; }
+			else if ((c & 0xE0) == 0xC0) {
+				if (ptr + 1 > end) break;
+				unsigned char b1 = static_cast<unsigned char>(*ptr++);
+				codepoint = ((c & 0x1F) << 6) | (b1 & 0x3F);
+			}
+			else if ((c & 0xF0) == 0xE0) {
+				if (ptr + 2 > end) break;
+				unsigned char b1 = static_cast<unsigned char>(*ptr++);
+				unsigned char b2 = static_cast<unsigned char>(*ptr++);
+				codepoint = ((c & 0x0F) << 12) | ((b1 & 0x3F) << 6) | (b2 & 0x3F);
+			}
+			else if ((c & 0xF8) == 0xF0) {
+				if (ptr + 3 > end) break;
+				unsigned char b1 = static_cast<unsigned char>(*ptr++);
+				unsigned char b2 = static_cast<unsigned char>(*ptr++);
+				unsigned char b3 = static_cast<unsigned char>(*ptr++);
+				codepoint = ((c & 0x07) << 18) | ((b1 & 0x3F) << 12) | ((b2 & 0x3F) << 6) | (b3 & 0x3F);
+			}
+			else {
+				prev = 0;
+				continue;
+			}
 
-            if (hasOutline) {
-                const float oL = penX - g.fillX * k;
-                const float oR = oL + g.rect.w * k;
-                left = std::min(left, oL);
-                right = std::max(right, oR);
-            }
+			const Uint32 ch = codepoint;
+			if (prev) penX += f->getKerning(prev, ch) * scale;
 
-            if (first) {
-                minX = left;
-                maxX = right;
-                first = false;
-            }
-            else {
-                minX = std::min(minX, left);
-                maxX = std::max(maxX, right);
-            }
+			// Check both static and dynamic maps
+			auto it = mip->glyphs.find(ch);
+			if (it == mip->glyphs.end()) {
+				it = mip->dynamicGlyphs.find(ch);
+			}
 
-            penX += g.advance * k;
-        }
+			if (it != mip->dynamicGlyphs.end() && it != mip->glyphs.end()) {
+				const auto& g = it->second;
 
-        prev = ch;
-    }
+				float left = penX;
+				float right = penX + g.fillW * k;
 
-    return std::max(0.0f, maxX - minX);
-}
+				if (hasOutline) {
+					const float oL = penX - g.fillX * k;
+					const float oR = oL + g.rect.w * k;
+					left = std::min(left, oL);
+					right = std::max(right, oR);
+				}
 
-static void renderTextOutlined(
-    SDL_Renderer* r,
-    FontManager* f,
-    const FontManager::MipLevel* mip,
-    SDL_Texture* fillTex,
-    SDL_Texture* outlineTex,
-    const std::string& s,
-    float x,
-    float y,
-    float finalScale,
-    float k)
-{
-    if (!r || !f || !mip || !fillTex || s.empty()) return;
+				if (first) {
+					minX = left;
+					maxX = right;
+					first = false;
+				}
+				else {
+					minX = std::min(minX, left);
+					maxX = std::max(maxX, right);
+				}
 
-    const float ySnap = std::round(y);
+				penX += g.advance * k;
+			}
 
-    // --- Outline pass ---
-    if (outlineTex) {
-        float penX = x;
-        Uint16 prev = 0;
-        for (unsigned char uc : s) {
-            const Uint16 ch = (Uint16)uc;
-            if (prev) penX += f->getKerning(prev, ch) * finalScale;
+			prev = ch;
+		}
 
-            auto it = mip->glyphs.find(ch);
-            if (it != mip->glyphs.end()) {
-                const auto& g = it->second;
-                const SDL_Rect& src = g.rect;
-                SDL_FRect dst = { penX - g.fillX * k, ySnap - g.fillY * k, src.w * k, src.h * k };
-                SDL_RenderCopyF(r, outlineTex, &src, &dst);
-                penX += g.advance * k;
-            }
+		return std::max(0.0f, maxX - minX);
+	}
 
-            prev = ch;
-        }
-    }
+	static void renderTextOutlined(
+		SDL_Renderer* r,
+		FontManager* f,
+		const FontManager::MipLevel* mip,
+		SDL_Texture* staticFillTex,
+		SDL_Texture* staticOutlineTex,
+		const std::string& s,
+		float x,
+		float y,
+		float finalScale,
+		float k) {
+		if (!r || !f || !mip || !staticFillTex || s.empty()) return;
 
-    // --- Fill pass ---
-    {
-        float penX = x;
-        Uint16 prev = 0;
-        for (unsigned char uc : s) {
-            const Uint16 ch = (Uint16)uc;
-            if (prev) penX += f->getKerning(prev, ch) * finalScale;
+		const float ySnap = std::round(y);
 
-            auto it = mip->glyphs.find(ch);
-            if (it != mip->glyphs.end()) {
-                const auto& g = it->second;
+		// --- Outline pass ---
+		if (staticOutlineTex || mip->dynamicOutlineTexture) {
+			float penX = x;
+			Uint32 prev = 0;
+			const char* ptr = s.c_str();
+			const char* end = ptr + s.size();
 
-                SDL_Rect srcFill{ g.rect.x + g.fillX, g.rect.y + g.fillY, g.fillW, g.fillH };
-                SDL_FRect dst{ penX, ySnap, g.fillW * k, g.fillH * k };
-                SDL_RenderCopyF(r, fillTex, &srcFill, &dst);
+			while (ptr < end) {
+				uint32_t codepoint = 0;
+				unsigned char c = static_cast<unsigned char>(*ptr++);
 
-                penX += g.advance * k;
-            }
+				if (c < 0x80) { codepoint = c; }
+				else if ((c & 0xE0) == 0xC0) {
+					if (ptr + 1 > end) break;
+					codepoint = ((c & 0x1F) << 6) | (static_cast<unsigned char>(*ptr++) & 0x3F);
+				}
+				else if ((c & 0xF0) == 0xE0) {
+					if (ptr + 2 > end) break;
+					unsigned char b1 = static_cast<unsigned char>(*ptr++);
+					unsigned char b2 = static_cast<unsigned char>(*ptr++);
+					codepoint = ((c & 0x0F) << 12) | ((b1 & 0x3F) << 6) | (b2 & 0x3F);
+				}
+				else if ((c & 0xF8) == 0xF0) {
+					if (ptr + 3 > end) break;
+					unsigned char b1 = static_cast<unsigned char>(*ptr++);
+					unsigned char b2 = static_cast<unsigned char>(*ptr++);
+					unsigned char b3 = static_cast<unsigned char>(*ptr++);
+					codepoint = ((c & 0x07) << 18) | ((b1 & 0x3F) << 12) | ((b2 & 0x3F) << 6) | (b3 & 0x3F);
+				}
+				else {
+					prev = 0;
+					continue;
+				}
 
-            prev = ch;
-        }
-    }
-}
+				const Uint32 ch = codepoint;
+				if (prev) penX += f->getKerning(prev, ch) * finalScale;
+
+				bool isDynamic = false;
+				auto it = mip->glyphs.find(ch);
+				if (it == mip->glyphs.end()) {
+					it = mip->dynamicGlyphs.find(ch);
+					isDynamic = true;
+				}
+
+				if (it != mip->dynamicGlyphs.end() || it != mip->glyphs.end()) {
+					const auto& g = it->second;
+					const SDL_Rect& src = g.rect;
+					SDL_FRect dst = { penX - g.fillX * k, ySnap - g.fillY * k, src.w * k, src.h * k };
+
+					SDL_Texture* texToUse = isDynamic ? mip->dynamicOutlineTexture : staticOutlineTex;
+					if (texToUse) {
+						SDL_RenderCopyF(r, texToUse, &src, &dst);
+					}
+
+					penX += g.advance * k;
+				}
+				prev = ch;
+			}
+		}
+
+		// --- Fill pass ---
+		{
+			float penX = x;
+			Uint32 prev = 0;
+			const char* ptr = s.c_str();
+			const char* end = ptr + s.size();
+
+			while (ptr < end) {
+				uint32_t codepoint = 0;
+				unsigned char c = static_cast<unsigned char>(*ptr++);
+
+				if (c < 0x80) { codepoint = c; }
+				else if ((c & 0xE0) == 0xC0) {
+					if (ptr + 1 > end) break;
+					codepoint = ((c & 0x1F) << 6) | (static_cast<unsigned char>(*ptr++) & 0x3F);
+				}
+				else if ((c & 0xF0) == 0xE0) {
+					if (ptr + 2 > end) break;
+					unsigned char b1 = static_cast<unsigned char>(*ptr++);
+					unsigned char b2 = static_cast<unsigned char>(*ptr++);
+					codepoint = ((c & 0x0F) << 12) | ((b1 & 0x3F) << 6) | (b2 & 0x3F);
+				}
+				else if ((c & 0xF8) == 0xF0) {
+					if (ptr + 3 > end) break;
+					unsigned char b1 = static_cast<unsigned char>(*ptr++);
+					unsigned char b2 = static_cast<unsigned char>(*ptr++);
+					unsigned char b3 = static_cast<unsigned char>(*ptr++);
+					codepoint = ((c & 0x07) << 18) | ((b1 & 0x3F) << 12) | ((b2 & 0x3F) << 6) | (b3 & 0x3F);
+				}
+				else {
+					prev = 0;
+					continue;
+				}
+
+				const Uint32 ch = codepoint;
+				if (prev) penX += f->getKerning(prev, ch) * finalScale;
+
+				bool isDynamic = false;
+				auto it = mip->glyphs.find(ch);
+				if (it == mip->glyphs.end()) {
+					it = mip->dynamicGlyphs.find(ch);
+					isDynamic = true;
+				}
+
+				if (it != mip->dynamicGlyphs.end() || it != mip->glyphs.end()) {
+					const auto& g = it->second;
+
+					SDL_Rect srcFill{ g.rect.x + g.fillX, g.rect.y + g.fillY, g.fillW, g.fillH };
+					SDL_FRect dst{ penX, ySnap, g.fillW * k, g.fillH * k };
+
+					SDL_Texture* texToUse = isDynamic ? mip->dynamicFillTexture : staticFillTex;
+					if (texToUse) {
+						SDL_RenderCopyF(r, texToUse, &srcFill, &dst);
+					}
+
+					penX += g.advance * k;
+				}
+				prev = ch;
+			}
+		}
+	}
 
 } // namespace
 
@@ -180,7 +291,6 @@ ReloadableHiscores::ReloadableHiscores(Configuration& config, std::string textFo
 	, lastComputedDrawableHeight_(0.0f)
 	, lastComputedRowPadding_(0.0f)
 	, lastSelectedItem_(nullptr)
-	, intermediateTexture_(nullptr)
 	, highScoreTable_(nullptr)
 	, headerTexture_(nullptr)
 	, tableRowsTexture_(nullptr)
@@ -408,7 +518,6 @@ void ReloadableHiscores::freeGraphicsMemory() {
 	Component::freeGraphicsMemory();
 	if (headerTexture_) { SDL_DestroyTexture(headerTexture_); headerTexture_ = nullptr; }
 	if (tableRowsTexture_) { SDL_DestroyTexture(tableRowsTexture_); tableRowsTexture_ = nullptr; }
-	if (intermediateTexture_) { SDL_DestroyTexture(intermediateTexture_); intermediateTexture_ = nullptr; }
 }
 
 
@@ -581,110 +690,83 @@ void ReloadableHiscores::reloadTexture(bool resetScroll) {
 void ReloadableHiscores::draw() {
 	Component::draw();
 
-	if (baseViewInfo.Alpha <= 0.0f)
-		return;
+	if (baseViewInfo.Alpha <= 0.0f) return;
 
 	const bool hasTable = (highScoreTable_ && !highScoreTable_->tables.empty());
 	if (hasTable) {
 		if (!headerTexture_ || !tableRowsTexture_) return;
 	}
 	else {
-		// No table for this game: we may still have a message texture to draw.
 		if (!headerTexture_) return;
 	}
 
 	SDL_Renderer* renderer = SDL::getRenderer(baseViewInfo.Monitor);
 	if (!renderer) return;
 
-	// Compute composite/intermediate texture size (covering the whole visible region)
-	float compositeWidth = baseViewInfo.Width;
-	float compositeHeight = baseViewInfo.Height;
-
-	// (Re)create intermediate texture if needed
-	static int prevW = 0, prevH = 0;
-	if (!intermediateTexture_ || prevW != (int)compositeWidth || prevH != (int)compositeHeight) {
-		if (intermediateTexture_) SDL_DestroyTexture(intermediateTexture_);
-		intermediateTexture_ = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET,
-			(int)compositeWidth, (int)compositeHeight);
-		SDL_SetTextureBlendMode(intermediateTexture_, SDL_BLENDMODE_BLEND);
-		prevW = (int)compositeWidth;
-		prevH = (int)compositeHeight;
-	}
-
-	// Draw header/body into intermediate texture
-	SDL_Texture* oldTarget = SDL_GetRenderTarget(renderer);
-	SDL_SetRenderTarget(renderer, intermediateTexture_);
-	SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
-	SDL_RenderClear(renderer);
-
-	float effectiveViewWidth = baseViewInfo.MaxWidth; // Default to MaxWidth
+	float effectiveViewWidth = baseViewInfo.MaxWidth;
 	if (baseViewInfo.Width > 0 && baseViewInfo.Width < baseViewInfo.MaxWidth)
 		effectiveViewWidth = baseViewInfo.Width;
 
-	float xOrigin = (effectiveViewWidth - cachedTotalTableWidth_) / 2.0f;
-	float yOrigin = 0.0f; // Always draw header at the top of intermediate
+	// Calculate actual screen coordinates based on Component Origin
+	float screenX = baseViewInfo.XRelativeToOrigin() + ((effectiveViewWidth - cachedTotalTableWidth_) / 2.0f);
+	float screenY = baseViewInfo.YRelativeToOrigin();
 
-	// -- Draw header --
+	// Set alpha mod directly on the cached textures
+	SDL_SetTextureAlphaMod(headerTexture_, static_cast<Uint8>(baseViewInfo.Alpha * 255.0f));
+
+	// -- Draw header directly to screen --
 	SDL_FRect destHeader = {
-		xOrigin,
-		yOrigin,
+		screenX,
+		screenY,
 		cachedTotalTableWidth_,
 		static_cast<float>(headerTextureHeight_)
 	};
 	SDL_RenderCopyF(renderer, headerTexture_, nullptr, &destHeader);
 
-	// -- Draw table body --
+	// -- Draw table body directly to screen --
+	float compositeHeight = baseViewInfo.ScaledHeight();
 	float rowsAreaHeight = compositeHeight - headerTextureHeight_;
 	float scrollY = currentPosition_;
 
 	if (tableRowsTexture_ && tableRowsTextureHeight_ > 0 && rowsAreaHeight > 0.0f) {
+		SDL_SetTextureAlphaMod(tableRowsTexture_, static_cast<Uint8>(baseViewInfo.Alpha * 255.0f));
+
 		if (tableRowsTextureHeight_ <= rowsAreaHeight) {
-		// NON-SCROLLING
-		SDL_Rect srcRows = { 0, 0, static_cast<int>(cachedTotalTableWidth_), tableRowsTextureHeight_ };
-		SDL_FRect destRows = { xOrigin, yOrigin + headerTextureHeight_, cachedTotalTableWidth_, static_cast<float>(tableRowsTextureHeight_) };
-		SDL_RenderCopyF(renderer, tableRowsTexture_, &srcRows, &destRows);
-	}
-	else {
-		// SCROLLING
-		if (scrollY < tableRowsTextureHeight_) {
-			int visibleSrcHeight = static_cast<int>(std::min(rowsAreaHeight, tableRowsTextureHeight_ - scrollY));
-			if (visibleSrcHeight > 0) {
-				SDL_Rect srcRows = {
-					0,
-					static_cast<int>(scrollY),
-					static_cast<int>(cachedTotalTableWidth_),
-					visibleSrcHeight
-				};
-				SDL_FRect destRows = {
-					xOrigin,
-					yOrigin + headerTextureHeight_,
-					cachedTotalTableWidth_,
-					static_cast<float>(visibleSrcHeight)
-				};
-				SDL_RenderCopyF(renderer, tableRowsTexture_, &srcRows, &destRows);
+			// NON-SCROLLING
+			SDL_Rect srcRows = { 0, 0, static_cast<int>(cachedTotalTableWidth_), tableRowsTextureHeight_ };
+			SDL_FRect destRows = { screenX, screenY + headerTextureHeight_, cachedTotalTableWidth_, static_cast<float>(tableRowsTextureHeight_) };
+			SDL_RenderCopyF(renderer, tableRowsTexture_, &srcRows, &destRows);
+		}
+		else {
+			// SCROLLING
+			if (scrollY < tableRowsTextureHeight_) {
+				int visibleSrcHeight = static_cast<int>(std::min(rowsAreaHeight, tableRowsTextureHeight_ - scrollY));
+				if (visibleSrcHeight > 0) {
+					SDL_Rect srcRows = {
+						0,
+						static_cast<int>(scrollY),
+						static_cast<int>(cachedTotalTableWidth_),
+						visibleSrcHeight
+					};
+					SDL_FRect destRows = {
+						screenX,
+						screenY + headerTextureHeight_,
+						cachedTotalTableWidth_,
+						static_cast<float>(visibleSrcHeight)
+					};
+					SDL_RenderCopyF(renderer, tableRowsTexture_, &srcRows, &destRows);
+				}
 			}
 		}
-	}	}
+	}
 
 #ifndef NDEBUG
-	SDL_SetRenderDrawColor(renderer, 0, 255, 0, 255); // Green, opaque
-	SDL_Rect outlineRect = { 0, 0, static_cast<int>(compositeWidth) - 1, static_cast<int>(compositeHeight) - 1 };
-	SDL_RenderDrawRect(renderer, &outlineRect);
+	SDL_SetRenderDrawColor(renderer, 0, 255, 0, 255);
+	SDL_FRect outlineRect = { baseViewInfo.XRelativeToOrigin(), baseViewInfo.YRelativeToOrigin(), effectiveViewWidth, compositeHeight };
+	SDL_RenderDrawRectF(renderer, &outlineRect);
 #endif
-	SDL_SetRenderTarget(renderer, oldTarget);
-
-	// Final: Draw the intermediate texture to the real target using SDL::renderCopyF (handles alpha/rotation/etc)
-	SDL_FRect rect = {
-		baseViewInfo.XRelativeToOrigin(), baseViewInfo.YRelativeToOrigin(),
-		baseViewInfo.ScaledWidth(), baseViewInfo.ScaledHeight() };
-
-	SDL::renderCopyF(intermediateTexture_, baseViewInfo.Alpha, nullptr, &rect, baseViewInfo,
-		page.getLayoutWidthByMonitor(baseViewInfo.Monitor),
-		page.getLayoutHeightByMonitor(baseViewInfo.Monitor));
 }
 
-
-// Returns final scale and updates column widths and total width
 // Returns final scale and updates column widths and total width
 float ReloadableHiscores::computeTableScaleAndWidths(
 	FontManager* font,

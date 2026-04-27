@@ -106,169 +106,28 @@ void Text::draw() {
     const int layoutH = page.getLayoutHeightByMonitor(baseViewInfo.Monitor);
 
     // --- PASS 1: OUTLINE ---
-    if (outlineTex || mip->dynamicOutlineTexture) {
-        SDL_FRect dst;
-        const char* ptr = textData_.c_str();
-        const char* end = ptr + textData_.size();
-        size_t i = 0;
-
-        while (ptr < end && i < cachedPositions_.size()) {
-            const auto& pos = cachedPositions_[i];
-
-            uint32_t codepoint = 0;
-            unsigned char c = static_cast<unsigned char>(*ptr++);
-
-            if (c < 0x80) {
-                codepoint = c;
-            }
-            else if ((c & 0xE0) == 0xC0) {
-                if (ptr + 1 > end) break;
-                unsigned char b1 = static_cast<unsigned char>(*ptr++);
-                codepoint = ((c & 0x1F) << 6) | (b1 & 0x3F);
-            }
-            else if ((c & 0xF0) == 0xE0) {
-                if (ptr + 2 > end) break;
-                unsigned char b1 = static_cast<unsigned char>(*ptr++);
-                unsigned char b2 = static_cast<unsigned char>(*ptr++);
-                codepoint = ((c & 0x0F) << 12) |
-                ((b1 & 0x3F) << 6) |
-                (b2 & 0x3F);
-            }
-            else if ((c & 0xF8) == 0xF0) {
-                if (ptr + 3 > end) break;
-                unsigned char b1 = static_cast<unsigned char>(*ptr++);
-                unsigned char b2 = static_cast<unsigned char>(*ptr++);
-                unsigned char b3 = static_cast<unsigned char>(*ptr++);
-                codepoint = ((c & 0x07) << 18) |
-                ((b1 & 0x3F) << 12) |
-                ((b2 & 0x3F) << 6) |
-                (b3 & 0x3F);
-            }
-            else {
-                continue;
-            }
-
-            Uint32 ch = codepoint;
-
-            auto it = mip->glyphs.find(ch);
-            bool isDynamic = false;
-            if (it == mip->glyphs.end()) {
-                it = mip->dynamicGlyphs.find(ch);
-                isDynamic = true;
-                if (it == mip->dynamicGlyphs.end()) {
-                    i++;
-                    continue;
-                }
-            }
-
-            const FontManager::GlyphInfo& g = it->second;
-            const SDL_Rect& srcOutline = g.rect;
-
-            dst.x = xOrigin + pos.xOffset;
-            dst.y = yOrigin + pos.yOffset;
-            dst.w = srcOutline.w * scale;
-            dst.h = srcOutline.h * scale;
-
-            SDL_Texture* texToUse = isDynamic ? mip->dynamicOutlineTexture : outlineTex;
-            if (texToUse) {
-                SDL::renderCopyF(
-                    texToUse,
-                    baseViewInfo.Alpha,
-                    &srcOutline,
-                    &dst,
-                    baseViewInfo,
-                    layoutW, layoutH
-                );
-            }
-
-            i++;
+    for (const auto& cg : cachedPositions_) {
+        if (cg.outlineTex) {
+            SDL_FRect dst = {
+                xOrigin + cg.dstOutlineX,
+                yOrigin + cg.dstOutlineY,
+                cg.dstOutlineW,
+                cg.dstOutlineH
+            };
+            SDL::renderCopyF(cg.outlineTex, baseViewInfo.Alpha, &cg.srcOutline, &dst, baseViewInfo, layoutW, layoutH);
         }
     }
 
     // --- PASS 2: FILL ---
-    {
-        SDL_FRect dst;
-        const char* ptr = textData_.c_str();
-        const char* end = ptr + textData_.size();
-        size_t i = 0;
-
-        while (ptr < end && i < cachedPositions_.size()) {
-            const auto& pos = cachedPositions_[i];
-
-            uint32_t codepoint = 0;
-            unsigned char c = static_cast<unsigned char>(*ptr++);
-
-            if (c < 0x80) {
-                codepoint = c;
-            }
-            else if ((c & 0xE0) == 0xC0) {
-                if (ptr + 1 > end) break;
-                unsigned char b1 = static_cast<unsigned char>(*ptr++);
-                codepoint = ((c & 0x1F) << 6) | (b1 & 0x3F);
-            }
-            else if ((c & 0xF0) == 0xE0) {
-                if (ptr + 2 > end) break;
-                unsigned char b1 = static_cast<unsigned char>(*ptr++);
-                unsigned char b2 = static_cast<unsigned char>(*ptr++);
-                codepoint = ((c & 0x0F) << 12) |
-                ((b1 & 0x3F) << 6) |
-                (b2 & 0x3F);
-            }
-            else if ((c & 0xF8) == 0xF0) {
-                if (ptr + 3 > end) break;
-                unsigned char b1 = static_cast<unsigned char>(*ptr++);
-                unsigned char b2 = static_cast<unsigned char>(*ptr++);
-                unsigned char b3 = static_cast<unsigned char>(*ptr++);
-                codepoint = ((c & 0x07) << 18) |
-                ((b1 & 0x3F) << 12) |
-                ((b2 & 0x3F) << 6) |
-                (b3 & 0x3F);
-            }
-            else {
-                continue;
-            }
-
-            Uint32 ch = codepoint;
-
-            auto it = mip->glyphs.find(ch);
-            bool isDynamic = false;
-            if (it == mip->glyphs.end()) {
-                it = mip->dynamicGlyphs.find(ch);
-                isDynamic = true;
-                if (it == mip->dynamicGlyphs.end()) {
-                    i++;
-                    continue;
-                }
-            }
-
-            const FontManager::GlyphInfo& g = it->second;
-
-            SDL_Rect srcFill{
-                g.rect.x + g.fillX,
-                g.rect.y + g.fillY,
-                g.fillW,
-                g.fillH
+    for (const auto& cg : cachedPositions_) {
+        if (cg.fillTex) {
+            SDL_FRect dst = {
+                xOrigin + cg.dstFillX,
+                yOrigin + cg.dstFillY,
+                cg.dstFillW,
+                cg.dstFillH
             };
-
-            dst.x = xOrigin + pos.xOffset + g.fillX * scale;
-            dst.y = yOrigin + pos.yOffset + g.fillY * scale;
-            dst.w = g.fillW * scale;
-            dst.h = g.fillH * scale;
-
-            SDL_Texture* texToUse = isDynamic ? mip->dynamicFillTexture : fillTex;
-
-            if (texToUse) {
-                SDL::renderCopyF(
-                    texToUse,
-                    baseViewInfo.Alpha,
-                    &srcFill,
-                    &dst,
-                    baseViewInfo,
-                    layoutW, layoutH
-                );
-            }
-
-            i++;
+            SDL::renderCopyF(cg.fillTex, baseViewInfo.Alpha, &cg.srcFill, &dst, baseViewInfo, layoutW, layoutH);
         }
     }
 
@@ -339,9 +198,14 @@ void Text::updateGlyphPositions(FontManager* font, float scale, float maxWidth) 
 
         const Uint32 ch = codepoint;
 
+        bool isDynamic = false;
+
         auto it = mip->glyphs.find(ch);
         if (it == mip->glyphs.end() || it->second.rect.h <= 0) {
+
             it = mip->dynamicGlyphs.find(ch);
+            isDynamic = true; // 2. Flag it the moment we touch the dynamic map
+
             if (it == mip->dynamicGlyphs.end()) {
                 if (ch >= 1024) {
                     if (font->loadGlyphOnDemand(ch, const_cast<FontManager::MipLevel*>(mip))) {
@@ -350,11 +214,13 @@ void Text::updateGlyphPositions(FontManager* font, float scale, float maxWidth) 
                             prev = 0;
                             continue;
                         }
-                    } else {
+                    }
+                    else {
                         prev = 0;
                         continue;
                     }
-                } else {
+                }
+                else {
                     prev = 0;
                     continue;
                 }
@@ -368,24 +234,36 @@ void Text::updateGlyphPositions(FontManager* font, float scale, float maxWidth) 
         penX += static_cast<double>(kern_px);
 
         const float packedX = static_cast<float>(penX) - (outline_f * scale);
-
-        const float packedY =
-        (ascent_f - (static_cast<float>(g.maxY) + outline_f + static_cast<float>(g.topPad))) * scale;
+        const float packedY = (ascent_f - (static_cast<float>(g.maxY) + outline_f + static_cast<float>(g.topPad))) * scale;
 
         const float adv_px = static_cast<float>(g.advance) * scale;
-
         const double nextPen = penX + static_cast<double>(adv_px);
+
         if (maxWidth > 0.0f && static_cast<float>(nextPen) > maxWidth) break;
 
-        tmp.push_back({ g.rect, packedX, packedY, adv_px });
+        // Build the fat cache entry
+        CachedGlyph cg;
+        cg.srcOutline = g.rect;
+        cg.srcFill = { g.rect.x + g.fillX, g.rect.y + g.fillY, g.fillW, g.fillH };
+
+        cg.dstOutlineX = packedX;
+        cg.dstOutlineY = packedY;
+        cg.dstOutlineW = g.rect.w * scale;
+        cg.dstOutlineH = g.rect.h * scale;
+
+        cg.dstFillX = packedX + (g.fillX * scale);
+        cg.dstFillY = packedY + (g.fillY * scale);
+        cg.dstFillW = g.fillW * scale;
+        cg.dstFillH = g.fillH * scale;
+
+        // 3. Use the boolean directly. No extra lookups!
+        cg.outlineTex = isDynamic ? mip->dynamicOutlineTexture : mip->outlineTexture;
+        cg.fillTex = isDynamic ? mip->dynamicFillTexture : mip->fillTexture;
+
+        cachedPositions_.push_back(cg);
 
         penX = nextPen;
         prev = ch;
-    }
-
-    cachedPositions_.reserve(tmp.size());
-    for (auto& t : tmp) {
-        cachedPositions_.push_back({ t.src, t.packedX, t.packedY, t.advance_px });
     }
 
     cachedWidth_ = static_cast<float>(penX);
