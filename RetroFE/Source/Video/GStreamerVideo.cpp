@@ -463,7 +463,6 @@ void GStreamerVideo::destroyTextures() {
 	allocatedFormat_ = SDL_PIXELFORMAT_UNKNOWN;
 }
 
-// name=GStreamerVideo.cpp (stop replacement)
 bool GStreamerVideo::stop() {
 	const std::string currentFileForLog = currentFile_;
 	LOG_INFO("GStreamerVideo", "Stop (full cleanup) called for " +
@@ -476,7 +475,6 @@ bool GStreamerVideo::stop() {
 
 	// 1) Snapshot what we need under the mutex, then release it.
 	GstElement* pipeline = nullptr;
-	GstElement* playbin = nullptr;
 	GstElement* videoSink = nullptr;
 	GstElement* audioSink = nullptr;
 	guint padProbeId = 0;
@@ -549,9 +547,9 @@ bool GStreamerVideo::stop() {
 		(void)gst_element_get_state(pipeline, nullptr, nullptr, 2 * GST_SECOND);
 
 		// Disconnect signal handler if still connected
-		if (elementSetupHandlerId != 0 && playbin &&
-			g_signal_handler_is_connected(playbin, elementSetupHandlerId)) {
-			g_signal_handler_disconnect(playbin, elementSetupHandlerId);
+		if (elementSetupHandlerId != 0 && pipeline &&
+			g_signal_handler_is_connected(pipeline, elementSetupHandlerId)) {
+			g_signal_handler_disconnect(pipeline, elementSetupHandlerId);
 			elementSetupHandlerId_ = 0;
 		}
 
@@ -902,7 +900,9 @@ bool GStreamerVideo::createPipelineIfNeeded() {
 	}
 	else {
 		// Simple pipeline: set appsink directly as video-sink.
+		gst_object_ref_sink(videoSink_);
 		g_object_set(pipeline_, "video-sink", videoSink_, nullptr);
+		gst_object_unref(videoSink_);
 	}
 
 	// --- THE UNIVERSAL PAD PROBE ---
@@ -928,8 +928,9 @@ bool GStreamerVideo::createPipelineIfNeeded() {
 		hasError_.store(true);
 		return false;
 	}
-
+	gst_object_ref_sink(audioSink_);
 	g_object_set(pipeline_, "audio-sink", audioSink_, nullptr);
+	gst_object_unref(audioSink_);
 
 	if (GstBus* bus = gst_element_get_bus(pipeline_)) {
 		busWatchId_ = GlibLoop::instance().addBusWatch(

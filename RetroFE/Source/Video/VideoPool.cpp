@@ -158,6 +158,10 @@ void VideoPool::releaseVideo(VideoPtr vid, int monitor, int listId) {
     // (Alternative: allow release to land in available and let cleanup erase later.)
     if (pool.markedForCleanup) {
         if (pool.currentActive > 0) pool.currentActive--;
+        
+        if (pool.currentActive == 0) {
+            erasePoolIfIdle_nolock(monitor, listId);
+        }
         return;
     }
 
