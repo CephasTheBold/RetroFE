@@ -37,30 +37,19 @@ VideoPool::VideoPtr VideoPool::createNewVideo(int monitor, bool softOverlay) {
 }
 
 VideoPool::VideoPtr VideoPool::popBestAvailable(PoolInfo& pool, int monitor, int listId) {
-    // 1) Prefer most recently released "warm" (active pipeline)
-    for (auto it = pool.available.rbegin(); it != pool.available.rend(); ++it) {
-        if (*it && (*it)->getActualState() != IVideo::VideoState::None) {
-            auto fwd = std::prev(it.base());
-            auto vid = std::move(*fwd);
-            pool.available.erase(fwd);
-            pool.currentActive++;
-            LOG_DEBUG("VideoPool", "Acquire (HOT SWAP reuse) " + poolStateStr(monitor, listId, pool));
-            return vid;
-        }
+    if (pool.available.empty()) {
+        return nullptr;
     }
 
-    // 2) Otherwise take the first fully idle "cold" (oldest)
-    for (auto it = pool.available.begin(); it != pool.available.end(); ++it) {
-        if (*it && (*it)->getActualState() == IVideo::VideoState::None) {
-            auto vid = std::move(*it);
-            pool.available.erase(it);
-            pool.currentActive++;
-            LOG_DEBUG("VideoPool", "Acquire (COLD reuse) " + poolStateStr(monitor, listId, pool));
-            return vid;
-        }
-    }
+    // LIFO: Grab the absolute most recently released video from the very back.
+    // O(1) instant removal, keeps CPU caches hot, lets OS page out the cold ones.
+    auto vid = std::move(pool.available.back());
+    pool.available.pop_back();
 
-    return nullptr;
+    pool.currentActive++;
+    LOG_DEBUG("VideoPool", "Acquire (LIFO reuse) " + poolStateStr(monitor, listId, pool));
+
+    return vid;
 }
 
 VideoPool::VideoPtr VideoPool::acquireVideo(int monitor, int listId, bool softOverlay) {
@@ -155,17 +144,16 @@ void VideoPool::releaseVideo(VideoPtr vid, int monitor, int listId) {
     PoolInfo& pool = pools_[monitor][listId];
 
     // Safety: if caller releases to a pool that is being cleaned up, just drop.
-    // (Alternative: allow release to land in available and let cleanup erase later.)
     if (pool.markedForCleanup) {
         if (pool.currentActive > 0) pool.currentActive--;
-        
+
         if (pool.currentActive == 0) {
             erasePoolIfIdle_nolock(monitor, listId);
         }
         return;
     }
 
-    // Unload BEFORE returning to the pool (keeps pool ops fast and avoids stale visuals/audio)
+    // Unload BEFORE returning to the pool
     if (auto* gsv = dynamic_cast<GStreamerVideo*>(vid.get())) {
         gsv->unload();
     }
@@ -175,8 +163,23 @@ void VideoPool::releaseVideo(VideoPtr vid, int monitor, int listId) {
         LOG_WARNING("VideoPool", "Release (currentActive already 0) " + poolStateStr(monitor, listId, pool));
     }
 
+    // --- THE EVICTION CEILING ---
+    // If we have finished the warmup phase (latched), we enforce a strict memory cap.
+    if (pool.initialCountLatched) {
+        // requiredInstanceCount already includes the POOL_BUFFER_INSTANCES.
+        // If our idle cache is already full, destroy this video.
+        if (pool.available.size() >= pool.requiredInstanceCount) {
+            LOG_DEBUG("VideoPool", "Evicting excess video. Pool is at capacity (" +
+                std::to_string(pool.requiredInstanceCount) + ").");
+            // Returning early causes 'vid' (a unique_ptr) to fall out of scope and be destroyed!
+            return;
+        }
+    }
+
+    // If we haven't hit the ceiling, cache it for reuse.
     pool.available.push_back(std::move(vid));
 
+    // Latch logic (calculates the ceiling)
     if (!pool.initialCountLatched) {
         const size_t candidate = pool.observedMaxActive + POOL_BUFFER_INSTANCES;
         pool.requiredInstanceCount = std::max(pool.requiredInstanceCount, candidate);
