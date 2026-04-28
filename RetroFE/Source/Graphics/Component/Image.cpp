@@ -98,6 +98,10 @@ bool Image::startAsyncLoad(const std::string& path) {
                 res.success = true;
             }
         }
+        {
+            std::lock_guard<std::mutex> lock(g_ImageCacheMutex);
+            loadingTasks_.erase(path);
+        }
         return res;
         }).share();
 
@@ -113,7 +117,6 @@ void Image::finalizeLoad() {
         std::lock_guard<std::mutex> lock(g_ImageCacheMutex);
         if (useTextureCaching_ && loadFromCache(path)) {
             status_ = LoadStatus::Ready;
-            loadingTasks_.erase(path);
             return;
         }
     }
@@ -122,10 +125,6 @@ void Image::finalizeLoad() {
 
     // Fallback logic: If primary failed, trigger alt load
     if (!res.success) {
-        {
-            std::lock_guard<std::mutex> lock(g_ImageCacheMutex);
-            loadingTasks_.erase(path);
-        }
 
         if (path == file_ && !altFile_.empty()) {
             status_ = LoadStatus::Unloaded;
@@ -171,9 +170,6 @@ void Image::finalizeLoad() {
     else {
         status_ = LoadStatus::Error;
     }
-
-    std::lock_guard<std::mutex> lock(g_ImageCacheMutex);
-    loadingTasks_.erase(path);
 }
 
 // -------------------- Render Logic --------------------
@@ -292,18 +288,9 @@ void Image::draw() {
 
 // -------------------- Helpers --------------------
 void Image::freeGraphicsMemory() {
-    if (status_ == LoadStatus::Loading && loadTask_.valid()) {
-        loadTask_.wait(); // Safe destruction: wait for background thread to finish
-
-        // --- FIX: System RAM Leak ---
-        // Erase the task from the global map. If no other component is actively 
-        // sharing this future, the uncompressed SDL_Surfaces will be correctly destroyed.
-        {
-            std::lock_guard<std::mutex> lock(g_ImageCacheMutex);
-            loadingTasks_.erase(currentLoadingPath_);
-        }
-        // -----------------------------
-    }
+    // We DO NOT wait() here anymore. We just let loadTask_ be overwritten.
+    // If the background task finishes, it will clean itself out of the map.
+    // Zero UI stutter during rapid scrolling!
 
     if (animatedTexture_) SDL_DestroyTexture(animatedTexture_);
     if (texture_ && !isUsingCachedStaticTexture_) SDL_DestroyTexture(texture_);
@@ -314,6 +301,9 @@ void Image::freeGraphicsMemory() {
     frameDelays_.clear();
     isUsingCachedStaticTexture_ = isUsingCachedSurfaces_ = false;
     status_ = LoadStatus::Unloaded;
+
+    // Reset our local path so we don't accidentally check it later
+    currentLoadingPath_.clear();
     resetAnimationState();
 }
 
