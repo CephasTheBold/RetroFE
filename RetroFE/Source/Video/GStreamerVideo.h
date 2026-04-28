@@ -135,9 +135,9 @@ private:
 
 	std::atomic<VideoDim> dimensions_{};
 
-	int playCount_{ 0 };
+	std::atomic<int> playCount_{ 0 };
+	std::atomic<int> numLoops_{ 0 };
 	std::string currentFile_{};
-	int numLoops_{ 0 };
 	float volume_{ 0.0f };
 	
 	// Tracked allocation state to avoid redundant SDL_QueryTexture calls

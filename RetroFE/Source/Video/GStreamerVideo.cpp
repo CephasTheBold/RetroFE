@@ -405,7 +405,7 @@ void GStreamerVideo::initializePlugins() {
 
 void GStreamerVideo::setNumLoops(int n) {
 	if (n > 0)
-		numLoops_ = n;
+		numLoops_.store(n, std::memory_order_release);
 }
 
 SDL_Texture* GStreamerVideo::getTexture() const {
@@ -1205,8 +1205,16 @@ GstFlowReturn GStreamerVideo::on_new_preroll(GstAppSink* sink, gpointer user_dat
 	GstSample* preroll = gst_app_sink_pull_preroll(sink);
 	if (!preroll) return GST_FLOW_OK;
 
-	// Teardown could have started after we pulled
+	// Teardown race after pull
 	if (!ctx->state->alive.load(std::memory_order_acquire) || ctx->self == nullptr) {
+		gst_sample_unref(preroll);
+		return GST_FLOW_OK;
+	}
+
+	// --- THE FIX: ANTI-GHOST FRAME GATE ---
+	// If unload() was called on the Main Thread while we were pulling the sample, 
+	// discard this frame immediately so it doesn't bleed into the next play session.
+	if (self->targetState_.load(std::memory_order_acquire) == IVideo::VideoState::None) {
 		gst_sample_unref(preroll);
 		return GST_FLOW_OK;
 	}
@@ -1253,6 +1261,12 @@ GstFlowReturn GStreamerVideo::on_new_sample(GstAppSink* sink, gpointer user_data
 		return GST_FLOW_OK;
 	}
 
+	// --- THE FIX: ANTI-GHOST FRAME GATE ---
+	if (self->targetState_.load(std::memory_order_acquire) == IVideo::VideoState::None) {
+		gst_sample_unref(s);
+		return GST_FLOW_OK;
+	}
+
 	VideoDim currentDim = self->dimensions_.load(std::memory_order_acquire);
 	if (currentDim.w <= 0 || currentDim.h <= 0) {
 		if (GstCaps* caps = gst_sample_get_caps(s)) {
@@ -1289,7 +1303,14 @@ GstFlowReturn GStreamerVideo::on_audio_new_sample(GstAppSink* sink, gpointer use
 	GstSample* s = gst_app_sink_pull_sample(sink);
 	if (!s) return GST_FLOW_OK;
 
+	// Teardown race after pull
 	if (!ctx->state->alive.load(std::memory_order_acquire) || ctx->self == nullptr) {
+		gst_sample_unref(s);
+		return GST_FLOW_OK;
+	}
+
+	// --- THE FIX: ANTI-GHOST AUDIO GATE ---
+	if (self->targetState_.load(std::memory_order_acquire) == IVideo::VideoState::None) {
 		gst_sample_unref(s);
 		return GST_FLOW_OK;
 	}
