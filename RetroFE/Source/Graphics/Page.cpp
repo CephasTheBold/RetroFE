@@ -80,6 +80,10 @@ void Page::deInitialize() {
 		menuVector.clear();
 	}
 	menus_.clear();
+	activeMenu_.clear();
+	anActiveMenu_ = nullptr;
+	playlistMenu_ = nullptr;
+	selectedItem_ = nullptr;
 
 	// Deinitialize and clear LayerComponents_
 	for (auto& layer : LayerComponents_) {
@@ -125,24 +129,24 @@ bool Page::isMenusFull() const {
 
 
 void Page::setLoadSound(Sound* chunk) {
+	if (loadSoundChunk_) delete loadSoundChunk_;
 	loadSoundChunk_ = chunk;
 }
 
-
 void Page::setUnloadSound(Sound* chunk) {
+	if (unloadSoundChunk_) delete unloadSoundChunk_;
 	unloadSoundChunk_ = chunk;
 }
 
-
 void Page::setHighlightSound(Sound* chunk) {
+	if (highlightSoundChunk_) delete highlightSoundChunk_;
 	highlightSoundChunk_ = chunk;
 }
 
-
 void Page::setSelectSound(Sound* chunk) {
+	if (selectSoundChunk_) delete selectSoundChunk_;
 	selectSoundChunk_ = chunk;
 }
-
 ScrollingList* Page::getAnActiveMenu() {
 	if (!anActiveMenu_) {
 		size_t size = activeMenu_.size();
@@ -928,8 +932,8 @@ bool Page::popCollection() {
 	if (menuDepth_ <= 1) return false;
 	if (collections_.size() <= 1) return false;
 
-	// Clean up menus at current depth
-	if (menuDepth_ < menus_.size()) {
+	// Correctly target the current depth and shrink the vector!
+	if (menuDepth_ <= menus_.size() && menuDepth_ > 1) {
 		for (ScrollingList* menu : menus_[menuDepth_ - 1]) {
 			if (menu) {
 				menu->freeGraphicsMemory();
@@ -937,6 +941,7 @@ bool Page::popCollection() {
 			}
 		}
 		menus_[menuDepth_ - 1].clear();
+		menus_.pop_back(); // <--- CRITICAL: Keeps size() synced with depth!
 	}
 
 	// queue the collection for deletion

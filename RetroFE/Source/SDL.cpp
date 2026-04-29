@@ -1426,62 +1426,61 @@ bool SDL::renderCopyF(SDL_Texture* texture,
 		}
 		};
 
-	auto draw_quad = [&](const SDL_Rect& s, const SDL_FRect& dPx, float angleDeg,
+	auto draw_quad = [&](const SDL_FRect& d, const SDL_FRect& dPx, float angleDeg,
 		bool flipH, bool flipV, float alpha01) -> bool
 		{
-			// --- 1. Floating-Point Safe Trigonometry ---
-			float cosA, sinA;
+			// --- 1. Exact UV Mapping (The "Scroll Shimmer" Fix) ---
+			float clipRatioX = (d.w > 0.f && dst0.w > 0.f) ? (d.x - dst0.x) / dst0.w : 0.f;
+			float clipRatioY = (d.h > 0.f && dst0.h > 0.f) ? (d.y - dst0.y) / dst0.h : 0.f;
+			float clipRatioW = (dst0.w > 0.f) ? d.w / dst0.w : 1.f;
+			float clipRatioH = (dst0.h > 0.f) ? d.h / dst0.h : 1.f;
 
-			// Check if the angle is a multiple of 90 degrees (with a tiny margin for error)
+			float exact_sx = (float)src0.x + ((float)src0.w * clipRatioX);
+			float exact_sy = (float)src0.y + ((float)src0.h * clipRatioY);
+			float exact_sw = (float)src0.w * clipRatioW;
+			float exact_sh = (float)src0.h * clipRatioH;
+
+			float u0 = exact_sx / (float)texW;
+			float v0 = exact_sy / (float)texH;
+			float u1 = (exact_sx + exact_sw) / (float)texW;
+			float v1 = (exact_sy + exact_sh) / (float)texH;
+
+			if (flipH) std::swap(u0, u1);
+			if (flipV) std::swap(v0, v1);
+
+			// --- 2. Floating-Point Safe Trigonometry ---
+			float cosA, sinA;
 			float remainder = fmodf(fabsf(angleDeg), 90.0f);
 			if (remainder < 0.001f || remainder > 89.999f) {
-				// Snap to exact quadrant values to prevent "shimmering"
 				int quarter = (int)lroundf(angleDeg / 90.0f) % 4;
 				if (quarter < 0) quarter += 4;
-
-				// Exact values for 0, 90, 180, 270 degrees
 				static const float cosTable[] = { 1.0f, 0.0f, -1.0f, 0.0f };
 				static const float sinTable[] = { 0.0f, 1.0f, 0.0f, -1.0f };
-
 				cosA = cosTable[quarter];
 				sinA = sinTable[quarter];
 			}
 			else {
-				// Standard trig for arbitrary rotations
 				float rad = angleDeg * (3.1415926535f / 180.0f);
 				cosA = cosf(rad);
 				sinA = sinf(rad);
 			}
 
-			// --- 2. Safe Culling Check (AABB) ---
-			// We use the absolute values of cos/sin to find the maximum extent (Half-Width/Height)
+			// --- 3. Local Center Rotation & Culling ---
+			float cx = dPx.x + 0.5f * dPx.w;
+			float cy = dPx.y + 0.5f * dPx.h;
+
 			float c = fabsf(cosA);
 			float s_ = fabsf(sinA);
 			float hx = 0.5f * (c * dPx.w + s_ * dPx.h);
 			float hy = 0.5f * (s_ * dPx.w + c * dPx.h);
-			float cx = dPx.x + 0.5f * dPx.w;
-			float cy = dPx.y + 0.5f * dPx.h;
 
-			// We add a 1-pixel "Epsilon" buffer to prevent flickering at screen edges
 			const float epsilon = 1.0f;
 			if (cx + hx < -epsilon || cy + hy < -epsilon ||
 				cx - hx >(float)outW + epsilon || cy - hy >(float)outH + epsilon) {
 				return true;
 			}
 
-			// --- 3. Vertex Generation ---
-			SDL_Vertex v[4];
-
-			// Precise UV Mapping
-			float u0 = (float)s.x / (float)texW;
-			float v0 = (float)s.y / (float)texH;
-			float u1 = (float)(s.x + s.w) / (float)texW;
-			float v1 = (float)(s.y + s.h) / (float)texH;
-
-			if (flipH) std::swap(u0, u1);
-			if (flipV) std::swap(v0, v1);
-
-			// Define the four corners relative to the top-left dPx
+			// --- 4. Vertex Generation ---
 			SDL_FPoint pts[4] = {
 				{dPx.x, dPx.y},                 // TL
 				{dPx.x + dPx.w, dPx.y},         // TR
@@ -1489,8 +1488,6 @@ bool SDL::renderCopyF(SDL_Texture* texture,
 				{dPx.x, dPx.y + dPx.h}          // BL
 			};
 
-			// Rotate points about the center of the rectangle
-			// Using our snapped cosA/sinA ensures perfect alignment for right angles
 			for (int i = 0; i < 4; ++i) {
 				float tx = pts[i].x - cx;
 				float ty = pts[i].y - cy;
@@ -1498,8 +1495,8 @@ bool SDL::renderCopyF(SDL_Texture* texture,
 				pts[i].y = (tx * sinA + ty * cosA) + cy;
 			}
 
-			// --- 4. Render Geometry ---
 			SDL_Color col = { 255, 255, 255, clamp_u8(alpha01) };
+			SDL_Vertex v[4];
 
 			v[0] = { pts[0], col, {u0, v0} };
 			v[1] = { pts[1], col, {u1, v0} };
@@ -1511,9 +1508,16 @@ bool SDL::renderCopyF(SDL_Texture* texture,
 		};
 
 	auto render_path = [&](bool reflect, int kind = -1) -> bool {
+		// Fast-fail culling before expensive clipping/rotation math
+		if (dst0.x + dst0.w < 0 || dst0.y + dst0.h < 0 ||
+			dst0.x >(float)layoutWidth || dst0.y >(float)layoutHeight) {
+			return true;
+		}
+
 		SDL_Rect s = src0; SDL_FRect d = dst0;
 		float a = alpha;
 		bool fH = false, fV = false;
+
 		if (reflect) {
 			a = alpha * viewInfo.ReflectionAlpha;
 			fH = (kind == 2 || kind == 3); fV = (kind == 0 || kind == 1);
@@ -1524,33 +1528,34 @@ bool SDL::renderCopyF(SDL_Texture* texture,
 				case 3: d.x += (d.w + viewInfo.ReflectionDistance); d.w *= viewInfo.ReflectionScale; break;
 			}
 		}
+
 		clip_to_container(s, d, src0, dst0);
 		if (d.w <= 0.f || d.h <= 0.f || s.w <= 0 || s.h <= 0) return true;
 
 		float angle = viewInfo.Angle;
-		if (!mir) angle += float(rot * 90);
+		if (!mir) angle += float(rot * 90); // Restored original hardware angle addition
 		SDL_FRect dPx = to_pixels(d);
 
 		bool ok = true;
 		if (mir) {
 			if ((rotation_[m] & 1) == 0) {
 				SDL_FRect r = dPx; r.y += float(outH) * 0.5f;
-				ok &= draw_quad(s, r, angle, fH, fV, a);
+				ok &= draw_quad(d, r, angle, fH, fV, a);
 				r.x = float(outW) - r.x - r.w; r.y = float(outH) - r.y - r.h;
-				ok &= draw_quad(s, r, angle + 180.0f, fH, fV, a);
+				ok &= draw_quad(d, r, angle + 180.0f, fH, fV, a);
 			}
 			else {
 				SDL_FRect r = dPx; float tmpx = r.x;
 				r.x = float(outW) * 0.5f - r.y - r.h * 0.5f - r.w * 0.5f;
 				r.y = tmpx - r.h * 0.5f + r.w * 0.5f;
-				ok &= draw_quad(s, r, angle + 90.0f, fH, fV, a);
+				ok &= draw_quad(d, r, angle + 90.0f, fH, fV, a);
 				r.x = float(outW) - r.x - r.w; r.y = float(outH) - r.y - r.h;
-				ok &= draw_quad(s, r, angle + 270.0f, fH, fV, a);
+				ok &= draw_quad(d, r, angle + 270.0f, fH, fV, a);
 			}
 		}
 		else {
-			apply_output_rotation_rect(dPx);
-			ok &= draw_quad(s, dPx, angle, fH, fV, a);
+			apply_output_rotation_rect(dPx); // Restored original origin translation
+			ok &= draw_quad(d, dPx, angle, fH, fV, a);
 		}
 		return ok;
 		};

@@ -57,14 +57,16 @@ CollectionInfo::CollectionInfo(
 }
 
 CollectionInfo::~CollectionInfo() {
-    // Delete all playlist vectors that aren't pointing to items
     for (auto& entry : playlists) {
-        if (entry.second != &items) {
+        if (entry.second != nullptr && entry.second != &items) {
             delete entry.second;
         }
+        entry.second = nullptr; // <--- The Fix: Neutralize the pointer
     }
     playlists.clear();
 
+    // Do NOT delete the Item* pointers here! 
+    // They are owned and deleted by MetadataDatabase/CollectionInfoBuilder.
     items.clear();
 }
 

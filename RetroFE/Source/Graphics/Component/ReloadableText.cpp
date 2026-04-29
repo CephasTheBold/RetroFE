@@ -45,9 +45,12 @@ ReloadableText::ReloadableText(std::string type, Page &page, Configuration &conf
     allocateGraphicsMemory();
 }
 
-ReloadableText::~ReloadableText()
-{
+ReloadableText::~ReloadableText() {
     ReloadableText::freeGraphicsMemory();
+    if (imageInst_ != NULL) {
+        delete imageInst_;
+        imageInst_ = NULL;
+    }
 }
 
 bool ReloadableText::update(float dt)
@@ -110,22 +113,24 @@ bool ReloadableText::update(float dt)
     return Component::update(dt);
 }
 
-void ReloadableText::allocateGraphicsMemory()
-{
+void ReloadableText::allocateGraphicsMemory() {
     ReloadTexture();
 
-    // NOTICE! needs to be done last to prevent flags from being missed
+    // Wake up the existing text object's VRAM
+    if (imageInst_ != NULL) {
+        imageInst_->allocateGraphicsMemory();
+    }
+
     Component::allocateGraphicsMemory();
 }
 
-void ReloadableText::freeGraphicsMemory()
-{
+void ReloadableText::freeGraphicsMemory() {
     Component::freeGraphicsMemory();
 
+    // Drop the VRAM, but keep the C++ object alive for setText()!
     if (imageInst_ != NULL)
     {
-        delete imageInst_;
-        imageInst_ = NULL;
+        imageInst_->freeGraphicsMemory();
     }
 }
 
@@ -483,9 +488,16 @@ std::string ReloadableText::getTimeSince(std::string sinceTimestamp)
         return "";
     }
 
-    // Convert time_t to struct tm
-    std::tm tm1 = *std::localtime(&t1);
-    std::tm tm2 = *std::localtime(&t2);
+    std::tm tm1{};
+    std::tm tm2{};
+
+#if defined(_WIN32)
+    localtime_s(&tm1, &t1);
+    localtime_s(&tm2, &t2);
+#else
+    localtime_r(&t1, &tm1);
+    localtime_r(&t2, &tm2);
+#endif
 
     // Calculate the difference in years, months, and days
     int yearsDiff = tm1.tm_year - tm2.tm_year;

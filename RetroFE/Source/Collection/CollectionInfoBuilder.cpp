@@ -479,23 +479,20 @@ bool CollectionInfoBuilder::ImportDirectory(CollectionInfo* info,
     }
 
     // cleanup lists
-    while (!includeFilter.empty()) {
-        auto it = includeFilter.begin();
-        if (!showMissing) {
-            delete it->second;
-        }
-        includeFilter.erase(it);
+    for (auto& pair : includeFilter) {
+        delete pair.second; // ALWAYS delete the map's dummy items
     }
-    while (!excludeFilter.empty()) {
-        auto it = excludeFilter.begin();
-        delete it->second;
-        excludeFilter.erase(it);
+    includeFilter.clear();
+
+    for (auto& pair : excludeFilter) {
+        delete pair.second;
     }
-    while (!currentPlayCountList.empty()) {
-        auto it = currentPlayCountList.begin();
-        delete it->second;
-        currentPlayCountList.erase(it);
+    excludeFilter.clear();
+
+    for (auto& pair : currentPlayCountList) {
+        delete pair.second;
     }
+    currentPlayCountList.clear();
 
     return true;
 }
@@ -534,10 +531,10 @@ void CollectionInfoBuilder::addPlaylists(CollectionInfo *info)
                 info->playlists["all"]->push_back((*it));
             }
         }
-        while(!excludeAllFilter.empty()) {
-            auto it = excludeAllFilter.begin();
-            excludeAllFilter.erase(it);
+        for (auto& pair : excludeAllFilter) {
+            delete pair.second;
         }
+        excludeAllFilter.clear();
     }
     else {
         info->playlists["all"] = &info->items;
@@ -709,11 +706,18 @@ void CollectionInfoBuilder::loadPlaylistItems(CollectionInfo* info, std::map<std
                 if (info->playlists[basename]->size()) {
                     playlistItems->insert({ basename, playlistItem });
                 }
+                else {
+                    delete playlistItem; // Delete unused playlist item
+                }
+
+                // Destroy the dummy filter items!
+                for (Item* dummy : playlistFilter) {
+                    delete dummy;
+                }
                 playlistFilter.clear();
             }
         }
     }
-    // Function ends here
 }
 void CollectionInfoBuilder::updateLastPlayedPlaylist(CollectionInfo* info, Item* item, int size) {
     // --- Step 1: Basic Setup and Playlist Logic (Unchanged) ---
@@ -825,6 +829,11 @@ void CollectionInfoBuilder::updateLastPlayedPlaylist(CollectionInfo* info, Item*
         });
 
     AddToPlayCount(item);
+
+    for (Item* dummy : lastplayedList) {
+        delete dummy;
+    }
+    lastplayedList.clear();
 }
 
 std::string CollectionInfoBuilder::getKey(Item* item)
@@ -866,14 +875,18 @@ void CollectionInfoBuilder::updateTimeSpent(Item* item, double timePlayedInSecon
     LOG_INFO("CollectionInfoBuilder", "Updated timeSpent.txt for " + item->name + ": +" + std::to_string(timePlayedInSeconds) + " seconds, total: " + std::to_string(item->timeSpent) + " seconds.");
 }
 
-void CollectionInfoBuilder::AddToPlayCount(Item* item)
-{
+void CollectionInfoBuilder::AddToPlayCount(Item* item) {
     // Write new playcount file
     std::string dir = Utils::combinePath(Configuration::absolutePath, "collections");
     std::string file = Utils::combinePath(Configuration::absolutePath, "collections", "playCount.txt");
 
-    // todo read to playcount
-    std::map<std::string, Item*> curretPlayCountList = ImportPlayCount(file);    
+    std::map<std::string, Item*> curretPlayCountList = ImportPlayCount(file);
+
+    // THE FIX 1: Safely delete the dummy item before overwriting it
+    auto it = curretPlayCountList.find(getKey(item));
+    if (it != curretPlayCountList.end()) {
+        delete it->second;
+    }
     curretPlayCountList[getKey(item)] = item;
     LOG_INFO("PlayCount", "Saving " + item->name + " " + std::to_string(item->playCount));
 
@@ -922,6 +935,14 @@ void CollectionInfoBuilder::AddToPlayCount(Item* item)
     catch (std::exception&) {
         LOG_ERROR("PlayCount", "Save failed: " + file);
     }
+
+    // Clean up all dummy items, leaving the real one alone
+    for (auto& pair : curretPlayCountList) {
+        if (pair.second != item) {
+            delete pair.second;
+        }
+    }
+    curretPlayCountList.clear();
 }
 
 std::map<std::string, double> CollectionInfoBuilder::ImportTimeSpent(const std::string& file) {

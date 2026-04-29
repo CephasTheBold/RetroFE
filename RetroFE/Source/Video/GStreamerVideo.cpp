@@ -947,7 +947,7 @@ bool GStreamerVideo::createPipelineIfNeeded() {
 	return true;
 }
 
-bool GStreamerVideo::play(const std::string& file) {
+bool GStreamerVideo::play(const std::string& file, bool isPriority) {
 	if (!initialized_) {
 		LOG_ERROR("GStreamerVideo", "Play called but GStreamer not initialized for file: " + file);
 		hasError_.store(true, std::memory_order_release);
@@ -963,14 +963,16 @@ bool GStreamerVideo::play(const std::string& file) {
 
 	currentFile_ = file;
 
-	LOG_DEBUG("GStreamerVideo", "Starting play for " + file + " (Session: " + std::to_string(newSessionId) + ")");
+	LOG_DEBUG("GStreamerVideo", "Starting play for " + file + " (Session: " + std::to_string(newSessionId) + ", Priority: " + (isPriority ? "YES" : "NO") + ")");
 
 	pipeLineReady_.store(false, std::memory_order_release);
 	targetState_.store(IVideo::VideoState::Paused, std::memory_order_release);
 
 	auto state = asyncState_;
 
-	ThreadPool::getInstance().enqueue([this, file, newSessionId, state]() {
+	// THE FIX: Pass the 'isPriority' flag as the very first argument so the ThreadPool 
+	// knows to push this task to the front of the deque!
+	ThreadPool::getInstance().enqueue(isPriority, [this, file, newSessionId, state]() {
 		std::lock_guard<std::mutex> lock(state->mutex);
 		if (!state->alive.load(std::memory_order_acquire)) return;
 
@@ -1003,7 +1005,7 @@ bool GStreamerVideo::play(const std::string& file) {
 			LOG_DEBUG("GStreamerVideo", "Pipeline stable. Executing safe instant-uri switch...");
 
 			gst_element_set_state(pipeline_, GST_STATE_PAUSED);
-			
+
 			// Pass nullptr to keep the Pad Probe alive for the new video!
 			detachAndDrainSink(videoSink_, nullptr);
 			guint noProbe = 0;
@@ -1049,7 +1051,6 @@ bool GStreamerVideo::play(const std::string& file) {
 
 	return true;
 }
-
 
 GstPadProbeReturn GStreamerVideo::padProbeCallback(GstPad* /*pad*/, GstPadProbeInfo* info, gpointer user_data) {
 	auto* ctx = static_cast<CallbackCtx*>(user_data);

@@ -97,8 +97,6 @@ private:
     std::vector<int> frameDelays_;
 
     int currentFrame_ = 0;
-    Uint32 lastFrameTime_ = 0;
-    Uint32 totalCycleTime_ = 0;
     Uint32 animationStartTime_ = 0;
     size_t lastRenderedFrame_ = std::numeric_limits<size_t>::max();
 

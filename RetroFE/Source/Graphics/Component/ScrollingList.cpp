@@ -972,6 +972,17 @@ bool ScrollingList::allocateTexture(size_t index, const Item* item) {
     // --- RECYCLING 1: Grab the existing component to attempt recycling ---
     Component* existingComponent = components_[index];
     components_[index] = nullptr; // Clear the slot temporarily so we own it
+
+    // --- THE GHOST LEAK FIX: Keep VideoPool counters perfectly synced ---
+    // If the component scrolling off screen is a video, extract and release it
+    // before the builder tries to recycle it or the cleanup block deletes it!
+    if (existingComponent) {
+        if (auto* videoComp = dynamic_cast<VideoComponent*>(existingComponent)) {
+            if (auto vid = videoComp->extractVideo()) {
+                VideoPool::releaseVideo(std::move(vid), baseViewInfo.Monitor, listId_);
+            }
+        }
+    }
     // ---------------------------------------------------------------------
 
     Component* t = nullptr;

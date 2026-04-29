@@ -49,7 +49,13 @@ ReloadableMedia::ReloadableMedia(Configuration& config, bool systemMode, bool la
 }
 
 ReloadableMedia::~ReloadableMedia() {
+    // 1. Drop VRAM first
     ReloadableMedia::freeGraphicsMemory();
+    // 2. Now safely destroy the child
+    if (loadedComponent_ != nullptr) {
+        delete loadedComponent_;
+        loadedComponent_ = nullptr;
+    }
 }
 
 void ReloadableMedia::enableTextureCache_(bool value) {
@@ -126,9 +132,9 @@ void ReloadableMedia::allocateGraphicsMemory() {
 
 void ReloadableMedia::freeGraphicsMemory() {
     Component::freeGraphicsMemory();
+    // Just tell the child to drop its VRAM. Do NOT delete it!
     if (loadedComponent_ != nullptr) {
-        delete loadedComponent_;
-        loadedComponent_ = nullptr;
+        loadedComponent_->freeGraphicsMemory();
     }
 }
 
@@ -482,27 +488,46 @@ Component* ReloadableMedia::findComponent(
     // if file already loaded, don't load again
     const std::vector<std::string>& extensions = isVideo ? ReloadableMedia::videoExtensions : ReloadableMedia::imageExtensions;
 
-    if (loadedComponent_ != nullptr && !imagePath.empty()) {
-        std::string filePath;
-        if (Utils::findMatchingFile(Utils::combinePath(imagePath, basename), extensions, filePath)) {
-            if (filePath == loadedComponent_->filePath()) {
-                return loadedComponent_;
+    std::string foundFilePath;
+    bool fileExists = false;
+
+    if (!imagePath.empty()) {
+        fileExists = Utils::findMatchingFile(Utils::combinePath(imagePath, basename), extensions, foundFilePath);
+    }
+
+    if (fileExists) {
+        // 1. The Super-Fast Path: It's the exact same file we are already showing
+        if (loadedComponent_ != nullptr && foundFilePath == loadedComponent_->filePath()) {
+            return loadedComponent_;
+        }
+
+        // 2. THE HOT-SWAP (The Heap Churn Fix)
+        // If we found a new Image file, and our current component is an Image, DO NOT create a new one.
+        if (!isVideo && loadedComponent_ != nullptr) {
+            if (auto* imgComp = dynamic_cast<Image*>(loadedComponent_)) {
+                // Recycle the existing C++ object to load the new file asynchronously
+                imgComp->recycleAsImage(foundFilePath, "");
+
+                // Return the existing pointer. This prevents update() from deleting it!
+                return imgComp;
             }
         }
+
+        // 3. The Slow Path (Fallback if we switch from Text to Image, or create for the first time)
+        if (isVideo) {
+            if (jukebox_)
+                component = videoBuild.createVideo(imagePath, page, basename, baseViewInfo.Monitor, jukeboxNumLoops_);
+            else
+                component = videoBuild.createVideo(imagePath, page, basename, baseViewInfo.Monitor);
+        }
+        else {
+            component = imageBuild.CreateImage(imagePath, page, basename, baseViewInfo.Monitor, baseViewInfo.Additive, useTextureCache_);
+        }
+
+        return component;
     }
 
-    if (isVideo) {
-        if (jukebox_)
-            component = videoBuild.createVideo(imagePath, page, basename, baseViewInfo.Monitor, jukeboxNumLoops_);
-        else
-            component = videoBuild.createVideo(imagePath, page, basename, baseViewInfo.Monitor);
-    }
-    else {
-        component = imageBuild.CreateImage(imagePath, page, basename, baseViewInfo.Monitor, baseViewInfo.Additive, useTextureCache_);
-    }
-
-    return component;
-
+    return nullptr;
 }
 
 bool ReloadableMedia::isPlaylistDrivenType_() const {

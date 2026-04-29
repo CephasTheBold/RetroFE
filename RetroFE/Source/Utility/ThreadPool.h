@@ -3,7 +3,7 @@
 #define THREADPOOL_H
 
 #include <vector>
-#include <queue>
+#include <deque>       // Changed from queue to deque
 #include <thread>
 #include <mutex>
 #include <condition_variable>
@@ -22,6 +22,7 @@ public:
     explicit ThreadPool(size_t threads);
     ~ThreadPool();
     void shutdown();
+
     // A thread pool is a unique resource. It should not be copied or moved.
     ThreadPool(const ThreadPool&) = delete;
     ThreadPool& operator=(const ThreadPool&) = delete;
@@ -33,16 +34,22 @@ public:
 
     void wait();
 
-    // Enqueue tasks to the thread pool
+    // 1. The Priority-Aware Declaration
+    template<class F, class... Args>
+    auto enqueue(bool isPriority, F&& f, Args&&... args)
+        -> std::future<std::invoke_result_t<F, Args...>>;
+
+    // 2. The Original Fallback Declaration
     template<class F, class... Args>
     auto enqueue(F&& f, Args&&... args)
-        -> std::future<typename std::invoke_result_t<F, Args...>>;
+        -> std::future<std::invoke_result_t<F, Args...>>;
 
 private:
     // Worker threads
     std::vector<std::thread> workers;
-    // Task queue
-    std::queue<std::function<void()>> tasks;
+
+    // Task queue (Now a double-ended queue so priority tasks can jump the line)
+    std::deque<std::function<void()>> tasks;
 
     // Synchronization
     std::mutex queueMutex;
@@ -52,9 +59,13 @@ private:
     size_t activeWorkers = 0;
 };
 
-// Implementation of the enqueue method needs to be visible to all translation units that use it, hence defined in the header
+// ----------------------------------------------------------------------------
+// Implementations
+// ----------------------------------------------------------------------------
+
+// 1. The Priority-Aware Implementation
 template<class F, class... Args>
-auto ThreadPool::enqueue(F&& f, Args&&... args)
+auto ThreadPool::enqueue(bool isPriority, F&& f, Args&&... args)
 -> std::future<std::invoke_result_t<F, Args...>> {
     using return_type = std::invoke_result_t<F, Args...>;
 
@@ -77,11 +88,24 @@ auto ThreadPool::enqueue(F&& f, Args&&... args)
     {
         std::unique_lock<std::mutex> lock(queueMutex);
         if (stop) throw std::runtime_error("enqueue on stopped ThreadPool");
-        tasks.emplace([pkg] { (*pkg)(); });
+
+        if (isPriority) {
+            tasks.emplace_front([pkg] { (*pkg)(); });
+        }
+        else {
+            tasks.emplace_back([pkg] { (*pkg)(); });
+        }
     }
     condition.notify_one();
     return res;
 }
 
+// 2. The Original Fallback Implementation
+template<class F, class... Args>
+auto ThreadPool::enqueue(F&& f, Args&&... args)
+-> std::future<std::invoke_result_t<F, Args...>> {
+    // Pass false for priority and forward the rest to the main enqueue function
+    return enqueue(false, std::forward<F>(f), std::forward<Args>(args)...);
+}
 
 #endif // THREADPOOL_H

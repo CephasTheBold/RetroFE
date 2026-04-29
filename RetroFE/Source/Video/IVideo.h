@@ -37,7 +37,7 @@ public:
 	virtual VideoState getActualState() const = 0;
 	virtual ~IVideo() = default;
 	virtual bool initialize() = 0;
-	virtual bool play(const std::string& file) = 0;
+	virtual bool play(const std::string& file, bool isPriority = false) = 0;
 	virtual bool stop() = 0;
 	virtual bool deInitialize() = 0;
 	virtual SDL_Texture* getTexture() const = 0;

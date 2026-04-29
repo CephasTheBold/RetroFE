@@ -309,7 +309,8 @@ void Image::freeGraphicsMemory() {
 
 void Image::resetAnimationState() {
     currentFrame_ = 0;
-    lastFrameTime_ = 0;
+    animationStartTime_ = 0;
+    lastRenderedFrame_ = std::numeric_limits<size_t>::max();
 }
 
 bool Image::createAnimatedStreamingTexture(int width, int height) {

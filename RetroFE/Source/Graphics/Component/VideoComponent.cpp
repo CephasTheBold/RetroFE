@@ -41,8 +41,8 @@
 #include <gst/video/video.h>
 #include "../../Video/VideoPool.h"
 
-VideoComponent::VideoComponent(Page& p, const std::string& videoFile, int monitor, int numLoops, bool softOverlay, int listId, const int* perspectiveCorners)
-	: Component(p), videoFile_(videoFile), softOverlay_(softOverlay), numLoops_(numLoops), monitor_(monitor), listId_(listId), currentPage_(&p) {
+VideoComponent::VideoComponent(Page& p, const std::string& videoFile, int monitor, int numLoops, bool softOverlay, int listId, const int* perspectiveCorners, bool priority)
+	: Component(p), videoFile_(videoFile), softOverlay_(softOverlay), numLoops_(numLoops), monitor_(monitor), listId_(listId), currentPage_(&p), isPriority_(priority) {
 	if (perspectiveCorners) {
 		std::copy(perspectiveCorners, perspectiveCorners + 8, perspectiveCorners_);
 		hasPerspective_ = true;
@@ -60,7 +60,7 @@ bool VideoComponent::update(float dt) {
 	if (videoInst_ && pendingRetarget_) {
 		// We no longer need to wait for consumeBecameNone(). 
 		// GStreamerVideo::play() handles its own internal serialization natively!
-		instanceReady_ = videoInst_->play(videoFile_);
+		instanceReady_ = videoInst_->play(videoFile_, isPriority_);
 		pendingRetarget_ = false;
 		LOG_DEBUG("VideoComponent", "[Init] Prerolling to PAUSED: " + videoFile_);
 	}
@@ -82,9 +82,6 @@ bool VideoComponent::update(float dt) {
 			}
 			dimensionsUpdated_ = true;
 			LOG_DEBUG("VideoComponent", "Dimensions locked: " + std::to_string(dims.w) + "x" + std::to_string(dims.h));
-		}
-		else {
-			return Component::update(dt); // Still waiting for GStreamer to report size
 		}
 	}
 
@@ -150,14 +147,12 @@ bool VideoComponent::update(float dt) {
 		desired = IVideo::VideoState::Paused;
 	}
 
-	// Apply transitions
-	bool inFlight = (target != actual);
-	if (!inFlight && desired != IVideo::VideoState::None) {
-		if (desired == IVideo::VideoState::Playing && actual != IVideo::VideoState::Playing) {
+	if (desired != IVideo::VideoState::None && target != desired) {
+		if (desired == IVideo::VideoState::Playing) {
 			videoInst_->resume();
 			LOG_DEBUG("VideoComponent", "[Transition] Resume: " + videoFile_);
 		}
-		else if (desired == IVideo::VideoState::Paused && actual != IVideo::VideoState::Paused) {
+		else if (desired == IVideo::VideoState::Paused) {
 			videoInst_->pause();
 			LOG_DEBUG("VideoComponent", "[Transition] Pause: " + videoFile_);
 		}

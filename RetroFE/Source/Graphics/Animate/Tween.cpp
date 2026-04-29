@@ -151,10 +151,13 @@ float Tween::animateSingle(TweenAlgorithm type, float start, float end, float du
     }
 
     // Clamp time to prevent overshooting the animation.
-    elapsedTime = std::min(elapsedTime, duration);
+    elapsedTime = std::max(0.0f, std::min(elapsedTime, duration));
 
     // OPTIMIZATION: Calculate normalized progress (0.0 to 1.0) once.
-    const float progress = elapsedTime / duration;
+    float progress = elapsedTime / duration;
+
+    progress = std::max(0.0f, std::min(progress, 1.0f));
+
     const float change = end - start;
 
     switch (type) {
@@ -268,14 +271,16 @@ float Tween::easeInOutSine(float p, float b, float c) {
 }
 
 float Tween::easeInExponential(float p, float b, float c) {
-    return c * powf(2.0f, 10.0f * (p - 1.0f)) + b;
+    return (p == 0.0f) ? b : c * powf(2.0f, 10.0f * (p - 1.0f)) + b;
 }
 
 float Tween::easeOutExponential(float p, float b, float c) {
-    return c * (-powf(2.0f, -10.0f * p) + 1.0f) + b;
+    return (p == 1.0f) ? b + c : c * (-powf(2.0f, -10.0f * p) + 1.0f) + b;
 }
 
 float Tween::easeInOutExponential(float p, float b, float c) {
+    if (p == 0.0f) return b;
+    if (p == 1.0f) return b + c;
     p *= 2.0f;
     if (p < 1.0f) return c / 2.0f * powf(2.0f, 10.0f * (p - 1.0f)) + b;
     p--;

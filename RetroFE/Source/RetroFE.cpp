@@ -662,6 +662,16 @@ bool RetroFE::deInitialize() {
 		currentPage_ = nullptr;
 	}
 
+	// Destroy dormant pages in the layout stack
+	while (!pages_.empty()) {
+		Page* p = pages_.top();
+		pages_.pop();
+		if (p) {
+			p->deInitialize();
+			delete p;
+		}
+	}
+
 	// Delete databases and other instance resources...
 	if (metadb_) { delete metadb_; metadb_ = nullptr; }
 	if (db_) { delete db_; db_ = nullptr; }
