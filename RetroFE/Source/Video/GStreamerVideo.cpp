@@ -947,7 +947,7 @@ bool GStreamerVideo::createPipelineIfNeeded() {
 	return true;
 }
 
-bool GStreamerVideo::play(const std::string& file, bool isPriority) {
+bool GStreamerVideo::play(const std::string& file) {
 	if (!initialized_) {
 		LOG_ERROR("GStreamerVideo", "Play called but GStreamer not initialized for file: " + file);
 		hasError_.store(true, std::memory_order_release);
@@ -963,7 +963,7 @@ bool GStreamerVideo::play(const std::string& file, bool isPriority) {
 
 	currentFile_ = file;
 
-	LOG_DEBUG("GStreamerVideo", "Starting play for " + file + " (Session: " + std::to_string(newSessionId) + ", Priority: " + (isPriority ? "YES" : "NO") + ")");
+	LOG_DEBUG("GStreamerVideo", "Starting play for " + file + " (Session: " + std::to_string(newSessionId));
 
 	pipeLineReady_.store(false, std::memory_order_release);
 	targetState_.store(IVideo::VideoState::Paused, std::memory_order_release);
@@ -972,7 +972,7 @@ bool GStreamerVideo::play(const std::string& file, bool isPriority) {
 
 	// THE FIX: Pass the 'isPriority' flag as the very first argument so the ThreadPool 
 	// knows to push this task to the front of the deque!
-	ThreadPool::getInstance().enqueue(isPriority, [this, file, newSessionId, state]() {
+	ThreadPool::getInstance().enqueue([this, file, newSessionId, state]() {
 		std::lock_guard<std::mutex> lock(state->mutex);
 		if (!state->alive.load(std::memory_order_acquire)) return;
 

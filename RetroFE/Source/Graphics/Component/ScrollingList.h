@@ -231,6 +231,7 @@ private:
     float startScrollTime_{ 0.500 };
     float minScrollTime_{ 0.500 };
     float scrollPeriod_{ 0 };
+	float letterSkipTimer_{ 0 };
 
     Configuration& config_;
     FontManager* fontInst_;

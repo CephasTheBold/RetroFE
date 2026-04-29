@@ -30,7 +30,7 @@
 
 class VideoComponent : public Component {
 public:
-    explicit VideoComponent(Page& p, const std::string& videoFile, int monitor, int numLoops = -1, bool softOverlay = false, int listId = -1, const int* perspectiveCorners = nullptr, bool priority = false);
+    explicit VideoComponent(Page& p, const std::string& videoFile, int monitor, int numLoops = -1, bool softOverlay = false, int listId = -1, const int* perspectiveCorners = nullptr);
     ~VideoComponent() override;
     bool update(float dt) override;
     void draw() override;
@@ -69,5 +69,4 @@ private:
     bool pendingRestart_{ false }; // Track if a restart is pending after fast-scroll
     bool pendingRetarget_ = false;
     bool restartOnHide_ = false;
-    bool isPriority_{ false };
 };

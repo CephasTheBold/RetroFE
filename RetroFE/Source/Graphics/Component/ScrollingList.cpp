@@ -459,6 +459,9 @@ void ScrollingList::letterChange(bool increment) {
     if (!items_ || items_->empty()) {
         return;
     }
+    
+    letterSkipTimer_ = 0.25f;
+
     const size_t itemSize = items_->size();
 
     // 2. Get the starting character for comparison (case-insensitively)
@@ -601,6 +604,9 @@ void ScrollingList::metaDown(const std::string& attribute)
 void ScrollingList::metaChange(bool increment, const std::string& attribute)
 {
     if (!items_ || items_->empty()) return;
+    
+    letterSkipTimer_ = 0.15f;
+    
     size_t itemSize = items_->size();
 
     const Item* startItem = (*items_)[(itemIndex_ + selectedOffsetIndex_) % itemSize];
@@ -851,6 +857,14 @@ bool ScrollingList::update(float dt)
     if (!items_) 
         return done;
 
+    if (letterSkipTimer_ > 0.0f) {
+        letterSkipTimer_ -= dt;
+
+        if (letterSkipTimer_ <= 0.0f) {
+            letterSkipTimer_ = 0.0f;
+        }
+    }
+
     size_t scrollPointsSize = scrollPoints_->size();
     
     for (unsigned int i = 0; i < scrollPointsSize; i++) {
@@ -995,21 +1009,8 @@ bool ScrollingList::allocateTexture(size_t index, const Item* item) {
     ImageBuilder imageBuild;
     VideoBuilder videoBuild;
 
-    const bool isPriority = (index == selectedOffsetIndex_);
-
     auto tryVideo = [&](const std::string& videoPath, const std::string& logicalName) -> Component* {
         if (videoType_ == "null") return nullptr;
-
-        // --- LOGGING FOR PRIORITY VERIFICATION ---
-        if (isPriority) {
-            LOG_DEBUG("ScrollingList", "Priority Load Triggered: Slot[" + std::to_string(index) +
-                "] for Game: " + logicalName + " Path: " + videoPath);
-        }
-        else {
-            // Optional: lower level log for background cushion items
-            LOG_DEBUG("ScrollingList", "Cushion Load: Slot[" + std::to_string(index) +
-                "] Path: " + videoPath);
-        }
 
         return videoBuild.createVideo(
             videoPath,
@@ -1019,9 +1020,7 @@ bool ScrollingList::allocateTexture(size_t index, const Item* item) {
             -1,
             false,
             listId_,
-            perspectiveCornersInitialized_ ? perspectiveCorners_ : nullptr,
-            isPriority // Still passing the flag
-        );
+            perspectiveCornersInitialized_ ? perspectiveCorners_ : nullptr);
         };
 
     auto tryImageWithName = [&](const std::string& imagePath, const std::string& baseName) -> Component* {
@@ -1274,9 +1273,9 @@ void ScrollingList::updateScrollPeriod(  )
     }
 }
 
-bool ScrollingList::isFastScrolling() const
-{
-    return scrollPeriod_ == minScrollTime_;
+bool ScrollingList::isFastScrolling() const {
+    // Return true if the user is holding Letter Skip, OR if they are holding standard scroll
+    return (letterSkipTimer_ > 0.0f) || (scrollPeriod_ == minScrollTime_);
 }
 
 void ScrollingList::scroll(bool forward) {

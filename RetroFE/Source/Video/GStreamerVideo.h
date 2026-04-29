@@ -61,7 +61,7 @@ public:
 	bool deInitialize() override;
 	bool unload();
 	bool createPipelineIfNeeded();
-	bool play(const std::string& file, bool isPriority = false) override;
+	bool play(const std::string& file) override;
 	bool stop() override;
 	SDL_Texture* getTexture() const override;
 	void volumeUpdate() override;
