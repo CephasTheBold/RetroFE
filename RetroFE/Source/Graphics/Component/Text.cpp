@@ -67,9 +67,6 @@ void Text::draw() {
     const FontManager::MipLevel* mip = font->getMipLevelForSize(targetFontSize);
     if (!mip || !mip->fillTexture) return;
 
-    SDL_Texture* fillTex = mip->fillTexture;
-    SDL_Texture* outlineTex = mip->outlineTexture;
-
     const float scale = (mip->fontSize > 0)
     ? (baseViewInfo.FontSize / (float)mip->fontSize)
     : 1.f;
