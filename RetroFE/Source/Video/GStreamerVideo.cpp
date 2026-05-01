@@ -970,101 +970,76 @@ bool GStreamerVideo::play(const std::string& file) {
 		return false;
 	}
 
+	// 1. Instantly update session IDs and basic state on the calling thread
 	const uint64_t newSessionId = nextUniquePlaySessionId_++;
 	currentPlaySessionId_.store(newSessionId, std::memory_order_release);
 	loopsFinished_.store(false, std::memory_order_release);
 	hasVideoStream_.store(false, std::memory_order_release);
-
 	dimensions_.store({ -1, -1 }, std::memory_order_release);
-
 	currentFile_ = file;
 
-	LOG_DEBUG("GStreamerVideo", "Starting play for " + file + " (Session: " + std::to_string(newSessionId));
+	LOG_DEBUG("GStreamerVideo", "Starting play (synchronous) for " + file + " (Session: " + std::to_string(newSessionId) + ")");
 
 	pipeLineReady_.store(false, std::memory_order_release);
 	targetState_.store(IVideo::VideoState::Paused, std::memory_order_release);
 
-	auto state = asyncState_;
+	// 2. Execute the GStreamer switch immediately under the lock
+	// This prevents the "task backlog" memory leak during rapid scrolls.
+	std::lock_guard<std::mutex> lock(asyncState_->mutex);
 
-	// THE FIX: Pass the 'isPriority' flag as the very first argument so the ThreadPool 
-	// knows to push this task to the front of the deque!
-	ThreadPool::getInstance().enqueue([this, file, newSessionId, state]() {
-		std::lock_guard<std::mutex> lock(state->mutex);
-		if (!state->alive.load(std::memory_order_acquire)) return;
+	if (!asyncState_->alive.load(std::memory_order_acquire)) return false;
 
-		// Fast-scroll abort
-		if (currentPlaySessionId_.load(std::memory_order_acquire) != newSessionId) {
-			return;
-		}
+	if (!createPipelineIfNeeded()) {
+		LOG_ERROR("GStreamerVideo", "Failed to create pipeline for " + file);
+		hasError_.store(true, std::memory_order_release);
+		return false;
+	}
 
-		if (!createPipelineIfNeeded()) {
-			LOG_ERROR("GStreamerVideo", "Failed to create pipeline for " + file);
-			hasError_.store(true, std::memory_order_release);
-			return;
-		}
+	// --- STRICT INSTANT-URI SERIALIZATION LOGIC ---
+	GstState current = GST_STATE_NULL, pending = GST_STATE_NULL;
+	GstStateChangeReturn ret = gst_element_get_state(pipeline_, &current, &pending, 0);
 
-		// --- STRICT INSTANT-URI SERIALIZATION LOGIC ---
-		GstState current = GST_STATE_NULL, pending = GST_STATE_NULL;
+	// State 1: Hot and ready for instant-uri
+	bool isStableActive = (ret == GST_STATE_CHANGE_SUCCESS || ret == GST_STATE_CHANGE_NO_PREROLL) &&
+		(current == GST_STATE_PLAYING || current == GST_STATE_PAUSED);
 
-		// 1. Capture the actual return value!
-		GstStateChangeReturn ret = gst_element_get_state(pipeline_, &current, &pending, 0);
+	if (isStableActive) {
+		LOG_DEBUG("GStreamerVideo", "Pipeline stable. Executing safe instant-uri switch...");
 
-		// State 1: Hot and ready for instant-uri
-		bool isStableActive = (ret == GST_STATE_CHANGE_SUCCESS || ret == GST_STATE_CHANGE_NO_PREROLL) &&
-			(current == GST_STATE_PLAYING || current == GST_STATE_PAUSED);
+		gst_element_set_state(pipeline_, GST_STATE_PAUSED);
 
-		// State 2: Freshly created or fully torn down (Normal Cold Boot)
-		bool isBrandNewOrIdle = (ret == GST_STATE_CHANGE_SUCCESS) &&
-			(current == GST_STATE_NULL || current == GST_STATE_READY);
+		// Keep the Pad Probe alive for the new video by passing nullptr
+		detachAndDrainSink(videoSink_, nullptr);
+		guint noProbe = 0;
+		detachAndDrainSink(audioSink_, &noProbe);
 
-		if (isStableActive) {
-			LOG_DEBUG("GStreamerVideo", "Pipeline stable. Executing safe instant-uri switch...");
+		gchar* uri = gst_filename_to_uri(file.c_str(), nullptr);
+		g_object_set(pipeline_, "uri", uri, nullptr);
+		g_free(uri);
 
-			gst_element_set_state(pipeline_, GST_STATE_PAUSED);
+		LOG_DEBUG("GStreamerVideo", "instant-uri switch complete. Prerolling.");
+	}
+	else {
+		// Cold boot fallback
+		gst_element_set_state(pipeline_, GST_STATE_NULL);
 
-			// Pass nullptr to keep the Pad Probe alive for the new video!
-			detachAndDrainSink(videoSink_, nullptr);
-			guint noProbe = 0;
-			detachAndDrainSink(audioSink_, &noProbe);
+		detachAndDrainSink(videoSink_, nullptr);
+		guint noProbe = 0;
+		detachAndDrainSink(audioSink_, &noProbe);
 
-			gchar* uri = gst_filename_to_uri(file.c_str(), nullptr);
-			g_object_set(pipeline_, "uri", uri, nullptr);
-			g_free(uri);
+		gchar* uri = gst_filename_to_uri(file.c_str(), nullptr);
+		g_object_set(pipeline_, "uri", uri, nullptr);
+		g_free(uri);
 
-			LOG_DEBUG("GStreamerVideo", "instant-uri switch complete. Prerolling.");
-		}
-		else {
-			if (isBrandNewOrIdle) {
-				LOG_DEBUG("GStreamerVideo", "Pipeline is new or idle. Performing standard cold boot.");
-			}
-			else if (ret == GST_STATE_CHANGE_FAILURE) {
-				LOG_WARNING("GStreamerVideo", "Pipeline is in a FAILURE state! Forcing cold boot to reset hardware.");
-			}
-			else {
-				LOG_WARNING("GStreamerVideo", "Pipeline transition overlap (ASYNC) detected! Forcing cold boot fallback.");
-			}
+		gst_element_set_state(pipeline_, GST_STATE_PAUSED);
+	}
 
-			// 1. Turn off the faucet
-			gst_element_set_state(pipeline_, GST_STATE_NULL);
-
-			// 2. THE FIX: Pass nullptr here too. We are reusing the appsink, so keep the probe!
-			detachAndDrainSink(videoSink_, nullptr);
-			guint noProbe = 0;
-			detachAndDrainSink(audioSink_, &noProbe);
-
-			gchar* uri = gst_filename_to_uri(file.c_str(), nullptr);
-			g_object_set(pipeline_, "uri", uri, nullptr);
-			g_free(uri);
-
-			gst_element_set_state(pipeline_, GST_STATE_PAUSED);
-		}
-
-		if (videoSourceId_ == 0) {
-			videoSourceId_ = AudioBus::instance().addSource("video-preview");
-			audioHandle_ = AudioBus::instance().getHandle(videoSourceId_);
-		}
-		AudioBus::instance().setGain(audioHandle_, 0.0f);
-		});
+	// Audio initialization
+	if (videoSourceId_ == 0) {
+		videoSourceId_ = AudioBus::instance().addSource("video-preview");
+		audioHandle_ = AudioBus::instance().getHandle(videoSourceId_);
+	}
+	AudioBus::instance().setGain(audioHandle_, 0.0f);
 
 	return true;
 }
