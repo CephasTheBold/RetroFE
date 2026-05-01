@@ -122,6 +122,7 @@ void Image::finalizeLoad() {
     }
 
     AsyncLoadResult res = loadTask_.get();
+    loadTask_ = {};
 
     // Fallback logic: If primary failed, trigger alt load
     if (!res.success) {
@@ -288,10 +289,6 @@ void Image::draw() {
 
 // -------------------- Helpers --------------------
 void Image::freeGraphicsMemory() {
-    // We DO NOT wait() here anymore. We just let loadTask_ be overwritten.
-    // If the background task finishes, it will clean itself out of the map.
-    // Zero UI stutter during rapid scrolling!
-
     if (animatedTexture_) SDL_DestroyTexture(animatedTexture_);
     if (texture_ && !isUsingCachedStaticTexture_) SDL_DestroyTexture(texture_);
 
@@ -301,6 +298,8 @@ void Image::freeGraphicsMemory() {
     frameDelays_.clear();
     isUsingCachedStaticTexture_ = isUsingCachedSurfaces_ = false;
     status_ = LoadStatus::Unloaded;
+
+    loadTask_ = {};
 
     // Reset our local path so we don't accidentally check it later
     currentLoadingPath_.clear();
