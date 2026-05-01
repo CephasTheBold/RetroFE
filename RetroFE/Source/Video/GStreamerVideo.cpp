@@ -1214,12 +1214,6 @@ GstFlowReturn GStreamerVideo::on_new_preroll(GstAppSink* sink, gpointer user_dat
 	auto* self = ctx->self.load(std::memory_order_acquire);
 	if (!self) return GST_FLOW_OK;
 
-	// If we're logically unloaded/hidden, don't stage frames.
-	if (self->targetState_.load(std::memory_order_acquire) == IVideo::VideoState::None) {
-		// Don't even pull; reduces work and avoids staging junk.
-		return GST_FLOW_OK;
-	}
-
 	GstSample* preroll = gst_app_sink_pull_preroll(sink);
 	if (!preroll) return GST_FLOW_OK;
 
@@ -1264,11 +1258,6 @@ GstFlowReturn GStreamerVideo::on_new_sample(GstAppSink* sink, gpointer user_data
 
 	auto* self = ctx->self.load(std::memory_order_acquire);
 	if (!self) return GST_FLOW_OK;
-
-	// Minimal anti-flash gate for unload / hidden
-	if (self->targetState_.load(std::memory_order_acquire) == IVideo::VideoState::None) {
-		return GST_FLOW_OK;
-	}
 
 	GstSample* s = gst_app_sink_pull_sample(sink);
 	if (!s) return GST_FLOW_OK;
