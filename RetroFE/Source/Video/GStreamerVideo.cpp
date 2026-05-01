@@ -474,8 +474,10 @@ bool GStreamerVideo::stop() {
 	GstElement* pipeline = nullptr;
 	GstElement* videoSink = nullptr;
 	GstElement* audioSink = nullptr;
+	guint padProbeId = 0;
 	guint busWatchId = 0;
 	guint elementSetupHandlerId = 0;
+	AudioBus::SourceId videoSourceId = 0;
 
 	{
 		std::lock_guard<std::mutex> lock(asyncState_->mutex);
@@ -486,8 +488,10 @@ bool GStreamerVideo::stop() {
 		pipeline = pipeline_;
 		videoSink = videoSink_;
 		audioSink = audioSink_;
+		padProbeId = padProbeId_;
 		busWatchId = std::exchange(busWatchId_, 0);
 		elementSetupHandlerId = elementSetupHandlerId_;
+		videoSourceId = videoSourceId_;
 
 		// We’ll remove probe + drain sinks while we still have pointers,
 		// but do it outside the lock (see below).
@@ -516,23 +520,24 @@ bool GStreamerVideo::stop() {
 		audioHandle_.reset(); // IMPORTANT: release the shared_ptr<Source>
 	}
 
-	if (busWatchId != 0) {
-		GlibLoop::instance().invokeAndWait([busWatchId] {
-			GMainContext* ctx = GlibLoop::instance().context();
-			GSource* source = g_main_context_find_source_by_id(ctx, busWatchId);
-			if (source) {
-				g_source_destroy(source);
-			}
-			});
-	}
-
-	// 5) Stop bus delivery. (Doing this AFTER destroying the watch guarantees 
-	// we don't race the internal GStreamer automatic-destruction mechanics).
+	// 4) Stop bus delivery before destroying the watch source.
 	if (pipeline) {
 		if (GstBus* bus = gst_element_get_bus(pipeline)) {
 			gst_bus_set_flushing(bus, TRUE);
 			gst_object_unref(bus);
 		}
+	}
+
+	// 5) Destroy the bus watch source on the GLib thread WITHOUT holding asyncState_->mutex.
+	if (busWatchId != 0) {
+		GlibLoop::instance().invokeAndWait([busWatchId] {
+			GMainContext* ctx = GlibLoop::instance().context();
+			// FIND the source in the custom context; g_source_remove is hardcoded to the wrong context!
+			GSource* source = g_main_context_find_source_by_id(ctx, busWatchId);
+			if (source) {
+				g_source_destroy(source); // This triggers the CallbackCtx cleanup
+			}
+			});
 	}
 
 	// 6) Now perform GStreamer teardown.
@@ -604,12 +609,6 @@ bool GStreamerVideo::unload() {
 
 	// 2. STOP THE INTERNAL CLOCK (Fixes the "Ghost State")
 	gst_element_set_state(pipeline_, GST_STATE_PAUSED);
-
-	if (GstBus* bus = gst_element_get_bus(pipeline_)) {
-		gst_bus_set_flushing(bus, TRUE);  // Drops all pending messages instantly
-		gst_bus_set_flushing(bus, FALSE); // Re-enables delivery for the next video
-		gst_object_unref(bus);            // Release our handle to the bus
-	}
 
 	// 3. Visual & Audio disconnect
 	isTextureReady_ = false; // <-- The UI now receives nullptr from getTexture()
@@ -749,7 +748,7 @@ bool GStreamerVideo::createPipelineIfNeeded() {
 		"emit-signals", FALSE,
 		"max-buffers", 16,          // Increased from 8 - more buffering
 		"qos", FALSE,               // Disable QoS - we want all audio
-		"drop", TRUE,              // Don't drop audio samples!
+		"drop", FALSE,              // Don't drop audio samples!
 		"sync", TRUE,               // Keep sync on for A/V timing
 		"enable-last-sample", FALSE,
 		"wait-on-eos", FALSE,
@@ -1003,34 +1002,20 @@ bool GStreamerVideo::play(const std::string& file) {
 			(current == GST_STATE_NULL || current == GST_STATE_READY);
 
 		if (isStableActive) {
-			LOG_DEBUG("GStreamerVideo", "Pipeline stable. Executing surgical flush and URI switch...");
+			LOG_DEBUG("GStreamerVideo", "Pipeline stable. Executing safe instant-uri switch...");
 
-			// 1. Flush Start
-			GstEvent* flushStart = gst_event_new_flush_start();
-			if (!gst_element_send_event(pipeline_, flushStart)) {
-				gst_event_unref(flushStart); // Prevent memory leak on failure
-			}
+			gst_element_set_state(pipeline_, GST_STATE_PAUSED);
 
-			// 2. Flush Stop
-			GstEvent* flushStop = gst_event_new_flush_stop(TRUE);
-			if (!gst_element_send_event(pipeline_, flushStop)) {
-				gst_event_unref(flushStop); // Prevent memory leak on failure
-			}
-
-			// 3. Perform your existing sink drainage
+			// Pass nullptr to keep the Pad Probe alive for the new video!
 			detachAndDrainSink(videoSink_, nullptr);
 			guint noProbe = 0;
 			detachAndDrainSink(audioSink_, &noProbe);
 
-			// 4. Set the new URI
 			gchar* uri = gst_filename_to_uri(file.c_str(), nullptr);
 			g_object_set(pipeline_, "uri", uri, nullptr);
 			g_free(uri);
 
-			// Ensure we are in PAUSED so the new stream can preroll
-			gst_element_set_state(pipeline_, GST_STATE_PAUSED);
-
-			LOG_DEBUG("GStreamerVideo", "Surgical reset complete. Prerolling new URI.");
+			LOG_DEBUG("GStreamerVideo", "instant-uri switch complete. Prerolling.");
 		}
 		else {
 			if (isBrandNewOrIdle) {
