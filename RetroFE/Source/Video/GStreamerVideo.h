@@ -196,6 +196,7 @@ private:
 
 	// Audio bus integration
 	AudioBus::SourceId videoSourceId_{ 0 };   // ID of this video’s source in AudioBus
+	std::shared_ptr<AudioBus::Handle> audioHandle_; // NEW: cached handle for lock-free hot path
 	GstElement* audioSink_{ nullptr };        // GStreamer appsink for audio
 };
 

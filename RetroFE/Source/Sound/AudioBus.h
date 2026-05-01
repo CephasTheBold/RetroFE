@@ -16,19 +16,29 @@ public:
     static AudioBus& instance();
     void configureFromMixer();
 
+    class Handle {
+        friend class AudioBus;
+        std::shared_ptr<Source> sp;
+        explicit Handle(std::shared_ptr<Source> s) : sp(std::move(s)) {}
+    };
+
+    // Get a handle for an existing source ID. Returns nullptr if not found.
+    std::shared_ptr<Handle> getHandle(SourceId id);
+
     // Source management
     SourceId addSource(const char* name, size_t ring_buffer_size_kb = 256);
     void removeSource(SourceId id);
     void setEnabled(SourceId id, bool on);
     bool isEnabled(SourceId id) const;
-    void clear(SourceId id);
+    void push(const std::shared_ptr<Handle>& h, const void* data, int bytes);
+    void clear(const std::shared_ptr<Handle>& h) noexcept;
 
     // <<< MOVE triggerFadeIn BELOW Source definition >>>
-    void triggerFadeIn(SourceId id, int durationSamples = Source::kMaxFadeSamples);
+    void triggerFadeIn(const std::shared_ptr<Handle>& h, int durationSamples = Source::kMaxFadeSamples) noexcept;
 
     // Producer/Consumer
     void push(SourceId id, const void* data, int bytes);
-    void setGain(SourceId id, float gain);
+    void setGain(const std::shared_ptr<Handle>& h, float gain) noexcept;
     void mixInto(Uint8* dst, int len);
     void mixInto_s16(Uint8* dst, int lenBytes);
     void mixInto_f32(Uint8* dst, int lenBytes);
@@ -39,6 +49,9 @@ public:
     int dev_rate() const { return devRate_; }
     int dev_channels() const { return devChans_; }
 private:
+   
+    void pushImpl(Source& src, const void* data, int bytes);
+    
     class SpscRing {
     public:
         explicit SpscRing(size_t cap_req = (1u << 18), size_t align = 1);

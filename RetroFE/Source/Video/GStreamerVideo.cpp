@@ -201,133 +201,130 @@ GStreamerVideo::~GStreamerVideo() {
 	}
 }
 
-gboolean GStreamerVideo::busCallback(GstBus* /*bus*/, GstMessage* msg, gpointer user_data) {
+gboolean GStreamerVideo::busCallback(GstBus*, GstMessage* msg, gpointer user_data) {
 	auto* ctx = static_cast<CallbackCtx*>(user_data);
 	if (!ctx || !ctx->state || !ctx->state->alive.load(std::memory_order_acquire))
 		return TRUE;
 
 	auto* video = ctx->self.load(std::memory_order_acquire);
-	if (!video) return TRUE;
+	if (!video || !video->pipeline_) return TRUE;
 
-	if (!video->pipeline_) return TRUE;
-
-	if (GST_MESSAGE_SRC(msg) != GST_OBJECT(video->pipeline_)) {
-		return TRUE;
-	}
+	const bool fromPipeline = (GST_MESSAGE_SRC(msg) == GST_OBJECT(video->pipeline_));
 
 	switch (GST_MESSAGE_TYPE(msg)) {
-		case GST_MESSAGE_ASYNC_START: {
+		case GST_MESSAGE_ASYNC_START:
+		if (fromPipeline) {
 			video->pipeLineReady_.store(false, std::memory_order_release);
-			break;
 		}
+		break;
 
-		case GST_MESSAGE_STATE_CHANGED: {
-			if (GST_MESSAGE_SRC(msg) == GST_OBJECT(video->pipeline_)) {
-				GstState oldS, newS, pending;
-				gst_message_parse_state_changed(msg, &oldS, &newS, &pending);
-
-				if (pending == GST_STATE_VOID_PENDING) {
-					switch (newS) {
-						case GST_STATE_PLAYING:
-						video->actualState_.store(IVideo::VideoState::Playing, std::memory_order_release);
-						if (video->targetState_.load(std::memory_order_acquire) != IVideo::VideoState::None) {
-						}
-						break;
-						case GST_STATE_PAUSED:
-						video->actualState_.store(IVideo::VideoState::Paused, std::memory_order_release);
-						if (video->targetState_.load(std::memory_order_acquire) != IVideo::VideoState::None) {
-						}
-						break;
-						default:
-						// READY and NULL states map to None
-						video->actualState_.store(IVideo::VideoState::None, std::memory_order_release);
-						break;
-					}
+		case GST_MESSAGE_STATE_CHANGED:
+		if (fromPipeline) {
+			GstState oldS, newS, pending;
+			gst_message_parse_state_changed(msg, &oldS, &newS, &pending);
+			if (pending == GST_STATE_VOID_PENDING) {
+				switch (newS) {
+					case GST_STATE_PLAYING:
+					video->actualState_.store(IVideo::VideoState::Playing, std::memory_order_release);
+					break;
+					case GST_STATE_PAUSED:
+					video->actualState_.store(IVideo::VideoState::Paused, std::memory_order_release);
+					break;
+					default:
+					video->actualState_.store(IVideo::VideoState::None, std::memory_order_release);
+					break;
 				}
 			}
-			break;
 		}
+		break;
 
-		case GST_MESSAGE_ASYNC_DONE: {
-			if (GST_MESSAGE_SRC(msg) == GST_OBJECT(video->pipeline_) &&
-				video->targetState_.load(std::memory_order_acquire) != IVideo::VideoState::None) {
-				GstState current, pending;
-				if (gst_element_get_state(video->pipeline_, &current, &pending, 0) == GST_STATE_CHANGE_SUCCESS) {
-					if (current == GST_STATE_PAUSED || current == GST_STATE_PLAYING) {
-						bool expected = false;
-						(void)video->pipeLineReady_.compare_exchange_strong(expected, true,
-							std::memory_order_release, std::memory_order_relaxed);
-					}
+		case GST_MESSAGE_ASYNC_DONE:
+		if (fromPipeline &&
+			video->targetState_.load(std::memory_order_acquire) != IVideo::VideoState::None) {
+			GstState current, pending;
+			if (gst_element_get_state(video->pipeline_, &current, &pending, 0) == GST_STATE_CHANGE_SUCCESS) {
+				if (current == GST_STATE_PAUSED || current == GST_STATE_PLAYING) {
+					bool expected = false;
+					video->pipeLineReady_.compare_exchange_strong(
+						expected, true, std::memory_order_release, std::memory_order_relaxed);
 				}
 			}
-			break;
 		}
+		break;
 
-		case GST_MESSAGE_STREAM_COLLECTION: {
-			if (GST_MESSAGE_SRC(msg) == GST_OBJECT(video->pipeline_)) {
-				GstStreamCollection* collection = nullptr;
-				gst_message_parse_stream_collection(msg, &collection);
-				int nVideo = 0;
-				if (collection) {
-					const guint size = gst_stream_collection_get_size(collection);
-					for (guint i = 0; i < size; ++i) {
-						GstStream* stream = gst_stream_collection_get_stream(collection, i);
-						if (stream && (gst_stream_get_stream_type(stream) & GST_STREAM_TYPE_VIDEO))
-							++nVideo;
-					}
-					gst_object_unref(collection);
+		case GST_MESSAGE_STREAM_COLLECTION:
+		// stream-collection *often* originates from pipeline/playbin, but allowing non-pipeline is fine too
+		if (fromPipeline) {
+			GstStreamCollection* collection = nullptr;
+			gst_message_parse_stream_collection(msg, &collection);
+			int nVideo = 0;
+			if (collection) {
+				const guint size = gst_stream_collection_get_size(collection);
+				for (guint i = 0; i < size; ++i) {
+					GstStream* stream = gst_stream_collection_get_stream(collection, i);
+					if (stream && (gst_stream_get_stream_type(stream) & GST_STREAM_TYPE_VIDEO))
+						++nVideo;
 				}
-				video->hasVideoStream_.store(nVideo > 0, std::memory_order_release);
+				gst_object_unref(collection);
 			}
-			break;
+			video->hasVideoStream_.store(nVideo > 0, std::memory_order_release);
 		}
+		break;
 
-		case GST_MESSAGE_EOS: {
-			if (GST_MESSAGE_SRC(msg) == GST_OBJECT(video->pipeline_)) {
-				if (video->targetState_.load(std::memory_order_acquire) != IVideo::VideoState::None) {
-					if (video->pipeline_ && video->getCurrent() > GST_SECOND / 2) {
-						video->playCount_++;
-						if (!video->numLoops_ || video->numLoops_ > video->playCount_) {
-							video->loop();
-						}
-						else {
-							video->loopsFinished_.store(true, std::memory_order_release);
-							video->targetState_.store(IVideo::VideoState::None, std::memory_order_release);
-							// We set the target state to None, then trigger the state change.
-							// The actualState_ update will happen via the switch case above.
-							gst_element_set_state(video->pipeline_, GST_STATE_READY);
-							video->playCount_ = 0;
-						}
+		case GST_MESSAGE_EOS:
+		if (fromPipeline) {
+			if (video->targetState_.load(std::memory_order_acquire) != IVideo::VideoState::None) {
+				if (video->pipeline_ && video->getCurrent() > GST_SECOND / 2) {
+					video->playCount_++;
+					if (!video->numLoops_ || video->numLoops_ > video->playCount_) {
+						video->loop();
 					}
-					else if (video->pipeline_) {
+					else {
 						video->loopsFinished_.store(true, std::memory_order_release);
 						video->targetState_.store(IVideo::VideoState::None, std::memory_order_release);
+						// We set the target state to None, then trigger the state change.
+						// The actualState_ update will happen via the switch case above.
 						gst_element_set_state(video->pipeline_, GST_STATE_READY);
 						video->playCount_ = 0;
 					}
 				}
+				else if (video->pipeline_) {
+					video->loopsFinished_.store(true, std::memory_order_release);
+					video->targetState_.store(IVideo::VideoState::None, std::memory_order_release);
+					gst_element_set_state(video->pipeline_, GST_STATE_READY);
+					video->playCount_ = 0;
+				}
 			}
-			break;
+
 		}
+		break;
 
 		case GST_MESSAGE_ERROR: {
-			GError* err = nullptr; gchar* dbg = nullptr;
+			// IMPORTANT: handle errors even if not from pipeline
+			GError* err = nullptr;
+			gchar* dbg = nullptr;
 			gst_message_parse_error(msg, &err, &dbg);
-			const bool unloading = (video->targetState_.load(std::memory_order_acquire) == IVideo::VideoState::None);
+
+			const bool unloading =
+				(video->targetState_.load(std::memory_order_acquire) == IVideo::VideoState::None);
+
 			if (!unloading) {
 				video->hasError_.store(true, std::memory_order_release);
 				video->pipeLineReady_.store(false, std::memory_order_release);
 				video->targetState_.store(IVideo::VideoState::None, std::memory_order_release);
+
+				// This should be safe, but only really meaningful if the pipeline still exists
 				gst_element_set_state(video->pipeline_, GST_STATE_READY);
 			}
+
 			if (err) g_error_free(err);
 			if (dbg) g_free(dbg);
 			break;
 		}
 
-		default: break;
+		default:
+		break;
 	}
-
 	return TRUE;
 }
 
@@ -516,10 +513,11 @@ bool GStreamerVideo::stop() {
 	padProbeId_ = 0;
 
 	// 3) Audio bus cleanup (safe without asyncState_ lock)
-	if (videoSourceId != 0) {
-		AudioBus::instance().setGain(videoSourceId, 0.0f);
-		AudioBus::instance().removeSource(videoSourceId);
+	if (videoSourceId_ != 0) {
+		AudioBus::instance().setGain(audioHandle_, 0.0f);
+		AudioBus::instance().removeSource(videoSourceId_);
 		videoSourceId_ = 0;
+		audioHandle_.reset(); // IMPORTANT: release the shared_ptr<Source>
 	}
 
 	// 4) Stop bus delivery before destroying the watch source.
@@ -533,11 +531,7 @@ bool GStreamerVideo::stop() {
 	// 5) Destroy the bus watch source on the GLib thread WITHOUT holding asyncState_->mutex.
 	if (busWatchId != 0) {
 		GlibLoop::instance().invokeAndWait([busWatchId] {
-			if (GMainContext* ctx = g_main_context_get_thread_default()) {
-				if (GSource* src = g_main_context_find_source_by_id(ctx, busWatchId)) {
-					g_source_destroy(src);
-				}
-			}
+			g_source_remove(busWatchId);
 			});
 	}
 
@@ -618,7 +612,8 @@ bool GStreamerVideo::unload() {
 	dimensions_.store({ -1, -1 }, std::memory_order_release);
 
 	if (videoSourceId_ != 0) {
-		AudioBus::instance().setGain(videoSourceId_, 0.0f);
+		AudioBus::instance().setGain(audioHandle_, 0.0f);
+		AudioBus::instance().clear(audioHandle_);
 	}
 
 	// 4. Flush residual buffers so the old frame doesn't flash
@@ -1045,8 +1040,9 @@ bool GStreamerVideo::play(const std::string& file) {
 
 		if (videoSourceId_ == 0) {
 			videoSourceId_ = AudioBus::instance().addSource("video-preview");
+			audioHandle_ = AudioBus::instance().getHandle(videoSourceId_);
 		}
-		AudioBus::instance().setGain(videoSourceId_, 0.0f);
+		AudioBus::instance().setGain(audioHandle_, 0.0f);
 		});
 
 	return true;
@@ -1184,7 +1180,6 @@ void GStreamerVideo::elementSetupCallback([[maybe_unused]] GstElement* playbin,
 			"std-compliance", 0,
 			nullptr);
 	}
-	g_free((gpointer)name);
 }
 
 
@@ -1289,29 +1284,28 @@ GstFlowReturn GStreamerVideo::on_new_sample(GstAppSink* sink, gpointer user_data
 
 GstFlowReturn GStreamerVideo::on_audio_new_sample(GstAppSink* sink, gpointer user_data) {
 	auto* ctx = static_cast<CallbackCtx*>(user_data);
-	if (!ctx || !ctx->state || !ctx->state->alive.load(std::memory_order_acquire)) {
+	if (!ctx || !ctx->state || !ctx->state->alive.load(std::memory_order_acquire))
 		return GST_FLOW_OK;
-	}
 
 	auto* self = ctx->self.load(std::memory_order_acquire);
 	if (!self) return GST_FLOW_OK;
 
-	// Don't even pull if logically unloaded
-	if (self->targetState_.load(std::memory_order_acquire) == IVideo::VideoState::None) {
-		return GST_FLOW_OK;
-	}
-
+	// Always pull to keep the queue drained (drop=FALSE)
 	GstSample* s = gst_app_sink_pull_sample(sink);
 	if (!s) return GST_FLOW_OK;
 
-	// Teardown race after pull
-	if (!ctx->state->alive.load(std::memory_order_acquire) || ctx->self == nullptr) {
+	// NEW: if handle isn't ready, drain sample and exit
+	if (!self->audioHandle_) {
 		gst_sample_unref(s);
 		return GST_FLOW_OK;
 	}
 
-	// --- THE FIX: ANTI-GHOST AUDIO GATE ---
-	if (self->targetState_.load(std::memory_order_acquire) == IVideo::VideoState::None) {
+	const bool active =
+		self->audioHandle_ &&
+		self->targetState_.load(std::memory_order_acquire) != IVideo::VideoState::None &&
+		ctx->state->alive.load(std::memory_order_acquire);
+
+	if (!active) {
 		gst_sample_unref(s);
 		return GST_FLOW_OK;
 	}
@@ -1323,12 +1317,12 @@ GstFlowReturn GStreamerVideo::on_audio_new_sample(GstAppSink* sink, gpointer use
 	}
 
 	if (GST_BUFFER_FLAG_IS_SET(b, GST_BUFFER_FLAG_DISCONT)) {
-		AudioBus::instance().triggerFadeIn(self->videoSourceId_);
+		AudioBus::instance().triggerFadeIn(self->audioHandle_);
 	}
 
 	GstMapInfo mi{};
 	if (gst_buffer_map(b, &mi, GST_MAP_READ)) {
-		AudioBus::instance().push(self->videoSourceId_, mi.data, (int)mi.size);
+		AudioBus::instance().push(self->audioHandle_, mi.data, (int)mi.size);
 		gst_buffer_unmap(b, &mi);
 	}
 
@@ -1386,7 +1380,7 @@ void GStreamerVideo::createSdlTexture() {
 }
 
 void GStreamerVideo::volumeUpdate() {
-	if (!videoSourceId_) return; // Safety check
+	if (!audioHandle_) return; // Safety check
 
 	// Determine final gain based on UI volume and global mute
 	float finalGain = std::clamp(volume_, 0.0f, 1.0f);
@@ -1396,7 +1390,7 @@ void GStreamerVideo::volumeUpdate() {
 	}
 
 	// Direct, lightweight update to the mixing bus
-	AudioBus::instance().setGain(videoSourceId_, finalGain);
+	AudioBus::instance().setGain(audioHandle_, finalGain);
 }
 
 void GStreamerVideo::draw() {
@@ -1507,7 +1501,7 @@ bool GStreamerVideo::updateTextureFromFrameRGBA(SDL_Texture* texture, GstVideoFr
 }
 
 VideoDim GStreamerVideo::getDimensions() {
-    return dimensions_.load(std::memory_order_acquire);
+	return dimensions_.load(std::memory_order_acquire);
 }
 
 bool GStreamerVideo::isPlaying() {

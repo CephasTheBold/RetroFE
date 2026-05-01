@@ -56,7 +56,8 @@ int AudioBus::SpscRing::write(const uint8_t* data, int bytes) {
     if (!data || bytes <= 0) return 0;
 
     const size_t cap = buf_.size();
-    // If incoming > capacity, keep only the last aligned window
+
+    // If incoming > capacity, keep only last aligned window
     if ((size_t)bytes > cap) {
         size_t keep = (align_ > 1) ? (cap / align_) * align_ : cap;
         data += (bytes - (int)keep);
@@ -70,14 +71,18 @@ int AudioBus::SpscRing::write(const uint8_t* data, int bytes) {
 
     if ((size_t)bytes > free) {
         size_t need = (size_t)bytes - free;
-        need = align_up(need, align_);          // drop whole frames
-        if (need > used) need = used;           // don’t jump past head
+        need = align_up(need, align_);
+        if (need > used) need = used;
         tail_.store(t + need, std::memory_order_release);
         t += need;
     }
 
-    for (int i = 0; i < bytes; ++i)
-        buf_[(h + (size_t)i) & mask_] = data[i];
+    size_t idx = h & mask_;
+    size_t first = std::min((size_t)bytes, cap - idx);
+    std::memcpy(&buf_[idx], data, first);
+    if (first < (size_t)bytes) {
+        std::memcpy(&buf_[0], data + first, (size_t)bytes - first);
+    }
 
     head_.store(h + (size_t)bytes, std::memory_order_release);
     return bytes;
@@ -86,15 +91,21 @@ int AudioBus::SpscRing::write(const uint8_t* data, int bytes) {
 int AudioBus::SpscRing::read(uint8_t* out, int bytes) {
     if (!out || bytes <= 0) return 0;
 
+    const size_t cap = buf_.size();
+
     size_t h = head_.load(std::memory_order_acquire);
     size_t t = tail_.load(std::memory_order_relaxed);
     size_t avail = h - t;
 
     if ((size_t)bytes > avail) bytes = (int)avail;
 
-    for (int i = 0; i < bytes; ++i) {
-        out[i] = buf_[(t + (size_t)i) & mask_];
+    size_t idx = t & mask_;
+    size_t first = std::min((size_t)bytes, cap - idx);
+    std::memcpy(out, &buf_[idx], first);
+    if (first < (size_t)bytes) {
+        std::memcpy(out + first, &buf_[0], (size_t)bytes - first);
     }
+
     tail_.store(t + (size_t)bytes, std::memory_order_release);
     return bytes;
 }
@@ -168,22 +179,18 @@ AudioBus::SourceId AudioBus::addSource(const char* name, size_t ring_kb) {
     return id;
 }
 
-void AudioBus::triggerFadeIn(SourceId id, int durationSamples) {
-    std::shared_ptr<Source> sp;
-    {
-        std::lock_guard<std::mutex> lk(mtx_);
-        auto it = sources_.find(id);
-        if (it == sources_.end() || !it->second) return;
-        sp = it->second;
-    }
-    // Only set if not already fading or if requested longer
-    int current = sp->fadeSamplesLeft.load(std::memory_order_relaxed);
+void AudioBus::triggerFadeIn(const std::shared_ptr<Handle>& h, int durationSamples) noexcept {
+    if (!h || !h->sp) return;
+
+    auto& fade = h->sp->fadeSamplesLeft;
+    int current = fade.load(std::memory_order_relaxed);
     int desired = durationSamples;
+
     while (current < desired &&
-        !sp->fadeSamplesLeft.compare_exchange_weak(current, desired,
+        !fade.compare_exchange_weak(current, desired,
             std::memory_order_release,
             std::memory_order_relaxed)) {
-        // retry if changed
+        // retry
     }
 }
 
@@ -210,6 +217,16 @@ bool AudioBus::isEnabled(SourceId id) const {
         : false;
 }
 
+void AudioBus::push(const std::shared_ptr<Handle>& h, const void* data, int bytes) {
+    if (!h || !h->sp) return;
+    if (!data || bytes <= 0) return;
+
+    // enabled is atomic; safe lock-free
+    if (!h->sp->enabled.load(std::memory_order_acquire)) return;
+
+    pushImpl(*h->sp, data, bytes);
+}
+
 void AudioBus::push(SourceId id, const void* data, int bytes) {
     if (!data || bytes <= 0) return;
 
@@ -217,23 +234,40 @@ void AudioBus::push(SourceId id, const void* data, int bytes) {
     {
         std::lock_guard<std::mutex> lk(mtx_);
         auto it = sources_.find(id);
-        if (it == sources_.end()) return;
+        if (it == sources_.end() || !it->second) return;
         sp = it->second;
     }
 
     if (!sp->enabled.load(std::memory_order_acquire)) return;
+    pushImpl(*sp, data, bytes);
+}
 
+void AudioBus::pushImpl(Source& src, const void* data, int bytes) {
     // Always work on a copy to apply processing
     static thread_local std::vector<uint8_t> temp_buffer;
-    if (temp_buffer.size() < static_cast<size_t>(bytes))
-        temp_buffer.resize(bytes);
-    std::memcpy(temp_buffer.data(), data, bytes);
+    static thread_local size_t tl_temp_hwm_cap = 0;
+    static thread_local size_t tl_temp_hwm_size = 0;
 
-    // ========== 1. APPLY FADE-IN FIRST (if active) ==========
-    int fadeLeft = sp->fadeSamplesLeft.load(std::memory_order_acquire);
+    if (temp_buffer.size() < static_cast<size_t>(bytes))
+        temp_buffer.resize(static_cast<size_t>(bytes));
+
+    if (temp_buffer.capacity() > tl_temp_hwm_cap || temp_buffer.size() > tl_temp_hwm_size) {
+        tl_temp_hwm_cap = std::max(tl_temp_hwm_cap, temp_buffer.capacity());
+        tl_temp_hwm_size = std::max(tl_temp_hwm_size, temp_buffer.size());
+
+        LOG_DEBUG("AudioBus",
+            "push(): temp_buffer HWM increased: bytes=" + std::to_string(bytes) +
+            " size=" + std::to_string(temp_buffer.size()) +
+            " cap=" + std::to_string(temp_buffer.capacity()));
+    }
+
+    std::memcpy(temp_buffer.data(), data, static_cast<size_t>(bytes));
+
+    // 1) fade
+    int fadeLeft = src.fadeSamplesLeft.load(std::memory_order_acquire);
     if (fadeLeft > 0 && devFmt_ == AUDIO_S16SYS) {
         int16_t* samples = reinterpret_cast<int16_t*>(temp_buffer.data());
-        int total_samples = bytes / sizeof(int16_t);
+        int total_samples = bytes / (int)sizeof(int16_t);
         int samples_to_fade = std::min(fadeLeft, total_samples);
 
         for (int i = 0; i < samples_to_fade; ++i) {
@@ -242,45 +276,36 @@ void AudioBus::push(SourceId id, const void* data, int bytes) {
         }
 
         int newFade = fadeLeft - samples_to_fade;
-        sp->fadeSamplesLeft.store(newFade > 0 ? newFade : 0, std::memory_order_release);
+        src.fadeSamplesLeft.store(newFade > 0 ? newFade : 0, std::memory_order_release);
     }
 
-    // ========== 2. APPLY PER-SOURCE GAIN ==========
-    float sourceGain = sp->gain.load(std::memory_order_relaxed);
+    // 2) gain
+    float sourceGain = src.gain.load(std::memory_order_relaxed);
 
     if (devFmt_ == AUDIO_S16SYS) {
         int16_t* samples = reinterpret_cast<int16_t*>(temp_buffer.data());
-        int num_samples = bytes / sizeof(int16_t);
-
-        for (int i = 0; i < num_samples; ++i) {
-            samples[i] = static_cast<int16_t>(samples[i] * sourceGain);
-        }
+        int num_samples = bytes / (int)sizeof(int16_t);
+        for (int i = 0; i < num_samples; ++i) samples[i] = static_cast<int16_t>(samples[i] * sourceGain);
     }
     else if (devFmt_ == AUDIO_F32LSB || devFmt_ == AUDIO_F32MSB) {
         float* samples = reinterpret_cast<float*>(temp_buffer.data());
-        int num_samples = bytes / sizeof(float);
-
-        for (int i = 0; i < num_samples; ++i) {
-            samples[i] *= sourceGain;
-        }
+        int num_samples = bytes / (int)sizeof(float);
+        for (int i = 0; i < num_samples; ++i) samples[i] *= sourceGain;
     }
     else if (devFmt_ == AUDIO_S32LSB || devFmt_ == AUDIO_S32MSB) {
         int32_t* samples = reinterpret_cast<int32_t*>(temp_buffer.data());
-        int num_samples = bytes / sizeof(int32_t);
-
-        for (int i = 0; i < num_samples; ++i) {
+        int num_samples = bytes / (int)sizeof(int32_t);
+        for (int i = 0; i < num_samples; ++i)
             samples[i] = static_cast<int32_t>(static_cast<int64_t>(samples[i]) * sourceGain);
-        }
     }
 
-    // ========== 3. OPTIONAL: SOFT LIMITER instead of de-clicker ==========
-    // This prevents hard clipping while preserving dynamics better
+    // 3) limiter
     if (devFmt_ == AUDIO_S16SYS) {
         int16_t* samples = reinterpret_cast<int16_t*>(temp_buffer.data());
-        int num_samples = bytes / sizeof(int16_t);
+        int num_samples = bytes / (int)sizeof(int16_t);
 
-        constexpr int16_t soft_threshold = 28000;  // Start soft-clipping above this
-        constexpr float knee = 0.1f;  // Smooth knee for limiting
+        constexpr int16_t soft_threshold = 28000;
+        constexpr float knee = 0.1f;
 
         for (int i = 0; i < num_samples; ++i) {
             int16_t s = samples[i];
@@ -289,7 +314,6 @@ void AudioBus::push(SourceId id, const void* data, int bytes) {
                 float sign = (normalized >= 0) ? 1.0f : -1.0f;
                 float abs_norm = std::abs(normalized);
 
-                // Soft knee compression above threshold
                 float compressed = sign * (soft_threshold / 32768.0f +
                     (abs_norm - soft_threshold / 32768.0f) * knee);
                 samples[i] = static_cast<int16_t>(compressed * 32767.0f);
@@ -297,27 +321,17 @@ void AudioBus::push(SourceId id, const void* data, int bytes) {
         }
     }
 
-    // Write processed audio to ring buffer
-    sp->ring.write(temp_buffer.data(), bytes);
+    src.ring.write(temp_buffer.data(), bytes);
 }
 
-void AudioBus::setGain(SourceId id, float gain) {
-    std::lock_guard<std::mutex> lk(mtx_);
-    auto it = sources_.find(id);
-    if (it != sources_.end() && it->second) {
-        it->second->gain.store(std::clamp(gain, 0.0f, 1.0f), std::memory_order_release);
-    }
+void AudioBus::setGain(const std::shared_ptr<Handle>& h, float gain) noexcept {
+    if (!h || !h->sp) return;
+    h->sp->gain.store(std::clamp(gain, 0.0f, 1.0f), std::memory_order_release);
 }
 
-void AudioBus::clear(SourceId id) {
-    std::shared_ptr<Source> sp;
-    {
-        std::lock_guard<std::mutex> lk(mtx_);
-        auto it = sources_.find(id);
-        if (it == sources_.end()) return;
-        sp = it->second;
-    }
-    sp->ring.clear();
+void AudioBus::clear(const std::shared_ptr<Handle>& h) noexcept {
+    if (!h || !h->sp) return;
+    h->sp->ring.clear();
 }
 
 static inline void mix_s16_sat_scalar(int16_t* dst, const int16_t* src, int n) {
@@ -448,7 +462,20 @@ void AudioBus::mixInto_s16(Uint8* dst, int lenBytes) {
     if (!snap || snap->empty() || want <= 0) return;
 
     static thread_local std::vector<Uint8> scratch;
+    static thread_local size_t tl_scratch_hwm_cap = 0;
+    static thread_local size_t tl_scratch_hwm_size = 0;
+
     if ((int)scratch.size() < want) scratch.resize(want);
+
+    if (scratch.capacity() > tl_scratch_hwm_cap || scratch.size() > tl_scratch_hwm_size) {
+        tl_scratch_hwm_cap = std::max(tl_scratch_hwm_cap, scratch.capacity());
+        tl_scratch_hwm_size = std::max(tl_scratch_hwm_size, scratch.size());
+
+        LOG_DEBUG("AudioBus", "mixInto_s16(): scratch grew: want=" + std::to_string(want) +
+            " size=" + std::to_string(scratch.size()) +
+            " cap=" + std::to_string(scratch.capacity()));
+    }
+
     Uint8* tmp = scratch.data();
 
     for (const auto& src : *snap) {
@@ -470,7 +497,7 @@ void AudioBus::mixInto_s16(Uint8* dst, int lenBytes) {
             }
         }
 
-        mix_s16_sat(dst, tmp, gotAligned);  // Only mix what we got
+        mix_s16_sat(dst, tmp, want);
     }
 }
 void AudioBus::mixInto_f32(Uint8* dst, int lenBytes) {
@@ -527,6 +554,13 @@ void AudioBus::mixInto_s32(Uint8* dst, int lenBytes) {
             D[i] = clip32(d);
         }
     }
+}
+
+std::shared_ptr<AudioBus::Handle> AudioBus::getHandle(SourceId id) {
+    std::lock_guard<std::mutex> lk(mtx_);
+    auto it = sources_.find(id);
+    if (it == sources_.end() || !it->second) return nullptr;
+    return std::shared_ptr<Handle>(new Handle(it->second));
 }
 
 void AudioBus::rebuildSnapshotLocked() {
