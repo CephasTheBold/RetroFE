@@ -91,7 +91,23 @@ bool VideoComponent::update(float dt) {
 	videoInst_->setVolume(baseViewInfo.Volume);
 	videoInst_->volumeUpdate();
 
-	const bool visibleNow = (baseViewInfo.Alpha > 0.0f);
+	// ---------------- Visibility & Culling Logic ----------------
+
+		// 1. Physical Bounds Check (AABB)
+	float x = baseViewInfo.XRelativeToOrigin();
+	float y = baseViewInfo.YRelativeToOrigin();
+	float w = baseViewInfo.ScaledWidth();
+	float h = baseViewInfo.ScaledHeight();
+
+	float screenW = static_cast<float>(currentPage_->getLayoutWidthByMonitor(baseViewInfo.Monitor));
+	float screenH = static_cast<float>(currentPage_->getLayoutHeightByMonitor(baseViewInfo.Monitor));
+
+	bool physicallyOnScreen = (x + w > 0.0f) && (x < screenW) &&
+		(y + h > 0.0f) && (y < screenH);
+
+	// 2. The combined visibility rule
+	const bool visibleNow = (baseViewInfo.Alpha > 0.0f) && physicallyOnScreen;
+
 	auto actual = videoInst_->getActualState();
 	auto target = videoInst_->getTargetState();
 
