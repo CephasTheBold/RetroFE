@@ -516,19 +516,23 @@ bool GStreamerVideo::stop() {
 		audioHandle_.reset(); // IMPORTANT: release the shared_ptr<Source>
 	}
 
-	// 4) Stop bus delivery before destroying the watch source.
+	if (busWatchId != 0) {
+		GlibLoop::instance().invokeAndWait([busWatchId] {
+			GMainContext* ctx = GlibLoop::instance().context();
+			GSource* source = g_main_context_find_source_by_id(ctx, busWatchId);
+			if (source) {
+				g_source_destroy(source);
+			}
+			});
+	}
+
+	// 5) Stop bus delivery. (Doing this AFTER destroying the watch guarantees 
+	// we don't race the internal GStreamer automatic-destruction mechanics).
 	if (pipeline) {
 		if (GstBus* bus = gst_element_get_bus(pipeline)) {
 			gst_bus_set_flushing(bus, TRUE);
 			gst_object_unref(bus);
 		}
-	}
-
-	// 5) Destroy the bus watch source on the GLib thread WITHOUT holding asyncState_->mutex.
-	if (busWatchId != 0) {
-		GlibLoop::instance().invokeAndWait([busWatchId] {
-			g_source_remove(busWatchId);
-			});
 	}
 
 	// 6) Now perform GStreamer teardown.

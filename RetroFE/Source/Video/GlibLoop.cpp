@@ -235,5 +235,11 @@ guint GlibLoop::addBusWatch(GstBus* bus, GstBusFunc func, gpointer user_data, GD
 
 void GlibLoop::removeSource(guint sourceId) {
     if (!isRunning() || sourceId == 0) return;
-    invoke([sourceId]() { g_source_remove(sourceId); });
+    invoke([sourceId]() {
+        GMainContext* ctx = GlibLoop::instance().context();
+        GSource* source = g_main_context_find_source_by_id(ctx, sourceId);
+        if (source) {
+            g_source_destroy(source);
+        }
+        });
 }
