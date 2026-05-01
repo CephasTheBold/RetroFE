@@ -999,18 +999,28 @@ bool GStreamerVideo::play(const std::string& file) {
 		if (isStableActive) {
 			LOG_DEBUG("GStreamerVideo", "Pipeline stable. Executing safe instant-uri switch...");
 
+			// 1. Stay in PAUSED to keep the hardware hot and fast
 			gst_element_set_state(pipeline_, GST_STATE_PAUSED);
 
-			// Pass nullptr to keep the Pad Probe alive for the new video!
+			// 2. THE SECRET SAUCE: Manual Flush
+			// This clears the pipes so the new URI's segment is the first thing decoders see.
+			// We use INSTANT_RATE_CHANGE to keep the timeline logic from staggering.
+			gst_element_seek(pipeline_, 1.0, GST_FORMAT_TIME,
+				(GstSeekFlags)(GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_INSTANT_RATE_CHANGE),
+				GST_SEEK_TYPE_SET, 0,
+				GST_SEEK_TYPE_NONE, GST_CLOCK_TIME_NONE);
+
+			// 3. Clean out the sinks so no "ghost frames" from the old video remain
 			detachAndDrainSink(videoSink_, nullptr);
 			guint noProbe = 0;
 			detachAndDrainSink(audioSink_, &noProbe);
 
+			// 4. Update the URI while the pipeline is "flushed"
 			gchar* uri = gst_filename_to_uri(file.c_str(), nullptr);
 			g_object_set(pipeline_, "uri", uri, nullptr);
 			g_free(uri);
 
-			LOG_DEBUG("GStreamerVideo", "instant-uri switch complete. Prerolling.");
+			LOG_DEBUG("GStreamerVideo", "instant-uri switch complete. Waiting for new segment.");
 		}
 		else {
 			if (isBrandNewOrIdle) {
