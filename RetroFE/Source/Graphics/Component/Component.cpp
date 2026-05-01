@@ -53,7 +53,7 @@ void Component::freeGraphicsMemory() {
     menuIndex_ = -1;
 
     // Clear the locally owned animation data to release contiguous vector memory
-    currentAnimation_.Clear();
+    currentAnimation_ = nullptr;
 
     currentTweenIndex_ = 0;
     currentTweenComplete_ = true;
@@ -143,6 +143,8 @@ bool Component::isPlaylistScrolling() const
 
 void Component::setTweens(std::shared_ptr<AnimationEvents> set) {
     tweens_ = std::move(set);
+    currentAnimation_ = nullptr;
+    currentTweenComplete_ = true;
 }
 
 std::string_view Component::filePath()
@@ -153,13 +155,13 @@ std::string_view Component::filePath()
 bool Component::update(float dt) {
     elapsedTweenTime_ += dt;
 
-    // 1. Check for newly requested animations (e.g., from triggerEvent)
+    // 1. Check for newly requested animations
     if (animationRequested_ && !animationRequestedType_.empty() && tweens_) {
         Animation* newTweens = tweens_->getAnimation(animationRequestedType_, menuIndex_);
 
         if (newTweens && newTweens->size() > 0) {
             animationType_ = animationRequestedType_;
-            currentAnimation_ = *newTweens;  // DEEP COPY: Ensures local ownership
+            currentAnimation_ = newTweens;  // THE FIX: Direct pointer assignment! No copy!
             currentTweenIndex_ = 0;
             elapsedTweenTime_ = 0;
             storeViewInfo_ = baseViewInfo;
@@ -178,7 +180,7 @@ bool Component::update(float dt) {
         }
 
         if (idleTweens && idleTweens->size() > 0) {
-            currentAnimation_ = *idleTweens; // DEEP COPY
+            currentAnimation_ = idleTweens; // THE FIX: Direct pointer assignment!
             currentTweenIndex_ = 0;
             elapsedTweenTime_ = 0;
             storeViewInfo_ = baseViewInfo;
@@ -190,7 +192,7 @@ bool Component::update(float dt) {
     if (!currentTweenComplete_) {
         currentTweenComplete_ = animate();
         if (currentTweenComplete_) {
-            currentAnimation_.Clear(); // Free memory once finished
+            currentAnimation_ = nullptr; // Just drop the pointer
             currentTweenIndex_ = 0;
         }
     }
@@ -219,23 +221,25 @@ void Component::draw()
 }
 
 bool Component::animate() {
-    // Check if we have any animation data to process
-    if (currentAnimation_.size() == 0 || currentTweenIndex_ >= currentAnimation_.size()) {
-        return true; // Animation is finished or empty
+    if (!currentAnimation_ || currentAnimation_->size() == 0 || currentTweenIndex_ >= currentAnimation_->size()) {
+        return true;
     }
 
     bool currentDone = true;
-    // Get the current TweenSet from the contiguous vector
-    TweenSet* tweens = currentAnimation_.tweenSet(currentTweenIndex_);
+    double maxDurationInSet = 0.0;
+
+    TweenSet* tweens = currentAnimation_->tweenSet(currentTweenIndex_);
     if (!tweens) return true;
 
     for (unsigned int i = 0; i < tweens->size(); i++) {
         const Tween* tween = tweens->getTween(i);
+        if (!tween) continue;
 
-        // Check if this specific tween is filtered out for the current playlist
         if (!tween->matchesPlaylist(playlistName)) {
             continue;
         }
+
+        maxDurationInSet = std::max(maxDurationInSet, (double)tween->duration);
 
         double elapsedTime = elapsedTweenTime_;
         if (elapsedTime < tween->duration) {
@@ -319,17 +323,25 @@ bool Component::animate() {
         }
     }
 
-    // If all tweens in the current set are done, move to the next set
-    if (currentDone) {
-        currentTweenIndex_++;
-        elapsedTweenTime_ = 0;
-        storeViewInfo_ = baseViewInfo;
+
+if (currentDone) {
+    currentTweenIndex_++;
+
+    // Carry remainder forward instead of discarding it
+    if (maxDurationInSet > 0.0) {
+        elapsedTweenTime_ -= maxDurationInSet;
+        if (elapsedTweenTime_ < 0.0) elapsedTweenTime_ = 0.0;
+    }
+    else {
+        // No applicable tweens => treat as empty set
+        elapsedTweenTime_ = 0.0;
     }
 
-    // Return true if we have completed all sets in the animation
-    return (currentTweenIndex_ >= currentAnimation_.size());
+    storeViewInfo_ = baseViewInfo;
 }
 
+return (currentTweenIndex_ >= currentAnimation_->size());
+}
 bool Component::isPlaying()
 {
     return false;

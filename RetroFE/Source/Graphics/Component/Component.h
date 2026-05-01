@@ -88,7 +88,7 @@ private:
     bool animate();
 
     std::shared_ptr<AnimationEvents> tweens_;
-    Animation currentAnimation_;
+    Animation* currentAnimation_ = nullptr;
     SDL_Texture *backgroundTexture_;
     std::map<int, SDL_Texture*> Component::sharedBackgroundTextures_;
     bool         pauseOnScroll_;
