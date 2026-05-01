@@ -154,10 +154,6 @@ void Text::updateGlyphPositions(FontManager* font, float scale, float maxWidth) 
     double penX = 0.0;
     Uint32 prev = 0;
 
-    struct PosTmp { SDL_Rect src; float packedX, packedY, advance_px; };
-    std::vector<PosTmp> tmp;
-    tmp.reserve(textData_.size());
-
     const char* ptr = textData_.c_str();
     const char* end = ptr + textData_.size();
 
