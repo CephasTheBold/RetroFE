@@ -997,30 +997,32 @@ bool GStreamerVideo::play(const std::string& file) {
 			(current == GST_STATE_NULL || current == GST_STATE_READY);
 
 		if (isStableActive) {
-			LOG_DEBUG("GStreamerVideo", "Pipeline stable. Executing safe instant-uri switch...");
+			LOG_DEBUG("GStreamerVideo", "Pipeline stable. Executing surgical flush and URI switch...");
 
-			// 1. Stay in PAUSED to keep the hardware hot and fast
-			gst_element_set_state(pipeline_, GST_STATE_PAUSED);
+			// 1. Send FLUSH_START to unlock decoders and stop old data flow immediately.
+			// This travels out-of-bounds to clear the buffers that cause flow warnings.
+			GstEvent* flushStart = gst_event_new_flush_start();
+			gst_element_send_event(pipeline_, flushStart);
 
-			// 2. THE SECRET SAUCE: Manual Flush
-			// This clears the pipes so the new URI's segment is the first thing decoders see.
-			// We use INSTANT_RATE_CHANGE to keep the timeline logic from staggering.
-			gst_element_seek(pipeline_, 1.0, GST_FORMAT_TIME,
-				(GstSeekFlags)(GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_INSTANT_RATE_CHANGE),
-				GST_SEEK_TYPE_SET, 0,
-				GST_SEEK_TYPE_NONE, GST_CLOCK_TIME_NONE);
+			// 2. Send FLUSH_STOP with reset_time = TRUE.
+			// This resets the internal clock/segment logic for the new file.
+			GstEvent* flushStop = gst_event_new_flush_stop(TRUE);
+			gst_element_send_event(pipeline_, flushStop);
 
-			// 3. Clean out the sinks so no "ghost frames" from the old video remain
+			// 3. Perform your existing sink drainage
 			detachAndDrainSink(videoSink_, nullptr);
 			guint noProbe = 0;
 			detachAndDrainSink(audioSink_, &noProbe);
 
-			// 4. Update the URI while the pipeline is "flushed"
+			// 4. Set the new URI
 			gchar* uri = gst_filename_to_uri(file.c_str(), nullptr);
 			g_object_set(pipeline_, "uri", uri, nullptr);
 			g_free(uri);
 
-			LOG_DEBUG("GStreamerVideo", "instant-uri switch complete. Waiting for new segment.");
+			// Ensure we are in PAUSED so the new stream can preroll
+			gst_element_set_state(pipeline_, GST_STATE_PAUSED);
+
+			LOG_DEBUG("GStreamerVideo", "Surgical reset complete. Prerolling new URI.");
 		}
 		else {
 			if (isBrandNewOrIdle) {
