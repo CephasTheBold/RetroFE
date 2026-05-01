@@ -616,6 +616,22 @@ bool GStreamerVideo::unload() {
 
 	dimensions_.store({ -1, -1 }, std::memory_order_release);
 
+	// --- THE FIX: DRAIN THE SINKS PHYSICALLY ---
+	// This clears the internal GStreamer buffers (RAM) immediately.
+	// Use nullptr for the video probe to keep it alive for the next video.
+	detachAndDrainSink(videoSink_, nullptr);
+
+	// Audio doesn't have a probe, so we pass a dummy 0.
+	guint noProbe = 0;
+	detachAndDrainSink(audioSink_, &noProbe);
+
+	// 3. Clear the Bus Message queue
+	if (GstBus* bus = gst_element_get_bus(pipeline_)) {
+		gst_bus_set_flushing(bus, TRUE);
+		gst_bus_set_flushing(bus, FALSE);
+		gst_object_unref(bus);
+	}
+
 	if (videoSourceId_ != 0) {
 		AudioBus::instance().setGain(audioHandle_, 0.0f);
 		AudioBus::instance().clear(audioHandle_);
@@ -748,7 +764,7 @@ bool GStreamerVideo::createPipelineIfNeeded() {
 		"emit-signals", FALSE,
 		"max-buffers", 16,          // Increased from 8 - more buffering
 		"qos", FALSE,               // Disable QoS - we want all audio
-		"drop", FALSE,              // Don't drop audio samples!
+		"drop", TRUE,              // Don't drop audio samples!
 		"sync", TRUE,               // Keep sync on for A/V timing
 		"enable-last-sample", FALSE,
 		"wait-on-eos", FALSE,
@@ -1159,20 +1175,21 @@ void GStreamerVideo::elementSetupCallback([[maybe_unused]] GstElement* playbin,
 		return g_object_class_find_property(G_OBJECT_GET_CLASS(e), p) != nullptr;
 		};
 
-	// ---- Tune multiqueue to reduce CPU churn ----
+	// ---- Hard-cap multiqueue to prevent "Megabyte Creep" ----
 	if (g_str_has_prefix(name, "multiqueue")) {
-		if (has_prop(element, "max-size-buffers")) g_object_set(element, "max-size-buffers", 0, NULL);
-		if (has_prop(element, "max-size-bytes"))   g_object_set(element, "max-size-bytes", (guint64)0, NULL);
-		if (has_prop(element, "max-size-time"))    g_object_set(element, "max-size-time", (guint64)(300 * GST_MSECOND), NULL);
-		if (has_prop(element, "low-percent"))      g_object_set(element, "low-percent", 30, NULL);
-		if (has_prop(element, "high-percent"))     g_object_set(element, "high-percent", 75, NULL);
-		if (has_prop(element, "sync-by-running-time"))
-			g_object_set(element, "sync-by-running-time", TRUE, NULL);
+		// Change 0 (unlimited) to small, strict numbers.
+		if (has_prop(element, "max-size-buffers")) g_object_set(element, "max-size-buffers", 5, NULL);
+		if (has_prop(element, "max-size-bytes"))   g_object_set(element, "max-size-bytes", (guint64)(2 * 1024 * 1024), NULL); // 2MB Cap
+		if (has_prop(element, "max-size-time"))    g_object_set(element, "max-size-time", (guint64)(100 * GST_MSECOND), NULL); // 100ms instead of 300ms
+
+		if (has_prop(element, "low-percent"))      g_object_set(element, "low-percent", 10, NULL);
+		if (has_prop(element, "high-percent"))     g_object_set(element, "high-percent", 20, NULL);
 	}
 
-	// ---- Tune plain queues (if present) ----
-	if (g_str_has_prefix(name, "vqueue")) {
+	// ---- Target audio/video queues specifically ----
+	if (g_str_has_prefix(name, "aqueue") || g_str_has_prefix(name, "vqueue")) {
 		if (has_prop(element, "max-size-buffers")) g_object_set(element, "max-size-buffers", 2, NULL);
+		if (has_prop(element, "max-size-bytes"))   g_object_set(element, "max-size-bytes", (guint64)(1024 * 512), NULL); // 512KB
 		if (has_prop(element, "silent"))           g_object_set(element, "silent", TRUE, NULL);
 	}
 
