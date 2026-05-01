@@ -749,7 +749,7 @@ bool GStreamerVideo::createPipelineIfNeeded() {
 		"emit-signals", FALSE,
 		"max-buffers", 16,          // Increased from 8 - more buffering
 		"qos", FALSE,               // Disable QoS - we want all audio
-		"drop", FALSE,              // Don't drop audio samples!
+		"drop", TRUE,              // Don't drop audio samples!
 		"sync", TRUE,               // Keep sync on for A/V timing
 		"enable-last-sample", FALSE,
 		"wait-on-eos", FALSE,
@@ -1017,10 +1017,6 @@ bool GStreamerVideo::play(const std::string& file) {
 				gst_event_unref(flushStop); // Prevent memory leak on failure
 			}
 
-			if (audioSink_) {
-				gst_element_set_state(audioSink_, GST_STATE_READY);
-			}
-
 			// 3. Perform your existing sink drainage
 			detachAndDrainSink(videoSink_, nullptr);
 			guint noProbe = 0;
@@ -1030,10 +1026,6 @@ bool GStreamerVideo::play(const std::string& file) {
 			gchar* uri = gst_filename_to_uri(file.c_str(), nullptr);
 			g_object_set(pipeline_, "uri", uri, nullptr);
 			g_free(uri);
-
-			if (audioSink_) {
-				gst_element_set_state(audioSink_, GST_STATE_PAUSED);
-			}
 
 			// Ensure we are in PAUSED so the new stream can preroll
 			gst_element_set_state(pipeline_, GST_STATE_PAUSED);
