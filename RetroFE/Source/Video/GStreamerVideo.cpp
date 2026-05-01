@@ -605,6 +605,12 @@ bool GStreamerVideo::unload() {
 	// 2. STOP THE INTERNAL CLOCK (Fixes the "Ghost State")
 	gst_element_set_state(pipeline_, GST_STATE_PAUSED);
 
+	if (GstBus* bus = gst_element_get_bus(pipeline_)) {
+		gst_bus_set_flushing(bus, TRUE);  // Drops all pending messages instantly
+		gst_bus_set_flushing(bus, FALSE); // Re-enables delivery for the next video
+		gst_object_unref(bus);            // Release our handle to the bus
+	}
+
 	// 3. Visual & Audio disconnect
 	isTextureReady_ = false; // <-- The UI now receives nullptr from getTexture()
 	// Do NOT destroy or nullify texture_ here! It lives on in VRAM.
@@ -999,15 +1005,17 @@ bool GStreamerVideo::play(const std::string& file) {
 		if (isStableActive) {
 			LOG_DEBUG("GStreamerVideo", "Pipeline stable. Executing surgical flush and URI switch...");
 
-			// 1. Send FLUSH_START to unlock decoders and stop old data flow immediately.
-			// This travels out-of-bounds to clear the buffers that cause flow warnings.
+			// 1. Flush Start
 			GstEvent* flushStart = gst_event_new_flush_start();
-			gst_element_send_event(pipeline_, flushStart);
+			if (!gst_element_send_event(pipeline_, flushStart)) {
+				gst_event_unref(flushStart); // Prevent memory leak on failure
+			}
 
-			// 2. Send FLUSH_STOP with reset_time = TRUE.
-			// This resets the internal clock/segment logic for the new file.
+			// 2. Flush Stop
 			GstEvent* flushStop = gst_event_new_flush_stop(TRUE);
-			gst_element_send_event(pipeline_, flushStop);
+			if (!gst_element_send_event(pipeline_, flushStop)) {
+				gst_event_unref(flushStop); // Prevent memory leak on failure
+			}
 
 			// 3. Perform your existing sink drainage
 			detachAndDrainSink(videoSink_, nullptr);
