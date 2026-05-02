@@ -219,23 +219,25 @@ void Component::draw()
 }
 
 bool Component::animate() {
-    // Check if we have any animation data to process
     if (currentAnimation_.size() == 0 || currentTweenIndex_ >= currentAnimation_.size()) {
-        return true; // Animation is finished or empty
+        return true;
     }
 
     bool currentDone = true;
-    // Get the current TweenSet from the contiguous vector
+    double maxDurationInSet = 0.0;
+
     TweenSet* tweens = currentAnimation_.tweenSet(currentTweenIndex_);
     if (!tweens) return true;
 
     for (unsigned int i = 0; i < tweens->size(); i++) {
         const Tween* tween = tweens->getTween(i);
+        if (!tween) continue;
 
-        // Check if this specific tween is filtered out for the current playlist
         if (!tween->matchesPlaylist(playlistName)) {
             continue;
         }
+
+        maxDurationInSet = std::max(maxDurationInSet, (double)tween->duration);
 
         double elapsedTime = elapsedTweenTime_;
         if (elapsedTime < tween->duration) {
@@ -319,17 +321,25 @@ bool Component::animate() {
         }
     }
 
-    // If all tweens in the current set are done, move to the next set
+
     if (currentDone) {
         currentTweenIndex_++;
-        elapsedTweenTime_ = 0;
+
+        // Carry remainder forward instead of discarding it
+        if (maxDurationInSet > 0.0) {
+            elapsedTweenTime_ -= maxDurationInSet;
+            if (elapsedTweenTime_ < 0.0) elapsedTweenTime_ = 0.0;
+        }
+        else {
+            // No applicable tweens => treat as empty set
+            elapsedTweenTime_ = 0.0;
+        }
+
         storeViewInfo_ = baseViewInfo;
     }
 
-    // Return true if we have completed all sets in the animation
     return (currentTweenIndex_ >= currentAnimation_.size());
 }
-
 bool Component::isPlaying()
 {
     return false;
