@@ -608,7 +608,7 @@ bool GStreamerVideo::unload() {
 	targetState_.store(IVideo::VideoState::None, std::memory_order_release);
 
 	// 2. STOP THE INTERNAL CLOCK (Fixes the "Ghost State")
-	gst_element_set_state(pipeline_, GST_STATE_PAUSED);
+	gst_element_set_state(pipeline_, GST_STATE_READY);
 
 	// 3. Visual & Audio disconnect
 	isTextureReady_ = false; // <-- The UI now receives nullptr from getTexture()
@@ -998,11 +998,11 @@ bool GStreamerVideo::play(const std::string& file) {
 		(current == GST_STATE_PLAYING || current == GST_STATE_PAUSED);
 
 	if (isStableActive) {
-		LOG_DEBUG("GStreamerVideo", "Pipeline stable. Executing safe instant-uri switch...");
+		LOG_DEBUG("GStreamerVideo", "Pipeline stable. Executing safe URI switch...");
 
-		gst_element_set_state(pipeline_, GST_STATE_PAUSED);
+		// Force the pipeline to READY to destroy old stream collections and free memory
+		gst_element_set_state(pipeline_, GST_STATE_READY);
 
-		// Keep the Pad Probe alive for the new video by passing nullptr
 		detachAndDrainSink(videoSink_, nullptr);
 		guint noProbe = 0;
 		detachAndDrainSink(audioSink_, &noProbe);
@@ -1011,7 +1011,10 @@ bool GStreamerVideo::play(const std::string& file) {
 		g_object_set(pipeline_, "uri", uri, nullptr);
 		g_free(uri);
 
-		LOG_DEBUG("GStreamerVideo", "instant-uri switch complete. Prerolling.");
+		// Bring back to PAUSED to trigger the new preroll
+		gst_element_set_state(pipeline_, GST_STATE_PAUSED);
+
+		LOG_DEBUG("GStreamerVideo", "URI switch complete. Prerolling.");
 	}
 	else {
 		// Cold boot fallback
