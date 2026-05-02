@@ -477,7 +477,6 @@ bool GStreamerVideo::stop() {
 	guint padProbeId = 0;
 	guint busWatchId = 0;
 	guint elementSetupHandlerId = 0;
-	AudioBus::SourceId videoSourceId = 0;
 
 	{
 		std::lock_guard<std::mutex> lock(asyncState_->mutex);
@@ -491,7 +490,6 @@ bool GStreamerVideo::stop() {
 		padProbeId = padProbeId_;
 		busWatchId = std::exchange(busWatchId_, 0);
 		elementSetupHandlerId = elementSetupHandlerId_;
-		videoSourceId = videoSourceId_;
 
 		// We’ll remove probe + drain sinks while we still have pointers,
 		// but do it outside the lock (see below).
