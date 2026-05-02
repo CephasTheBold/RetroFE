@@ -768,7 +768,6 @@ bool GStreamerVideo::createPipelineIfNeeded() {
 		"sync", TRUE,               // Keep sync on for A/V timing
 		"enable-last-sample", FALSE,
 		"wait-on-eos", FALSE,
-		"async", FALSE,             // Audio doesn't need async state changes
 		nullptr);
 
 	// --- ONE-TIME CALLBACK REGISTRATION (AUDIO) ---
@@ -808,11 +807,6 @@ bool GStreamerVideo::createPipelineIfNeeded() {
 	GstCaps* acaps = gst_caps_from_string(ss.str().c_str());
 	gst_app_sink_set_caps(GST_APP_SINK(audioSink_), acaps);
 	gst_caps_unref(acaps);
-
-	// Force the system clock and disable auto reselection
-	GstClock* sys = gst_system_clock_obtain();
-	gst_pipeline_use_clock(GST_PIPELINE(pipeline_), sys);
-	gst_object_unref(sys);
 
 	// Set playbin flags and properties.
 	gint flags = GST_PLAY_FLAG_VIDEO | GST_PLAY_FLAG_AUDIO;
