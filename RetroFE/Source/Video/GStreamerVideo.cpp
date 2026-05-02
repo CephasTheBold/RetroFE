@@ -597,59 +597,64 @@ bool GStreamerVideo::stop() {
 }
 
 bool GStreamerVideo::unload() {
-	if (!initialized_ || !pipeline_) return false;
+	if (!initialized_) return false;
 
-	std::lock_guard<std::mutex> lock(asyncState_->mutex);
+	// 1. MAIN THREAD: Invalidate instantly
+	const uint64_t sessionId = nextUniquePlaySessionId_++;
+	currentPlaySessionId_.store(sessionId, std::memory_order_release);
 
-	// Invalidate the session so any lingering ThreadPool tasks instantly abort
-	currentPlaySessionId_.store(nextUniquePlaySessionId_++, std::memory_order_release);
-
-	// 1. Lock out UI spam
+	// Immediate UI feedback
 	targetState_.store(IVideo::VideoState::None, std::memory_order_release);
-
-	// 2. STOP THE INTERNAL CLOCK (Fixes the "Ghost State")
-	gst_element_set_state(pipeline_, GST_STATE_READY);
-
-	// 3. Visual & Audio disconnect
-	isTextureReady_ = false; // <-- The UI now receives nullptr from getTexture()
-	// Do NOT destroy or nullify texture_ here! It lives on in VRAM.
-
+	isTextureReady_ = false;
 	dimensions_.store({ -1, -1 }, std::memory_order_release);
-
-	// --- THE FIX: DRAIN THE SINKS PHYSICALLY ---
-	// This clears the internal GStreamer buffers (RAM) immediately.
-	// Use nullptr for the video probe to keep it alive for the next video.
-	detachAndDrainSink(videoSink_, nullptr);
-
-	// Audio doesn't have a probe, so we pass a dummy 0.
-	guint noProbe = 0;
-	detachAndDrainSink(audioSink_, &noProbe);
-
-	// 3. Clear the Bus Message queue
-	if (GstBus* bus = gst_element_get_bus(pipeline_)) {
-		gst_bus_set_flushing(bus, TRUE);
-		gst_bus_set_flushing(bus, FALSE);
-		gst_object_unref(bus);
-	}
-
-	if (videoSourceId_ != 0) {
-		AudioBus::instance().setGain(audioHandle_, 0.0f);
-		AudioBus::instance().clear(audioHandle_);
-	}
-
-	// 4. Flush residual buffers so the old frame doesn't flash
-	if (GstSample* old = stagedSample_.exchange(nullptr, std::memory_order_acq_rel)) {
-		gst_sample_unref(old);
-	}
-
 	currentFile_ = "";
-	playCount_ = 0;
-	numLoops_ = 0;
+
+	// Reset flags
 	hasError_.store(false, std::memory_order_release);
 	hasVideoStream_.store(false, std::memory_order_release);
 	loopsFinished_.store(false, std::memory_order_release);
 
-	LOG_DEBUG("GStreamerVideo", "Unload: Pipeline paused and returned to pool cleanly.");
+	auto state = asyncState_;
+
+	ThreadPool::getInstance().enqueue([this, sessionId, state]() {
+		// --- GATE 1: Check before taking the lock ---
+		if (currentPlaySessionId_.load(std::memory_order_acquire) != sessionId) return;
+
+		std::lock_guard<std::mutex> lock(state->mutex);
+
+		// --- GATE 2: Check after taking the lock ---
+		// If a new 'play' call happened while we waited for the mutex, abort cleanup.
+		if (!state->alive.load(std::memory_order_acquire) ||
+			currentPlaySessionId_.load(std::memory_order_acquire) != sessionId) {
+			return;
+		}
+
+		if (!pipeline_) return;
+
+		// THE FIX: Move to READY to physically free all internal buffers.
+		// This is what fixed your memory leak.
+		gst_element_set_state(pipeline_, GST_STATE_READY);
+
+		// Clear our local atomic sample reference
+		if (GstSample* old = stagedSample_.exchange(nullptr, std::memory_order_acq_rel)) {
+			gst_sample_unref(old);
+		}
+
+		// Vacuum the Bus (Still good practice to avoid stale messages in the queue)
+		if (GstBus* bus = gst_element_get_bus(pipeline_)) {
+			gst_bus_set_flushing(bus, TRUE);
+			gst_bus_set_flushing(bus, FALSE);
+			gst_object_unref(bus);
+		}
+
+		if (videoSourceId_ != 0) {
+			AudioBus::instance().setGain(audioHandle_, 0.0f);
+			AudioBus::instance().clear(audioHandle_);
+		}
+
+		LOG_DEBUG("GStreamerVideo", "Unload session " + std::to_string(sessionId) + " complete. Pipeline in READY state.");
+		});
+
 	return true;
 }
 
@@ -764,7 +769,7 @@ bool GStreamerVideo::createPipelineIfNeeded() {
 		"emit-signals", FALSE,
 		"max-buffers", 16,          // Increased from 8 - more buffering
 		"qos", FALSE,               // Disable QoS - we want all audio
-		"drop", TRUE,              // Don't drop audio samples!
+		"drop", TRUE,
 		"sync", TRUE,               // Keep sync on for A/V timing
 		"enable-last-sample", FALSE,
 		"wait-on-eos", FALSE,
@@ -812,7 +817,6 @@ bool GStreamerVideo::createPipelineIfNeeded() {
 	gint flags = GST_PLAY_FLAG_VIDEO | GST_PLAY_FLAG_AUDIO;
 	flags &= ~(1 << 4);  // Clear GST_PLAY_FLAG_SOFT_VOLUME
 	g_object_set(pipeline_, "flags", flags, "instant-uri", TRUE, nullptr);
-	g_object_set(pipeline_, "async-handling", TRUE, nullptr);
 
 	// Configure appsink.
 	g_object_set(videoSink_,
@@ -958,85 +962,51 @@ bool GStreamerVideo::createPipelineIfNeeded() {
 }
 
 bool GStreamerVideo::play(const std::string& file) {
-	if (!initialized_) {
-		LOG_ERROR("GStreamerVideo", "Play called but GStreamer not initialized for file: " + file);
-		hasError_.store(true, std::memory_order_release);
-		return false;
-	}
+	if (!initialized_) return false;
 
-	// 1. Instantly update session IDs and basic state on the calling thread
+	// 1. Main Thread: Immediate UI/State update
 	const uint64_t newSessionId = nextUniquePlaySessionId_++;
 	currentPlaySessionId_.store(newSessionId, std::memory_order_release);
-	loopsFinished_.store(false, std::memory_order_release);
-	hasVideoStream_.store(false, std::memory_order_release);
-	dimensions_.store({ -1, -1 }, std::memory_order_release);
+
 	currentFile_ = file;
-
-	LOG_DEBUG("GStreamerVideo", "Starting play (synchronous) for " + file + " (Session: " + std::to_string(newSessionId) + ")");
-
 	pipeLineReady_.store(false, std::memory_order_release);
 	targetState_.store(IVideo::VideoState::Paused, std::memory_order_release);
+	dimensions_.store({ -1, -1 }, std::memory_order_release);
 
-	// 2. Execute the GStreamer switch immediately under the lock
-	// This prevents the "task backlog" memory leak during rapid scrolls.
-	std::lock_guard<std::mutex> lock(asyncState_->mutex);
+	auto state = asyncState_;
 
-	if (!asyncState_->alive.load(std::memory_order_acquire)) return false;
+	ThreadPool::getInstance().enqueue([this, file, newSessionId, state]() {
+		// Early abort if user already scrolled past
+		if (currentPlaySessionId_.load(std::memory_order_acquire) != newSessionId) return;
 
-	if (!createPipelineIfNeeded()) {
-		LOG_ERROR("GStreamerVideo", "Failed to create pipeline for " + file);
-		hasError_.store(true, std::memory_order_release);
-		return false;
-	}
+		std::lock_guard<std::mutex> lock(state->mutex);
+		if (!state->alive.load(std::memory_order_acquire) ||
+			currentPlaySessionId_.load(std::memory_order_acquire) != newSessionId) return;
 
-	// --- STRICT INSTANT-URI SERIALIZATION LOGIC ---
-	GstState current = GST_STATE_NULL, pending = GST_STATE_NULL;
-	GstStateChangeReturn ret = gst_element_get_state(pipeline_, &current, &pending, 0);
+		if (!createPipelineIfNeeded()) return;
 
-	// State 1: Hot and ready for instant-uri
-	bool isStableActive = (ret == GST_STATE_CHANGE_SUCCESS || ret == GST_STATE_CHANGE_NO_PREROLL) &&
-		(current == GST_STATE_PLAYING || current == GST_STATE_PAUSED);
+		// Clear the atomic C++ pointer for the current instance
+		if (GstSample* old = stagedSample_.exchange(nullptr, std::memory_order_acq_rel)) {
+			gst_sample_unref(old);
+		}
 
-	if (isStableActive) {
-		LOG_DEBUG("GStreamerVideo", "Pipeline stable. Executing safe URI switch...");
-
-		// Force the pipeline to READY to destroy old stream collections and free memory
-		gst_element_set_state(pipeline_, GST_STATE_READY);
-
-		detachAndDrainSink(videoSink_, nullptr);
-		guint noProbe = 0;
-		detachAndDrainSink(audioSink_, &noProbe);
-
+		// Apply new URI
 		gchar* uri = gst_filename_to_uri(file.c_str(), nullptr);
 		g_object_set(pipeline_, "uri", uri, nullptr);
 		g_free(uri);
 
-		// Bring back to PAUSED to trigger the new preroll
+		// Move back to PAUSED to begin the fresh preroll
 		gst_element_set_state(pipeline_, GST_STATE_PAUSED);
 
-		LOG_DEBUG("GStreamerVideo", "URI switch complete. Prerolling.");
-	}
-	else {
-		// Cold boot fallback
-		gst_element_set_state(pipeline_, GST_STATE_NULL);
+		// Audio setup
+		if (videoSourceId_ == 0) {
+			videoSourceId_ = AudioBus::instance().addSource("video-preview");
+			audioHandle_ = AudioBus::instance().getHandle(videoSourceId_);
+		}
+		AudioBus::instance().setGain(audioHandle_, 0.0f);
 
-		detachAndDrainSink(videoSink_, nullptr);
-		guint noProbe = 0;
-		detachAndDrainSink(audioSink_, &noProbe);
-
-		gchar* uri = gst_filename_to_uri(file.c_str(), nullptr);
-		g_object_set(pipeline_, "uri", uri, nullptr);
-		g_free(uri);
-
-		gst_element_set_state(pipeline_, GST_STATE_PAUSED);
-	}
-
-	// Audio initialization
-	if (videoSourceId_ == 0) {
-		videoSourceId_ = AudioBus::instance().addSource("video-preview");
-		audioHandle_ = AudioBus::instance().getHandle(videoSourceId_);
-	}
-	AudioBus::instance().setGain(audioHandle_, 0.0f);
+		LOG_DEBUG("GStreamerVideo", "Play session " + std::to_string(newSessionId) + " initiated.");
+		});
 
 	return true;
 }
@@ -1141,7 +1111,7 @@ GstPadProbeReturn GStreamerVideo::padProbeCallback(GstPad* /*pad*/, GstPadProbeI
 void GStreamerVideo::elementSetupCallback([[maybe_unused]] GstElement* playbin,
 	GstElement* element,
 	[[maybe_unused]] gpointer data) {
-	const gchar* name = gst_element_get_name(element);
+	const gchar* name = GST_OBJECT_NAME(element);
 
 	auto has_prop = [](GstElement* e, const char* p) {
 		return g_object_class_find_property(G_OBJECT_GET_CLASS(e), p) != nullptr;
@@ -1153,7 +1123,7 @@ void GStreamerVideo::elementSetupCallback([[maybe_unused]] GstElement* playbin,
 		if (has_prop(element, "max-size-buffers")) g_object_set(element, "max-size-buffers", 5, NULL);
 		if (has_prop(element, "max-size-bytes"))   g_object_set(element, "max-size-bytes", (guint64)(2 * 1024 * 1024), NULL); // 2MB Cap
 		if (has_prop(element, "max-size-time"))    g_object_set(element, "max-size-time", (guint64)(100 * GST_MSECOND), NULL); // 100ms instead of 300ms
-
+		if (has_prop(element, "use-interleave")) g_object_set(element, "use-interleave", FALSE, NULL);
 		if (has_prop(element, "low-percent"))      g_object_set(element, "low-percent", 10, NULL);
 		if (has_prop(element, "high-percent"))     g_object_set(element, "high-percent", 20, NULL);
 	}
@@ -1179,9 +1149,8 @@ void GStreamerVideo::elementSetupCallback([[maybe_unused]] GstElement* playbin,
 
 GstFlowReturn GStreamerVideo::on_new_preroll(GstAppSink* sink, gpointer user_data) {
 	auto* ctx = static_cast<CallbackCtx*>(user_data);
-	if (!ctx || !ctx->state || !ctx->state->alive.load(std::memory_order_acquire)) {
+	if (!ctx || !ctx->state || !ctx->state->alive.load(std::memory_order_acquire))
 		return GST_FLOW_OK;
-	}
 
 	auto* self = ctx->self.load(std::memory_order_acquire);
 	if (!self) return GST_FLOW_OK;
@@ -1189,15 +1158,6 @@ GstFlowReturn GStreamerVideo::on_new_preroll(GstAppSink* sink, gpointer user_dat
 	GstSample* preroll = gst_app_sink_pull_preroll(sink);
 	if (!preroll) return GST_FLOW_OK;
 
-	// Teardown race after pull
-	if (!ctx->state->alive.load(std::memory_order_acquire) || ctx->self == nullptr) {
-		gst_sample_unref(preroll);
-		return GST_FLOW_OK;
-	}
-
-	// --- THE FIX: ANTI-GHOST FRAME GATE ---
-	// If unload() was called on the Main Thread while we were pulling the sample, 
-	// discard this frame immediately so it doesn't bleed into the next play session.
 	if (self->targetState_.load(std::memory_order_acquire) == IVideo::VideoState::None) {
 		gst_sample_unref(preroll);
 		return GST_FLOW_OK;
@@ -1224,9 +1184,8 @@ GstFlowReturn GStreamerVideo::on_new_preroll(GstAppSink* sink, gpointer user_dat
 
 GstFlowReturn GStreamerVideo::on_new_sample(GstAppSink* sink, gpointer user_data) {
 	auto* ctx = static_cast<CallbackCtx*>(user_data);
-	if (!ctx || !ctx->state || !ctx->state->alive.load(std::memory_order_acquire)) {
+	if (!ctx || !ctx->state || !ctx->state->alive.load(std::memory_order_acquire))
 		return GST_FLOW_OK;
-	}
 
 	auto* self = ctx->self.load(std::memory_order_acquire);
 	if (!self) return GST_FLOW_OK;
@@ -1234,13 +1193,6 @@ GstFlowReturn GStreamerVideo::on_new_sample(GstAppSink* sink, gpointer user_data
 	GstSample* s = gst_app_sink_pull_sample(sink);
 	if (!s) return GST_FLOW_OK;
 
-	// Teardown race after pull
-	if (!ctx->state->alive.load(std::memory_order_acquire) || ctx->self == nullptr) {
-		gst_sample_unref(s);
-		return GST_FLOW_OK;
-	}
-
-	// --- THE FIX: ANTI-GHOST FRAME GATE ---
 	if (self->targetState_.load(std::memory_order_acquire) == IVideo::VideoState::None) {
 		gst_sample_unref(s);
 		return GST_FLOW_OK;
@@ -1273,15 +1225,8 @@ GstFlowReturn GStreamerVideo::on_audio_new_sample(GstAppSink* sink, gpointer use
 	auto* self = ctx->self.load(std::memory_order_acquire);
 	if (!self) return GST_FLOW_OK;
 
-	// Always pull to keep the queue drained (drop=FALSE)
 	GstSample* s = gst_app_sink_pull_sample(sink);
 	if (!s) return GST_FLOW_OK;
-
-	// NEW: if handle isn't ready, drain sample and exit
-	if (!self->audioHandle_) {
-		gst_sample_unref(s);
-		return GST_FLOW_OK;
-	}
 
 	const bool active =
 		self->audioHandle_ &&
