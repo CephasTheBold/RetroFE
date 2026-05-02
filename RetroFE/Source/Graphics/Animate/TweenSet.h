@@ -29,7 +29,6 @@ public:
 
     void push(const Tween& tween); // Changed to take object by reference
     void clear();
-    void clearDynamicTweens();
     Tween* getTween(unsigned int index); // Returns pointer to internal object
 
     size_t size() const;

@@ -42,7 +42,6 @@ public:
     TweenProperty property;
     float  duration;
     bool   startDefined{ true };
-    bool dynamic{ false };
     std::string playlistFilter;
     std::vector<std::string> playlistFilterTokens;
 
