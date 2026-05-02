@@ -47,6 +47,7 @@ public:
     void pause() override;
     void resume();
     void restart() override;
+    void setCenterMode(bool isCenterMode);
     unsigned long long getCurrent() override;
     unsigned long long getDuration() override;
     bool isPaused() override;

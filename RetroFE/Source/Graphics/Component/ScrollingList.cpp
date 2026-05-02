@@ -219,6 +219,16 @@ void ScrollingList::deallocateSpritePoints() {
     }
 }
 
+void ScrollingList::notifyVideoCenterMode() {
+    if (videoType_ == "null") return;  // no video slots in this list
+    const size_t N = components_.size();
+    for (size_t i = 0; i < N; ++i) {
+        if (auto* vc = dynamic_cast<VideoComponent*>(components_[i])) {
+            vc->setCenterMode(i == selectedOffsetIndex_);
+        }
+    }
+}
+
 void ScrollingList::allocateSpritePoints() {
     if (!items_ || items_->empty()) return;
     if (!scrollPoints_ || scrollPoints_->empty()) return;
@@ -238,6 +248,9 @@ void ScrollingList::allocateSpritePoints() {
             resetTweens(c, (*tweenPoints_)[i], view, view, 0);
         }
     }
+
+    // Notify each video slot of its center/side role so audio is managed correctly.
+    notifyVideoCenterMode();
 }
 
 void ScrollingList::reallocateSpritePoints() {
@@ -1341,6 +1354,10 @@ void ScrollingList::scroll(bool forward) {
     }
 
     components_.rotate(forward);
+
+    // Notify each video slot of its updated center/side role after the rotation.
+    // Center slot (selectedOffsetIndex_) enables audio; all others mute.
+    notifyVideoCenterMode();
 }
 
 bool ScrollingList::isPlaylist() const

@@ -334,6 +334,13 @@ void VideoComponent::resume() {
 	videoInst_->resume();
 }
 
+void VideoComponent::setCenterMode(bool isCenterMode) {
+	if (!videoInst_) return;
+	if (auto* gst = dynamic_cast<GStreamerVideo*>(videoInst_.get())) {
+		gst->setCenterMode(isCenterMode);
+	}
+}
+
 
 void VideoComponent::restart() {
 	if (!videoInst_) {

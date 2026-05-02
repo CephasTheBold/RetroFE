@@ -633,6 +633,21 @@ bool GStreamerVideo::unload() {
 		// This is what fixed your memory leak.
 		gst_element_set_state(pipeline_, GST_STATE_READY);
 
+		// Drain both appsinks after READY to ensure no stale samples linger.
+		// This prevents old-URI frames from flashing on the next play().
+		if (videoSink_ && GST_IS_APP_SINK(videoSink_)) {
+			while (GstSample* s = gst_app_sink_try_pull_sample(GST_APP_SINK(videoSink_), 0))
+				gst_sample_unref(s);
+			while (GstSample* s = gst_app_sink_try_pull_preroll(GST_APP_SINK(videoSink_), 0))
+				gst_sample_unref(s);
+		}
+		if (audioSink_ && GST_IS_APP_SINK(audioSink_)) {
+			while (GstSample* s = gst_app_sink_try_pull_sample(GST_APP_SINK(audioSink_), 0))
+				gst_sample_unref(s);
+			while (GstSample* s = gst_app_sink_try_pull_preroll(GST_APP_SINK(audioSink_), 0))
+				gst_sample_unref(s);
+		}
+
 		// Clear our local atomic sample reference
 		if (GstSample* old = stagedSample_.exchange(nullptr, std::memory_order_acq_rel)) {
 			gst_sample_unref(old);
@@ -812,8 +827,11 @@ bool GStreamerVideo::createPipelineIfNeeded() {
 	gst_caps_unref(acaps);
 
 	// Set playbin flags and properties.
+	// Start with VIDEO|AUDIO; clear flags we never want.
 	gint flags = GST_PLAY_FLAG_VIDEO | GST_PLAY_FLAG_AUDIO;
-	flags &= ~(1 << 4);  // Clear GST_PLAY_FLAG_SOFT_VOLUME
+	flags &= ~GST_PLAY_FLAG_SOFT_VOLUME;   // we manage volume via AudioBus
+	flags &= ~GST_PLAY_FLAG_BUFFERING;     // no buffering logic for local files
+	flags &= ~GST_PLAY_FLAG_TEXT;          // no subtitles/text tracks
 	g_object_set(pipeline_, "flags", flags, "instant-uri", TRUE, nullptr);
 
 	// Configure appsink.
@@ -857,11 +875,16 @@ bool GStreamerVideo::createPipelineIfNeeded() {
 		else {
 			videoCaps = gst_caps_from_string(
 				"video/x-raw,format=(string)I420,pixel-aspect-ratio=(fraction)1/1");
-			elementSetupHandlerId_ = g_signal_connect(pipeline_, "element-setup",
-				G_CALLBACK(elementSetupCallback), this);
 			sdlFormat_ = SDL_PIXELFORMAT_IYUV;
 			LOG_DEBUG("GStreamerVideo", "SDL pixel format: SDL_PIXELFORMAT_IYUV (HW accel: false)");
 		}
+	}
+
+	// Connect element-setup unconditionally so multiqueue is tuned in both HW and SW paths.
+	// Decoder-specific tweaks remain conditional inside the callback.
+	if (elementSetupHandlerId_ == 0) {
+		elementSetupHandlerId_ = g_signal_connect(pipeline_, "element-setup",
+			G_CALLBACK(elementSetupCallback), this);
 	}
 	gst_app_sink_set_caps(GST_APP_SINK(videoSink_), videoCaps);
 	gst_caps_unref(videoCaps);
@@ -970,6 +993,7 @@ bool GStreamerVideo::play(const std::string& file) {
 	pipeLineReady_.store(false, std::memory_order_release);
 	targetState_.store(IVideo::VideoState::Paused, std::memory_order_release);
 	dimensions_.store({ -1, -1 }, std::memory_order_release);
+	audioEnabled_ = true;  // play() always enables audio
 
 	auto state = asyncState_;
 
@@ -1009,7 +1033,199 @@ bool GStreamerVideo::play(const std::string& file) {
 	return true;
 }
 
-GstPadProbeReturn GStreamerVideo::padProbeCallback(GstPad* /*pad*/, GstPadProbeInfo* info, gpointer user_data) {
+bool GStreamerVideo::prime(const std::string& file, bool enableAudio) {
+	if (!initialized_) return false;
+
+	LOG_INFO("GStreamerVideo", "Prime start: " + file +
+		" (audio=" + (enableAudio ? "enabled" : "disabled") + ")");
+
+	// 1. Main Thread: Immediate UI/State update
+	const uint64_t newSessionId = nextUniquePlaySessionId_++;
+	currentPlaySessionId_.store(newSessionId, std::memory_order_release);
+
+	currentFile_ = file;
+	pipeLineReady_.store(false, std::memory_order_release);
+	targetState_.store(IVideo::VideoState::Paused, std::memory_order_release);
+	dimensions_.store({ -1, -1 }, std::memory_order_release);
+	audioEnabled_ = enableAudio;
+
+	auto state = asyncState_;
+
+	ThreadPool::getInstance().enqueue([this, file, enableAudio, newSessionId, state]() {
+		if (currentPlaySessionId_.load(std::memory_order_acquire) != newSessionId) return;
+
+		std::lock_guard<std::mutex> lock(state->mutex);
+		if (!state->alive.load(std::memory_order_acquire) ||
+			currentPlaySessionId_.load(std::memory_order_acquire) != newSessionId) return;
+
+		if (!createPipelineIfNeeded()) return;
+
+		// Apply audio flags BEFORE setting URI so the pipeline is built correctly.
+		gint flags = GST_PLAY_FLAG_VIDEO;
+		if (enableAudio) flags |= GST_PLAY_FLAG_AUDIO;
+		flags &= ~GST_PLAY_FLAG_SOFT_VOLUME;
+		flags &= ~GST_PLAY_FLAG_BUFFERING;
+		flags &= ~GST_PLAY_FLAG_TEXT;
+		g_object_set(pipeline_, "flags", flags, nullptr);
+
+		// Clear any stale sample from a previous URI
+		if (GstSample* old = stagedSample_.exchange(nullptr, std::memory_order_acq_rel)) {
+			gst_sample_unref(old);
+		}
+
+		// Set new URI and begin preroll
+		gchar* uri = gst_filename_to_uri(file.c_str(), nullptr);
+		g_object_set(pipeline_, "uri", uri, nullptr);
+		g_free(uri);
+
+		gst_element_set_state(pipeline_, GST_STATE_PAUSED);
+
+		// Ensure AudioBus source exists even for audio-disabled slots (for later enable)
+		if (videoSourceId_ == 0) {
+			videoSourceId_ = AudioBus::instance().addSource("video-preview");
+			audioHandle_ = AudioBus::instance().getHandle(videoSourceId_);
+		}
+		AudioBus::instance().setGain(audioHandle_, 0.0f);
+
+		LOG_INFO("GStreamerVideo", "Prime complete (preroll started): " + file +
+			" session=" + std::to_string(newSessionId) +
+			" audio=" + (enableAudio ? "on" : "off"));
+		});
+
+	return true;
+}
+
+void GStreamerVideo::setCenterMode(bool isCenterMode) {
+	if (audioEnabled_ == isCenterMode) {
+		// No audio-mode change; just log for debugging in case of redundant calls.
+		LOG_DEBUG("GStreamerVideo", "setCenterMode(" + std::string(isCenterMode ? "true" : "false") +
+			"): no change for " + currentFile_);
+		return;
+	}
+
+	audioEnabled_ = isCenterMode;
+
+	if (isCenterMode) {
+		// Side → Center: re-enable audio and schedule a brief READY→PAUSED cycle
+		// so playbin3 builds the audio decode chain.
+		// The old texture remains valid during the re-preroll so no black flash occurs.
+		LOG_INFO("GStreamerVideo", "setCenterMode: Side->Center for " + currentFile_);
+
+		if (!pipeline_ || currentFile_.empty()) return;
+
+		const uint64_t sessionId = currentPlaySessionId_.load(std::memory_order_acquire);
+		auto state = asyncState_;
+
+		ThreadPool::getInstance().enqueue([this, sessionId, state]() {
+			std::lock_guard<std::mutex> lock(state->mutex);
+			if (!state->alive.load(std::memory_order_acquire) ||
+				currentPlaySessionId_.load(std::memory_order_acquire) != sessionId) return;
+
+			if (!pipeline_) return;
+
+			// Update flags to include audio
+			gint flags = GST_PLAY_FLAG_VIDEO | GST_PLAY_FLAG_AUDIO;
+			flags &= ~GST_PLAY_FLAG_SOFT_VOLUME;
+			flags &= ~GST_PLAY_FLAG_BUFFERING;
+			flags &= ~GST_PLAY_FLAG_TEXT;
+			g_object_set(pipeline_, "flags", flags, nullptr);
+
+			// Brief READY → PAUSED cycle to activate the audio decode chain.
+			// We deliberately do NOT clear isTextureReady_ or stagedSample_ here so
+			// the last video frame continues to display during re-preroll.
+			gst_element_set_state(pipeline_, GST_STATE_READY);
+			gst_element_set_state(pipeline_, GST_STATE_PAUSED);
+
+			// If resume() was already called before this task ran (targetState_ == Playing),
+			// continue immediately to PLAYING so the pipeline doesn't get stuck in PAUSED.
+			if (targetState_.load(std::memory_order_acquire) == IVideo::VideoState::Playing) {
+				gst_element_set_state(pipeline_, GST_STATE_PLAYING);
+			}
+
+			LOG_INFO("GStreamerVideo", "setCenterMode: Audio re-enabled, re-prerolling for " + currentFile_);
+			});
+	}
+	else {
+		// Center → Side: immediately silence audio output.
+		// Keep the pipeline PLAYING/PAUSED — just zero the gain.
+		LOG_INFO("GStreamerVideo", "setCenterMode: Center->Side for " + currentFile_);
+		if (audioHandle_) {
+			AudioBus::instance().setGain(audioHandle_, 0.0f);
+		}
+	}
+}
+
+bool GStreamerVideo::hibernate() {
+	if (!initialized_) return false;
+
+	LOG_INFO("GStreamerVideo", "Hibernate: moving to READY and draining for " + currentFile_);
+
+	// 1. Main Thread: Immediate UI/State update (same as unload)
+	const uint64_t sessionId = nextUniquePlaySessionId_++;
+	currentPlaySessionId_.store(sessionId, std::memory_order_release);
+
+	targetState_.store(IVideo::VideoState::None, std::memory_order_release);
+	isTextureReady_ = false;
+	dimensions_.store({ -1, -1 }, std::memory_order_release);
+	currentFile_ = "";
+
+	hasError_.store(false, std::memory_order_release);
+	hasVideoStream_.store(false, std::memory_order_release);
+	loopsFinished_.store(false, std::memory_order_release);
+
+	auto state = asyncState_;
+
+	ThreadPool::getInstance().enqueue([this, sessionId, state]() {
+		if (currentPlaySessionId_.load(std::memory_order_acquire) != sessionId) return;
+
+		std::lock_guard<std::mutex> lock(state->mutex);
+		if (!state->alive.load(std::memory_order_acquire) ||
+			currentPlaySessionId_.load(std::memory_order_acquire) != sessionId) return;
+
+		if (!pipeline_) return;
+
+		// Move to READY to free decode resources
+		gst_element_set_state(pipeline_, GST_STATE_READY);
+
+		// Thoroughly drain both appsinks to prevent stale samples on next use
+		if (videoSink_ && GST_IS_APP_SINK(videoSink_)) {
+			while (GstSample* s = gst_app_sink_try_pull_sample(GST_APP_SINK(videoSink_), 0))
+				gst_sample_unref(s);
+			while (GstSample* s = gst_app_sink_try_pull_preroll(GST_APP_SINK(videoSink_), 0))
+				gst_sample_unref(s);
+		}
+		if (audioSink_ && GST_IS_APP_SINK(audioSink_)) {
+			while (GstSample* s = gst_app_sink_try_pull_sample(GST_APP_SINK(audioSink_), 0))
+				gst_sample_unref(s);
+			while (GstSample* s = gst_app_sink_try_pull_preroll(GST_APP_SINK(audioSink_), 0))
+				gst_sample_unref(s);
+		}
+
+		// Clear staged sample
+		if (GstSample* old = stagedSample_.exchange(nullptr, std::memory_order_acq_rel)) {
+			gst_sample_unref(old);
+		}
+
+		// Flush bus to avoid stale message backlog
+		if (GstBus* bus = gst_element_get_bus(pipeline_)) {
+			gst_bus_set_flushing(bus, TRUE);
+			gst_bus_set_flushing(bus, FALSE);
+			gst_object_unref(bus);
+		}
+
+		// Mute audio output
+		if (videoSourceId_ != 0) {
+			AudioBus::instance().setGain(audioHandle_, 0.0f);
+			AudioBus::instance().clear(audioHandle_);
+		}
+
+		LOG_INFO("GStreamerVideo", "Hibernate complete: pipeline in READY state.");
+		});
+
+	return true;
+}
+
+
 	auto* ctx = static_cast<CallbackCtx*>(user_data);
 	if (!ctx || !ctx->state || !ctx->state->alive.load(std::memory_order_acquire)) {
 		return GST_PAD_PROBE_OK;

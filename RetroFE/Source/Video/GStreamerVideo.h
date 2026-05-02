@@ -85,6 +85,20 @@ public:
 	void setPerspectiveCorners(const int* corners);
 	bool hasVideoStream() const { return hasVideoStream_; }
 
+	// --- Carousel / crossfade helpers ---
+	// Prime a slot in PAUSED with optional audio decode.
+	// enableAudio=false skips audio decode, reducing preroll latency for side/offscreen slots.
+	bool prime(const std::string& file, bool enableAudio = false);
+
+	// Signal center-mode transitions.
+	// isCenterMode=true  (side→center): re-enables audio pipeline and allows volume to ramp.
+	// isCenterMode=false (center→side): immediately mutes audio output.
+	void setCenterMode(bool isCenterMode);
+
+	// Move pipeline to GST_STATE_READY and drain appsinks. Use for far-away slots
+	// that are no longer adjacent and should not consume decode/memory resources.
+	bool hibernate();
+
 
 	bool hasFinishedLoops() const;
 
@@ -139,6 +153,7 @@ private:
 	std::atomic<int> numLoops_{ 0 };
 	std::string currentFile_{};
 	float volume_{ 0.0f };
+	bool audioEnabled_{ true };  // tracks whether the current pipeline was built with audio
 	
 	// Tracked allocation state to avoid redundant SDL_QueryTexture calls
 	int allocatedWidth_{ 0 };

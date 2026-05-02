@@ -200,6 +200,7 @@ private:
 
     void clearPoints();
     void clearTweenPoints();
+    void notifyVideoCenterMode();  // tells each VideoComponent slot whether it is the center slot
     
     void resetTweens(Component* c, std::shared_ptr<AnimationEvents> sets, ViewInfo* currentViewInfo, ViewInfo* nextViewInfo, float scrollTime) const;
     inline size_t loopIncrement(size_t offset, size_t index, size_t size) const;
