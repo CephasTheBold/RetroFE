@@ -14,27 +14,29 @@
  * along with RetroFE.  If not, see <http://www.gnu.org/licenses/>.
  */
 #include "Animation.h"
-#include <string>
-#include <memory>
-#include <vector>
+#include <utility> // Required for std::move
 
-#include "Animation.h"
+ // NOTE: The copy-assignment operator was removed to support move-only containers.
 
-Animation::Animation() = default;
-
-void Animation::Push(const TweenSet& set) {
-    animationVector_.push_back(set); // Triggers deep copy of the TweenSet
+void Animation::Push(TweenSet&& set) {
+    // Correctly move the move-only TweenSet into the vector.
+    // This avoids a deep copy of all internal tweens and strings.
+    animationVector_.push_back(std::move(set));
 }
 
 void Animation::Clear() {
+    // Physically releases the contiguous memory of the vector.
     animationVector_.clear();
 }
 
-TweenSet* Animation::tweenSet(unsigned int index) {
-    if (index < animationVector_.size()) {
-        return &animationVector_[index];
-    }
-    return nullptr;
+TweenSet& Animation::operator[](size_t index) {
+    // Direct index access for maximum performance in the render loop.
+    // Using .at() provides bounds checking safety.
+    return animationVector_.at(index);
+}
+
+const TweenSet& Animation::operator[](size_t index) const {
+    return animationVector_.at(index);
 }
 
 size_t Animation::size() const {

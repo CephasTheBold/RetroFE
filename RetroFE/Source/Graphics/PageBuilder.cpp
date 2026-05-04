@@ -664,10 +664,6 @@ bool PageBuilder::buildComponents(xml_node<>* layout, Page* page, const std::str
 					c->setMenuScrollReload(true);
 				}
 
-				if (auto const* animationDoneRemove = componentXml->first_attribute("animationDoneRemove"); animationDoneRemove &&
-					(Utils::toLower(animationDoneRemove->value()) == "true" || Utils::toLower(animationDoneRemove->value()) == "yes")) {
-					c->setAnimationDoneRemove(true);
-				}
 				c->baseViewInfo.Monitor = monitorXml ? Utils::convertInt(monitorXml->value()) : layoutMonitor;
 				c->baseViewInfo.Layout = page->getCurrentLayout();
 
@@ -1065,14 +1061,14 @@ std::shared_ptr<AnimationEvents> PageBuilder::createTweenInstance(rapidxml::xml_
 
 
 void PageBuilder::buildTweenSet(AnimationEvents* tweens, xml_node<>* componentXml, const std::string& tagName, const std::string& tweenName) {
-	// Iterate through all XML nodes with the specified tagName
 	for (xml_node<>* node = componentXml->first_node(tagName.c_str()); node; node = node->next_sibling(tagName.c_str())) {
 		xml_attribute<> const* indexXml = node->first_attribute("menuIndex");
 
-		// OPTIMIZATION: Parse the XML once per node, instead of once per index.
-		// We create a single Animation object on the stack and populate it.
-		Animation animation;
-		getTweenSet(node, &animation);
+		// OPTIMIZATION: Create one Animation on the heap
+		auto animation = std::make_shared<Animation>();
+
+		// Pass the raw pointer to your existing builder function
+		getTweenSet(node, animation.get());
 
 		if (indexXml) {
 			std::string indexs = indexXml->value();
@@ -1083,7 +1079,7 @@ void PageBuilder::buildTweenSet(AnimationEvents* tweens, xml_node<>* componentXm
 				int index = Utils::convertInt(indexs);
 				for (int i = 0; i < MENU_INDEX_HIGH - 1; i++) {
 					if (i != index) {
-						// setAnimation now takes a const Animation& and performs a deep copy
+						// FAST: Just copies the shared_ptr handle (8-16 bytes)
 						tweens->setAnimation(tweenName, i, animation);
 					}
 				}
@@ -1092,32 +1088,25 @@ void PageBuilder::buildTweenSet(AnimationEvents* tweens, xml_node<>* componentXm
 				indexs.erase(0, 1);
 				int index = Utils::convertInt(indexs);
 				for (int i = 0; i < MENU_INDEX_HIGH - 1; i++) {
-					if (i < index) {
-						tweens->setAnimation(tweenName, i, animation);
-					}
+					if (i < index) tweens->setAnimation(tweenName, i, animation);
 				}
 			}
 			else if (indexs[0] == '>') {
 				indexs.erase(0, 1);
 				int index = Utils::convertInt(indexs);
 				for (int i = 0; i < MENU_INDEX_HIGH - 1; i++) {
-					if (i > index) {
-						tweens->setAnimation(tweenName, i, animation);
-					}
+					if (i > index) tweens->setAnimation(tweenName, i, animation);
 				}
 			}
 			else if (indexs[0] == 'i') {
-				// Handle the "info" index
 				tweens->setAnimation(tweenName, MENU_INDEX_HIGH, animation);
 			}
 			else {
-				// Specific single index
 				int index = Utils::convertInt(indexs);
 				tweens->setAnimation(tweenName, index, animation);
 			}
 		}
 		else {
-			// Default case: no menuIndex attribute, use index -1
 			tweens->setAnimation(tweenName, -1, animation);
 		}
 	}
@@ -1612,7 +1601,7 @@ void PageBuilder::getTweenSet(const xml_node<>* node, Animation* animation) {
 			getAnimationEvents(setNode, ts);
 
 			// Push the set into the animation; this triggers a deep copy of the TweenSet
-			animation->Push(ts);
+			animation->Push(std::move(ts));
 		}
 	}
 }
@@ -1788,7 +1777,7 @@ void PageBuilder::getAnimationEvents(const xml_node<>* node, TweenSet& tweens) {
 					}
 
 					// Push the object into the TweenSet; this triggers a deep copy into the internal vector
-					tweens.push(t);
+					tweens.push(std::move(t));
 				}
 				else {
 					std::stringstream ss;

@@ -77,8 +77,8 @@
 #include "StdAfx.h"
 #endif
 
-std::atomic<bool> RetroFE::reloadRequested_{false};
-std::atomic<bool> RetroFE::sighupReceived_{false};
+std::atomic<bool> RetroFE::reloadRequested_{ false };
+std::atomic<bool> RetroFE::sighupReceived_{ false };
 
 void RetroFE::handleSigusr1(int) {
 	reloadRequested_.store(true);
@@ -133,39 +133,31 @@ bool InitializeServoStik() {
 static inline void sleepUntilTicks(uint64_t targetTicks, uint64_t freq, double frameInterval_s) {
 	if (freq == 0) return;
 
-	// How much of the tail do we reserve for spinning?
-	// - For long frames (idle 60Hz), spin a little more.
-	// - For short frames (143Hz), spin a little less.
-	// Values are seconds.
-	const double spinTail_s = std::clamp(frameInterval_s * 0.10, 0.00015, 0.00150); // 0.15ms .. 1.5ms
+	// Reserve 10% of the frame (capped at 1.5ms) for the final high-precision spin.
+	// This provides a buffer for OS scheduler jitter.
+	const double spinTail_s = std::clamp(frameInterval_s * 0.10, 0.00015, 0.00150);
 
-	while (true)
-	{
+	while (true) {
 		const uint64_t nowTicks = SDL_GetPerformanceCounter();
-		if (nowTicks >= targetTicks) return;
+		if (nowTicks >= targetTicks) return; // Goal reached
 
-		const uint64_t remainingTicks = targetTicks - nowTicks;
-		const double remaining_s = (double)remainingTicks / (double)freq;
+		const double remaining_s = (double)(targetTicks - nowTicks) / (double)freq;
 
-		// If we have "enough" time, sleep most of it, leaving a tail for spin
-		if (remaining_s > spinTail_s)
-		{
+		if (remaining_s > spinTail_s) {
 			const double sleep_s = remaining_s - spinTail_s;
 
-			// Avoid micro-sleeps that can overshoot on some systems
-			if (sleep_s > 0.0002) { // > 0.2ms
-				Utils::preciseSleep(sleep_s);
-			}
-			else {
-				// fall through to spin
-				while (SDL_GetPerformanceCounter() < targetTicks) { /* spin */ }
-				return;
+			// Only yield to the OS if the sleep duration is significant (> 0.2ms).
+			// This prevents over-sleeping on tiny intervals.
+			if (sleep_s > 0.0002) {
+				std::this_thread::sleep_for(std::chrono::duration<double>(sleep_s));
 			}
 		}
-		else
-		{
-			// Final tail: spin until target
-			while (SDL_GetPerformanceCounter() < targetTicks) { /* spin */ }
+		else {
+			// Final high-precision spin to hit the target exactly.
+			// This loop eliminates the ~1ms error margin of OS sleeps.
+			while (SDL_GetPerformanceCounter() < targetTicks) {
+				// If targeting x86/x64, you can add _mm_pause() here for heat/power efficiency.
+			}
 			return;
 		}
 	}
@@ -438,10 +430,10 @@ int RetroFE::initialize(void* context) {
 	std::string overridePath = Utils::combinePath(Configuration::absolutePath, "hi2txt", "scores");
 
 	HiScores::getInstance().loadHighScores(zipPath, overridePath);
-	
+
 	bool globalHiscoresEnabled = false;
 	instance->config_.getProperty(OPTION_GLOBALHISCORESENABLED, globalHiscoresEnabled);
-	
+
 	if (globalHiscoresEnabled) {
 		LOG_INFO("RetroFE", "Global HiScores enabled; initializing iScored integration.");
 		// 1) Set the gameroom name (must match server-side config).
@@ -527,6 +519,9 @@ void RetroFE::launchEnter() {
 // Return from the launch of a game/program
 void RetroFE::launchExit(bool userInitiated) {
 	currentPage_->setIsLaunched(false);
+	currentPage_->onNewItemSelected();
+	currentPage_->exitGame();
+
 	bool unloadSDL = false;
 	config_.getProperty(OPTION_UNLOADSDL, unloadSDL);
 	if (unloadSDL)
@@ -571,7 +566,6 @@ void RetroFE::launchExit(bool userInitiated) {
 	keyLastTime_ = currentTime_;
 	lastLaunchReturnTime_ = currentTime_;
 	//currentPage_->updateReloadables(0);
-	currentPage_->onNewItemSelected();
 	//currentPage_->reallocateMenuSpritePoints(false);
 
 #ifndef __APPLE__
@@ -597,6 +591,12 @@ void RetroFE::launchExit(bool userInitiated) {
 			, []() { LOG_INFO("HiScores", "Global refresh completed."); }
 		);
 	}
+	
+	currentPage_->update(0.0f);
+
+	render();
+
+	timingResetRequested_.store(true);
 }
 
 // Free the textures, and optionall take down SDL
@@ -941,7 +941,13 @@ bool RetroFE::run() {
 	while (running)
 	{
 		const uint64_t loopStart = SDL_GetPerformanceCounter();
-		const double nowMs_loopStart = (double)loopStart * 1000.0 / (double)freq_;
+		const double nowMs_loopStart = (double)loopStart * 1000.0 / (double)freq_; \
+
+			if (timingResetRequested_.exchange(false)) {
+				lastFrameTimePointMs_ = nowMs_loopStart;
+				nextFrameTime = nowMs_loopStart;
+				smoothedDt = static_cast<float>(fpsTime / 1000.0f);
+			}
 
 		if (psCfg.enabled && nowMs_loopStart >= nextPayloadSyncMs) {
 			// avoid drift
@@ -1003,9 +1009,6 @@ bool RetroFE::run() {
 			if (inputState != RETROFE_IDLE) {
 				setState(inputState);
 			}
-		}
-		if (nextFrameTime < nowMs_loopStart) {
-			nextFrameTime = nowMs_loopStart;
 		}
 
 		// --- Frame timing with smoothing & adaptive reset ---
@@ -2503,7 +2506,6 @@ bool RetroFE::run() {
 					launchExit(true);
 
 					// NOW fire onGameExit so the animation lives on the final, post-launch menu state
-					currentPage_->exitGame();
 
 					setState(RETROFE_LAUNCH_EXIT);
 				}
@@ -2759,10 +2761,10 @@ bool RetroFE::run() {
 			if (currentPage_->isGraphicsIdle())
 			{
 				// Snapshot navigation state
-				std::string colName   = currentPage_->getCollectionName();
-				std::string playlist  = currentPage_->getPlaylistName();
-				size_t      offset    = currentPage_->getScrollOffsetIndex();
-				auto        offsets   = currentPage_->getLastPlaylistOffsets();
+				std::string colName = currentPage_->getCollectionName();
+				std::string playlist = currentPage_->getPlaylistName();
+				size_t      offset = currentPage_->getScrollOffsetIndex();
+				auto        offsets = currentPage_->getLastPlaylistOffsets();
 
 				// Detach the CollectionInfo so deInitialize() won't delete it
 				CollectionInfo* collection = currentPage_->detachCollection();
@@ -2873,33 +2875,47 @@ bool RetroFE::run() {
 
 
 			// Only do custom frame pacing if vsync is OFF
+// Source/RetroFE.cpp (Bottom of the loop)
 			if (!vSync)
 			{
 				const double currentFrameIntervalMs = activelyAnimating ? fpsTime : fpsIdleTime;
 				const double frameInterval_s = currentFrameIntervalMs / 1000.0;
 
-				// schedule next frame
+				// 1. Advance the heartbeat (Cadence calculation)
+				// By adding the interval to the PREVIOUS target, we maintain a 
+				// perfect 60Hz heartbeat regardless of small loop jitters.
 				nextFrameTime += currentFrameIntervalMs;
 
-				// re-anchor if we fell behind (prevents “late spiral”)
 				const double nowMs = SDL_GetPerformanceCounter() * 1000.0 / (double)freq_;
-				if (nextFrameTime < nowMs) {
+
+				// 2. --- THE LOOSE ANCHOR ---
+				// We only resnap if we are "truly" late (e.g., > 100ms). 
+				// This allows the engine to naturally absorb the ~0.1ms jitters
+				// that were previously causing your 59 FPS limit.
+				if (nextFrameTime < (nowMs - 100.0)) {
 					nextFrameTime = nowMs;
 				}
 
-				const uint64_t targetTicks =
-					(uint64_t)llround(nextFrameTime * (double)freq_ / 1000.0);
+				// 3. Convert current metronome target to hardware ticks
+				const uint64_t targetTicks = (uint64_t)llround(nextFrameTime * (double)freq_ / 1000.0);
 
+				// 4. Measure "Work" time just before entering the sleep/spin
 				const uint64_t workEndTicks = SDL_GetPerformanceCounter();
 				lastWorkMs_ = (double)(workEndTicks - loopStart) * 1000.0 / (double)freq_;
 
+				// 5. Execute the Sleep-then-Spin
+				// This is the ONLY place where high-precision waiting should occur.
 				sleepUntilTicks(targetTicks, (uint64_t)freq_, frameInterval_s);
 
+				// 6. Final frame statistics
 				const uint64_t afterSleepTicks = SDL_GetPerformanceCounter();
+
+				// Calculate how late we were (in microseconds)
 				lastLateUs_ = (afterSleepTicks > targetTicks)
 					? (double)(afterSleepTicks - targetTicks) * 1e6 / (double)freq_
 					: 0.0;
 
+				// Measure the total frame time (from loop start to after-sleep)
 				lastFrameTimeMs_ = (double)(afterSleepTicks - loopStart) * 1000.0 / (double)freq_;
 			}
 			else
@@ -3260,7 +3276,7 @@ RetroFE::RETROFE_STATE RetroFE::processUserInput(Page* page) {
 		input_.keystate(UserInput::KeyCodeLetterUp) ||
 		input_.keystate(UserInput::KeyCodeLetterDown) ||
 		input_.keystate(UserInput::KeyCodeDown) ||
-		input_.keystate(UserInput::KeyCodeUp) || 
+		input_.keystate(UserInput::KeyCodeUp) ||
 		input_.keystate(UserInput::KeyCodeLeft) ||
 		input_.keystate(UserInput::KeyCodeRight);
 
@@ -3394,7 +3410,7 @@ RetroFE::RETROFE_STATE RetroFE::processUserInput(Page* page) {
 			}
 			attract_.reset();
 
-			if (infoExitOnScroll){
+			if (infoExitOnScroll) {
 				if (RETROFE_STATE s = handleInfoExitOr(RETROFE_SCROLL_BACK); s != RETROFE_IDLE)
 					return s;
 			}

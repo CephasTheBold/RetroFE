@@ -14,25 +14,29 @@
  * along with RetroFE.  If not, see <http://www.gnu.org/licenses/>.
  */
 #pragma once
-
 #include "Tween.h"
 #include <vector>
-#include <memory>
 
 class TweenSet {
 public:
-    TweenSet();
-    // Default copy/assignment now work correctly with std::vector<Tween>
-    TweenSet(const TweenSet& copy) = default;
-    TweenSet& operator=(const TweenSet& other) = default;
-    ~TweenSet() = default;
+    TweenSet() = default;
 
-    void push(const Tween& tween); // Changed to take object by reference
+    // Support moving the entire set (efficiently transfers the vector)
+    TweenSet(TweenSet&&) noexcept = default;
+    TweenSet& operator=(TweenSet&&) noexcept = default;
+
+    // Strictly forbid copying to prevent memory churn
+    TweenSet(const TweenSet&) = delete;
+    TweenSet& operator=(const TweenSet&) = delete;
+
+    void push(Tween&& tween);
     void clear();
-    Tween* getTween(unsigned int index); // Returns pointer to internal object
+
+    Tween& operator[](size_t index);
+    const Tween& operator[](size_t index) const;
 
     size_t size() const;
 
 private:
-    std::vector<Tween> set_; // Contiguous storage of Tween objects
+    std::vector<Tween> set_;
 };

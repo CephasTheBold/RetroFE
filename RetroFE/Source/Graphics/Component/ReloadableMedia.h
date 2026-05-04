@@ -51,6 +51,7 @@ private:
     bool isPlaylistDrivenType_() const;
     std::string lastPlaylistName_;
     bool lastPlaylistNameInit_{ false };
+    Item* lastItem_ = nullptr;
 
     Configuration& config_;
     bool systemMode_;

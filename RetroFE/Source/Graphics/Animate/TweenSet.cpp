@@ -14,22 +14,24 @@
  * along with RetroFE.  If not, see <http://www.gnu.org/licenses/>.
  */
 #include "TweenSet.h"
+#include <stdexcept>
 
-TweenSet::TweenSet() = default;
-
-void TweenSet::push(const Tween& tween) {
-    set_.push_back(tween); // Copies/moves the tween into contiguous memory
+void TweenSet::push(Tween&& tween) {
+    // Correctly move the move-only Tween into the vector
+    set_.push_back(std::move(tween));
 }
 
 void TweenSet::clear() {
     set_.clear();
 }
 
-Tween* TweenSet::getTween(unsigned int index) {
-    if (index < set_.size()) {
-        return &set_[index]; // Return address of the object in the vector
-    }
-    return nullptr;
+Tween& TweenSet::operator[](size_t index) {
+    // Standard vector access is O(1)
+    return set_.at(index);
+}
+
+const Tween& TweenSet::operator[](size_t index) const {
+    return set_.at(index);
 }
 
 size_t TweenSet::size() const {

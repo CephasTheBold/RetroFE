@@ -135,47 +135,6 @@ static inline bool is_file_or_link_to_file(const fs::directory_entry& de) {
     return false;
 }
 
-// Coarse sleep only: no steady_clock spin.
-void Utils::coarseSleep(double seconds_to_sleep) {
-    if (seconds_to_sleep <= 0.0) return;
-
-    // Leave a tiny margin so the caller can spin to exact SDL tick.
-    constexpr double margin_s = 0.0005; // 0.5ms (tune)
-    double s = seconds_to_sleep - margin_s;
-    if (s > 0.0)
-        std::this_thread::sleep_for(std::chrono::duration<double>(s));
-}
-
-void Utils::preciseSleep(double seconds_to_sleep) {
-    using namespace std::chrono;
-
-    if (seconds_to_sleep <= 0.0) {
-        return;
-    }
-
-    // How much time we want to reserve for the final spin.
-    // 0.5 ms is a decent compromise on Windows + SDL_HINT_TIMER_RESOLUTION=1.
-    constexpr double spin_tail_s = 0.0005; // 0.5 ms
-
-    // Decide how much we ask the OS to sleep.
-    double coarse_s = seconds_to_sleep - spin_tail_s;
-    if (coarse_s < 0.0) {
-        coarse_s = 0.0;
-    }
-
-    const auto target_time = steady_clock::now() + duration<double>(seconds_to_sleep);
-
-    // Coarse sleep first, if it’s worth it.
-    if (coarse_s > 0.0002) { // avoid crazy tiny sleeps
-        std::this_thread::sleep_for(duration<double>(coarse_s));
-    }
-
-    // Spin for the remainder (or for the whole time if seconds_to_sleep was tiny).
-    while (steady_clock::now() < target_time) {
-        // very short spin; no yield/pause needed here
-    }
-}
-
 std::string Utils::toLower(const std::string& inputStr)
 {
     std::string str = inputStr;
