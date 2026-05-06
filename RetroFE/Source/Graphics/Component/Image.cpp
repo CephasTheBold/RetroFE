@@ -41,10 +41,10 @@ Image::~Image() {
 
 // -------------------- Async Logic --------------------
 void Image::allocateGraphicsMemory() {
+    // If we are already loading or ready, don't restart unless recycleAsImage set us to Unloaded
     if (status_ != LoadStatus::Unloaded) return;
     if (useTextureCaching_) ensureCacheReserved();
 
-    // Strategy: Try primary file, if that doesn't exist/start, try alt
     if (!file_.empty() && startAsyncLoad(file_)) return;
     if (!altFile_.empty() && startAsyncLoad(altFile_)) return;
 
@@ -112,7 +112,7 @@ bool Image::startAsyncLoad(const std::string& path) {
 void Image::finalizeLoad() {
     std::string path = currentLoadingPath_;
 
-    // Check VRAM again in case another monitor finished while we waited
+    // 1. Check Cache first
     {
         std::lock_guard<std::mutex> lock(g_ImageCacheMutex);
         if (useTextureCaching_ && loadFromCache(path)) {
@@ -124,34 +124,53 @@ void Image::finalizeLoad() {
     AsyncLoadResult res = loadTask_.get();
     loadTask_ = {};
 
-    // Fallback logic: If primary failed, trigger alt load
     if (!res.success) {
-
         if (path == file_ && !altFile_.empty()) {
             status_ = LoadStatus::Unloaded;
             startAsyncLoad(altFile_);
             return;
         }
-
         status_ = LoadStatus::Error;
         return;
     }
 
-    // Decompression succeeded, perform Main-Thread GPU Upload
+    // 2. Prepare the NEW assets
     SDL_Renderer* renderer = SDL::getRenderer(baseViewInfo.Monitor);
+    SDL_Texture* newTexture = nullptr;
+    std::vector<SharedSurface> newAnimatedSurfaces;
+    std::vector<int> newFrameDelays;
+
     if (res.staticSurface) {
-        texture_ = SDL_CreateTextureFromSurface(renderer, res.staticSurface.get());
+        newTexture = SDL_CreateTextureFromSurface(renderer, res.staticSurface.get());
     }
     else if (!res.animatedSurfaces.empty()) {
-        animatedSurfaces_ = res.animatedSurfaces;
-        frameDelays_ = res.frameDelays;
-        createAnimatedStreamingTexture(res.w, res.h);
+        newAnimatedSurfaces = res.animatedSurfaces;
+        newFrameDelays = res.frameDelays;
     }
 
-    if (texture_ || animatedTexture_) {
+    // 3. THE SWAP: Only clear old assets if we actually have new ones to show
+    if (newTexture || !newAnimatedSurfaces.empty()) {
+        // Cleanup old local assets before overwriting pointers (Prevent Leaks)
+        if (animatedTexture_) {
+            SDL_DestroyTexture(animatedTexture_);
+            animatedTexture_ = nullptr;
+        }
+        if (texture_ && !isUsingCachedStaticTexture_) {
+            SDL_DestroyTexture(texture_);
+        }
+
+        // Assign new assets
+        texture_ = newTexture;
+        animatedSurfaces_ = newAnimatedSurfaces;
+        frameDelays_ = newFrameDelays;
+
         baseViewInfo.ImageWidth = (float)res.w;
         baseViewInfo.ImageHeight = (float)res.h;
         status_ = LoadStatus::Ready;
+
+        if (!animatedSurfaces_.empty()) {
+            createAnimatedStreamingTexture(res.w, res.h);
+        }
 
         if (useTextureCaching_) {
             std::lock_guard<std::mutex> lock(g_ImageCacheMutex);
@@ -167,6 +186,7 @@ void Image::finalizeLoad() {
             isUsingCachedSurfaces_ = !animatedSurfaces_.empty();
         }
         primeAnimatedTextureIfNeeded();
+        resetAnimationState();
     }
     else {
         status_ = LoadStatus::Error;
@@ -215,12 +235,11 @@ void Image::draw() {
         if (loadTask_.valid() && loadTask_.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
             finalizeLoad();
         }
-        else {
-            return;
-        }
     }
 
-    if (status_ != LoadStatus::Ready) return;
+    if (status_ == LoadStatus::Error || (status_ == LoadStatus::Unloaded && !texture_ && !animatedTexture_)) {
+        return;
+    }
 
     if (animatedTexture_ && !animatedSurfaces_.empty() && !frameDelays_.empty()) {
         Uint32 now = SDL_GetTicks();
@@ -337,20 +356,24 @@ void Image::cleanupTextureCache() {
 bool Image::recycleAsImage(const std::string& newFilePath, const std::string& newAltPath) {
     if (newFilePath.empty() && newAltPath.empty()) return false;
 
-    // Skip if we're already rendering this exact primary file (and alt file matches)
+    // 1. Skip if the file is already the one we are showing
     if (file_ == newFilePath && altFile_ == newAltPath && status_ != LoadStatus::Error) {
         return true;
     }
 
-    // Tear down the old texture, swap the paths, and start the async load
-    freeGraphicsMemory();
-
-    baseViewInfo.ImageWidth = 0;
-    baseViewInfo.ImageHeight = 0;
-
+    // 2. SOFT RESET: Update the paths
     file_ = newFilePath;
     altFile_ = newAltPath;
+
+    // 3. FORCE THE LOAD: Bypass the status guard in allocateGraphicsMemory
+    status_ = LoadStatus::Unloaded;
+
+    // 4. TRIGGER ASYNC: This will now move status to 'Loading'
     allocateGraphicsMemory();
+
+    // NOTE: We do NOT zero out ImageWidth/Height and do NOT call freeGraphicsMemory().
+    // This allows the draw() function to keep using the existing texture_ 
+    // and dimensions until finalizeLoad() swaps them for the new ones.
 
     return true;
 }
