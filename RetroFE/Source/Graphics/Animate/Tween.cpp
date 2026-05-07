@@ -93,31 +93,24 @@ Tween::Tween(TweenProperty property, TweenAlgorithm type, float start, float end
     , start(start)
     , end(end) {
     if (!playlistFilter.empty()) {
-        // ALLOCATION: Create the vector on the heap only if needed
-        playlistFilterTokens = std::make_unique<std::vector<std::string>>();
-
         std::stringstream ss(playlistFilter);
         std::string playlist;
         while (std::getline(ss, playlist, ',')) {
             playlist = trimPlaylistToken(playlist);
             if (!playlist.empty()) {
-                // Access via -> because it is now a unique_ptr
-                playlistFilterTokens->push_back(std::move(playlist));
+                playlistFilterTokens.push_back(std::move(playlist));
             }
         }
     }
 }
 
 bool Tween::matchesPlaylist(const std::string& currentPlaylist) const {
-    // If there is no pointer (nullptr), there is no filter, so it matches by default.
-    if (!playlistFilterTokens || playlistFilterTokens->empty() || currentPlaylist.empty()) {
+    if (playlistFilterTokens.empty() || currentPlaylist.empty()) {
         return true;
     }
 
-    // Dereference the pointer to perform the search
-    return std::find(playlistFilterTokens->begin(),
-        playlistFilterTokens->end(),
-        currentPlaylist) != playlistFilterTokens->end();
+    return std::find(playlistFilterTokens.begin(), playlistFilterTokens.end(), currentPlaylist) != playlistFilterTokens.end();
+
 }
 
 std::optional<TweenProperty> Tween::getTweenProperty(const std::string& name) {

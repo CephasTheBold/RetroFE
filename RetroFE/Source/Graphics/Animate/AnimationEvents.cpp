@@ -19,22 +19,27 @@
 #include <memory>
 #include <map>
 
-std::shared_ptr<Animation> AnimationEvents::getAnimation(const std::string& tween, int index) {
-    auto& group = animationMap_[tween];
-    auto it = group.find(index);
-
-    if (it == group.end()) {
-        it = group.find(-1);
-        if (it == group.end()) return nullptr;
+Animation* AnimationEvents::getAnimation(const std::string& tween, int index) {
+    // Ensure the tween group exists
+    if (animationMap_.find(tween) == animationMap_.end()) {
+        animationMap_[tween][-1] = Animation();
     }
 
-    // FIX: Return the shared_ptr directly (remove .get())
-    return it->second;
+    auto& group = animationMap_[tween];
+    auto it = group.find(index);
+    if (it == group.end()) {
+        index = -1; // Fallback to default index
+    }
+
+    return &group[index];
 }
 
-void AnimationEvents::setAnimation(const std::string& tween, int index, std::shared_ptr<Animation> animation) {
-    // Zero-Churn: Multiple keys now point to the same physical memory
-    animationMap_[tween][index] = std::move(animation);
+const std::map<std::string, std::map<int, Animation>>& AnimationEvents::getAnimationMap() const {
+    return animationMap_;
+}
+
+void AnimationEvents::setAnimation(const std::string& tween, int index, const Animation& animation) {
+    animationMap_[tween][index] = animation; // Performs a deep copy
 }
 
 void AnimationEvents::clear() {

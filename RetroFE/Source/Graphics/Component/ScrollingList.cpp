@@ -245,13 +245,6 @@ void ScrollingList::reallocateSpritePoints() {
     if (!scrollPoints_ || scrollPoints_->empty()) return;
     if (components_.empty()) return;
 
-    Item* current = getSelectedItem();
-    if (current == lastItem_) {
-        // The item is identical; do not delete components or textures.
-        return;
-    }
-    lastItem_ = current;
-
     size_t scrollPointsSize = scrollPoints_->size();
     size_t itemsSize = items_->size();
     int monitor = baseViewInfo.Monitor;
@@ -857,24 +850,6 @@ void ScrollingList::triggerEventOnAll(const std::string& event, int menuIndex)
 
 bool ScrollingList::update(float dt)
 {
-    if (newItemSelected || (newScrollItemSelected && getMenuScrollReload())) {
-        Item* current = getSelectedItem();
-
-        if (current == lastItem_) {
-            // Item hasn't changed; consume flags and skip rebuild
-            newItemSelected = false;
-            newScrollItemSelected = false;
-            clearPendingRequests();
-        }
-        else {
-            // Truly a new item selection; proceed with rebuild
-            lastItem_ = current;
-            reallocateSpritePoints();
-            newItemSelected = false;
-            newScrollItemSelected = false;
-        }
-    }
-
     bool done = Component::update(dt);
 
     if (components_.empty()) 
@@ -931,6 +906,11 @@ void ScrollingList::resetTweens(Component* c, std::shared_ptr<AnimationEvents> s
     nextViewInfo->BackgroundAlpha = c->baseViewInfo.BackgroundAlpha;
 
     c->setTweens(sets);
+
+    // Fetch a pointer to the specific Animation object in the map
+    Animation* scrollAnimation = sets->getAnimation("menuScroll");
+    scrollAnimation->Clear();
+
     // Reset baseViewInfo to the scroll start position
     c->baseViewInfo = *currentViewInfo;
 
@@ -995,17 +975,8 @@ void ScrollingList::resetTweens(Component* c, std::shared_ptr<AnimationEvents> s
     }
 
     // Push the constructed set into the animation; this performs a deep copy
-// 2. NEW LOGIC: If we have tweens, create the Animation and register it
     if (set.size() > 0) {
-        // Create the Animation object on the heap managed by a shared_ptr
-        auto scrollAnimation = std::make_shared<Animation>();
-
-        // Move the stack-based set into the heap-based animation
-        scrollAnimation->Push(std::move(set));
-
-        // Register it with the events set. This automatically overwrites 
-        // any existing "menuScroll" for index -1.
-        sets->setAnimation("menuScroll", -1, scrollAnimation);
+        scrollAnimation->Push(set);
     }
 }
 

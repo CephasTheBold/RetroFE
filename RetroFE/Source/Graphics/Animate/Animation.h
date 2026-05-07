@@ -14,27 +14,26 @@
  * along with RetroFE.  If not, see <http://www.gnu.org/licenses/>.
  */
 #pragma once
+
 #include "TweenSet.h"
+#include <string>
 #include <vector>
+#include <map>
+#include <memory>
 
 class Animation {
 public:
-    Animation() = default;
+    Animation();
+    Animation(const Animation& copy) = default;
+    Animation& operator=(const Animation& other) = default;
+    ~Animation() = default;
 
-    // Move-only semantics
-    Animation(Animation&&) noexcept = default;
-    Animation& operator=(Animation&&) noexcept = default;
-    Animation(const Animation&) = delete;
-    Animation& operator=(const Animation&) = delete;
-
-    // Change to accept an rvalue to support moving
-    void Push(TweenSet&& set);
+    void Push(const TweenSet& set); // Takes a copy of the set
     void Clear();
 
-    TweenSet& operator[](size_t index);
-    const TweenSet& operator[](size_t index) const;
+    TweenSet* tweenSet(unsigned int index); // Returns pointer to internal set
     size_t size() const;
 
 private:
-    std::vector<TweenSet> animationVector_;
+    std::vector<TweenSet> animationVector_; // Contiguous storage of sets
 };

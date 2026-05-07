@@ -1118,8 +1118,8 @@ void GStreamerVideo::elementSetupCallback([[maybe_unused]] GstElement* playbin,
 	// ---- Hard-cap multiqueue to prevent "Megabyte Creep" ----
 	if (g_str_has_prefix(name, "multiqueue")) {
 		// Change 0 (unlimited) to small, strict numbers.
-		if (has_prop(element, "max-size-buffers")) g_object_set(element, "max-size-buffers", 100, NULL); // Increase to 100
-		if (has_prop(element, "max-size-bytes"))   g_object_set(element, "max-size-bytes", (guint64)(32 * 1024 * 1024), NULL); // 32MB Cap
+		if (has_prop(element, "max-size-buffers")) g_object_set(element, "max-size-buffers", 5, NULL);
+		if (has_prop(element, "max-size-bytes"))   g_object_set(element, "max-size-bytes", (guint64)(2 * 1024 * 1024), NULL); // 2MB Cap
 		if (has_prop(element, "max-size-time"))    g_object_set(element, "max-size-time", (guint64)(100 * GST_MSECOND), NULL); // 100ms instead of 300ms
 		if (has_prop(element, "use-interleave")) g_object_set(element, "use-interleave", FALSE, NULL);
 		if (has_prop(element, "low-percent"))      g_object_set(element, "low-percent", 10, NULL);
@@ -1128,7 +1128,7 @@ void GStreamerVideo::elementSetupCallback([[maybe_unused]] GstElement* playbin,
 
 	// ---- Target audio/video queues specifically ----
 	if (g_str_has_prefix(name, "aqueue") || g_str_has_prefix(name, "vqueue")) {
-		if (has_prop(element, "max-size-buffers")) g_object_set(element, "max-size-buffers", 10, NULL); // Increase to 10
+		if (has_prop(element, "max-size-buffers")) g_object_set(element, "max-size-buffers", 2, NULL);
 		if (has_prop(element, "max-size-bytes"))   g_object_set(element, "max-size-bytes", (guint64)(1024 * 512), NULL); // 512KB
 		if (has_prop(element, "silent"))           g_object_set(element, "silent", TRUE, NULL);
 	}

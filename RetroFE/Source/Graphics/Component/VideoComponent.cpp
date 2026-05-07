@@ -55,150 +55,177 @@ VideoComponent::~VideoComponent() {
 }
 
 bool VideoComponent::update(float dt) {
-    // 1. --- Initialization & Retargeting ---
-    if (videoInst_ && pendingRetarget_) {
-        instanceReady_ = videoInst_->play(videoFile_);
-        pendingRetarget_ = false;
-        LOG_DEBUG("VideoComponent", "[Init] Prerolling to PAUSED: " + videoFile_);
-    }
 
-    if (!videoInst_ || !currentPage_ || !instanceReady_ || !videoInst_->isPipelineReady() || videoInst_->hasError()) {
-        return Component::update(dt);
-    }
+	// 1. --- complete pending retarget on the main thread ---
+	if (videoInst_ && pendingRetarget_) {
+		// We no longer need to wait for consumeBecameNone(). 
+		// GStreamerVideo::play() handles its own internal serialization natively!
+		instanceReady_ = videoInst_->play(videoFile_);
+		pendingRetarget_ = false;
+		LOG_DEBUG("VideoComponent", "[Init] Prerolling to PAUSED: " + videoFile_);
+	}
 
-    // 2. --- Dimension & Volume Handling ---
-    const bool audioOnly = !hasVideoStream();
-    if (!dimensionsUpdated_) {
-        const auto dims = videoInst_->getDimensions();
-        if (audioOnly || (dims.w > 0 && dims.h > 0)) {
-            if (!audioOnly) {
-                baseViewInfo.ImageWidth = static_cast<float>(dims.w);
-                baseViewInfo.ImageHeight = static_cast<float>(dims.h);
-            }
-            dimensionsUpdated_ = true;
-            LOG_DEBUG("VideoComponent", "Dimensions locked: " + std::to_string(dims.w) + "x" + std::to_string(dims.h));
-        }
-        else {
-            return Component::update(dt);
-        }
-    }
+	if (!videoInst_ || !currentPage_ || !instanceReady_ || !videoInst_->isPipelineReady() || videoInst_->hasError()) {
+		return Component::update(dt);
+	}
 
-    videoInst_->setVolume(baseViewInfo.Volume);
-    videoInst_->volumeUpdate();
+	// 2. --- Dimensions & Universal Volume ---
+	const bool audioOnly = !hasVideoStream();
+	if (!dimensionsUpdated_) {
+		// One atomic load to get the synchronized pair
+		const auto dims = videoInst_->getDimensions();
 
-    // 3. --- Visibility & State Tracking ---
-    const float screenW = static_cast<float>(currentPage_->getLayoutWidthByMonitor(baseViewInfo.Monitor));
-    const float screenH = static_cast<float>(currentPage_->getLayoutHeightByMonitor(baseViewInfo.Monitor));
+		if (audioOnly || (dims.w > 0 && dims.h > 0)) {
+			if (!audioOnly) {
+				baseViewInfo.ImageWidth = static_cast<float>(dims.w);
+				baseViewInfo.ImageHeight = static_cast<float>(dims.h);
+			}
+			dimensionsUpdated_ = true;
+			LOG_DEBUG("VideoComponent", "Dimensions locked: " + std::to_string(dims.w) + "x" + std::to_string(dims.h));
+		}
+		else {
+			return Component::update(dt); // Still waiting for GStreamer to report size
+		}
+	}
 
-    bool physicallyOnScreen = (baseViewInfo.XRelativeToOrigin() + baseViewInfo.ScaledWidth() > 0.0f) &&
-        (baseViewInfo.XRelativeToOrigin() < screenW) &&
-        (baseViewInfo.YRelativeToOrigin() + baseViewInfo.ScaledHeight() > 0.0f) &&
-        (baseViewInfo.YRelativeToOrigin() < screenH);
+	videoInst_->setVolume(baseViewInfo.Volume);
+	videoInst_->volumeUpdate();
 
-    const bool visibleNow = (baseViewInfo.Alpha > 0.0f) && physicallyOnScreen;
-    auto actual = videoInst_->getActualState();
-    auto target = videoInst_->getTargetState();
+	// ---------------- Visibility & Culling Logic ----------------
 
-    if (actual == IVideo::VideoState::Playing && !hasBeenOnScreen_) {
-        hasBeenOnScreen_ = true;
-        LOG_DEBUG("VideoComponent", "[Lifecycle] Playback confirmed: " + videoFile_);
+		// 1. Physical Bounds Check (AABB)
+	float x = baseViewInfo.XRelativeToOrigin();
+	float y = baseViewInfo.YRelativeToOrigin();
+	float w = baseViewInfo.ScaledWidth();
+	float h = baseViewInfo.ScaledHeight();
 
-        if (listId_ == -1 && numLoops_ > 0) {
-            setAnimationDoneRemove(true);
-        }
-    }
+	float screenW = static_cast<float>(currentPage_->getLayoutWidthByMonitor(baseViewInfo.Monitor));
+	float screenH = static_cast<float>(currentPage_->getLayoutHeightByMonitor(baseViewInfo.Monitor));
 
-    // 4. --- Determine Desired State ---
-    IVideo::VideoState desired = IVideo::VideoState::None;
+	bool physicallyOnScreen = (x + w > 0.0f) && (x < screenW) &&
+		(y + h > 0.0f) && (y < screenH);
 
-    // --- THE FIX: Integrated Priority Launch Lock ---
-    // If a game is active on Monitor 0, force the state to Paused.
-    // Removed 'listId_ != -1' check so layout videos/effects also pause.
-    if (currentPage_->getIsLaunched() && baseViewInfo.Monitor == 0) {
-        desired = IVideo::VideoState::Paused;
-    }
-    else if (visibleNow && !hasFinishedLoops()) {
-        // Fast-scrolling logic applies to menu list items
-        if (listId_ != -1 && currentPage_->isMenuFastScrolling()) {
-            desired = (actual == IVideo::VideoState::Playing || target == IVideo::VideoState::Playing)
-                ? IVideo::VideoState::Playing : IVideo::VideoState::Paused;
-        }
-        else {
-            desired = IVideo::VideoState::Playing;
-        }
-    }
-    else {
-        desired = IVideo::VideoState::Paused;
-    }
+	// 2. The combined visibility rule
+	const bool visibleNow = (baseViewInfo.Alpha > 0.0f) && physicallyOnScreen;
 
-    // 5. --- Apply State Transitions ---
-    if (target == actual && desired != IVideo::VideoState::None) {
-        if (desired == IVideo::VideoState::Playing && actual != IVideo::VideoState::Playing) {
-            videoInst_->resume();
-            LOG_DEBUG("VideoComponent", "[Transition] Resume: " + videoFile_);
-        }
-        else if (desired == IVideo::VideoState::Paused && actual != IVideo::VideoState::Paused) {
-            videoInst_->pause();
-            LOG_DEBUG("VideoComponent", "[Transition] Pause: " + videoFile_);
-        }
-    }
+	auto actual = videoInst_->getActualState();
+	auto target = videoInst_->getTargetState();
 
-    // 6. --- Restart Logic ---
-    if (baseViewInfo.Restart && !hasBeenOnScreen_) {
-        baseViewInfo.Restart = false;
-    }
+	// 3. --- Standalone Video Logic (listId_ == -1) ---
+	if (listId_ == -1) {
+		if (visibleNow) {
+			if (actual != IVideo::VideoState::Playing && target != IVideo::VideoState::Playing) {
+				videoInst_->resume();
+				LOG_DEBUG("VideoComponent", "[Standalone] Resume (visible): " + videoFile_);
+			}
+		}
+		else {
+			if (actual != IVideo::VideoState::Paused && target != IVideo::VideoState::Paused) {
+				videoInst_->pause();
+				LOG_DEBUG("VideoComponent", "[Standalone] Pause (hidden): " + videoFile_);
+			}
+		}
+		return Component::update(dt);
+	}
 
-    if (!visibleNow && wasVisible_ && baseViewInfo.Restart && hasBeenOnScreen_) {
-        restartOnHide_ = true;
-        baseViewInfo.Restart = false;
-        pendingRestart_ = false;
-    }
+	// 4. --- List Item Logic (listId_ != -1) ---
 
-    if ((restartOnHide_ || baseViewInfo.Restart) && hasBeenOnScreen_) {
-        actual = videoInst_->getActualState();
-        target = videoInst_->getTargetState();
-        if (target == actual && (actual == IVideo::VideoState::Playing || actual == IVideo::VideoState::Paused)) {
-            videoInst_->restart();
-            baseViewInfo.Restart = false;
-            restartOnHide_ = false;
-            pendingRestart_ = false;
-        }
-        else {
-            pendingRestart_ = true;
-        }
-    }
+	// Set 'Played' flag only when it actually hits the Playing state
+	if (actual == IVideo::VideoState::Playing && !hasBeenOnScreen_) {
+		hasBeenOnScreen_ = true;
+		LOG_DEBUG("VideoComponent", "[State] First Playback confirmed: " + videoFile_);
+	}
 
-    if (pendingRestart_) {
-        actual = videoInst_->getActualState();
-        target = videoInst_->getTargetState();
-        if (target == actual && (actual == IVideo::VideoState::Playing || actual == IVideo::VideoState::Paused)) {
-            videoInst_->restart();
-            baseViewInfo.Restart = false;
-            pendingRestart_ = false;
-        }
-    }
+	// Launch Lock
+	if (currentPage_->getIsLaunched() && baseViewInfo.Monitor == 0) {
+		if (actual != IVideo::VideoState::Paused && target != IVideo::VideoState::Paused) {
+			videoInst_->pause();
+			LOG_DEBUG("VideoComponent", "[Lock] Pausing for Game Launch: " + videoFile_);
+		}
+		return Component::update(dt);
+	}
 
-    wasVisible_ = visibleNow;
+	// ---------------- Desired state ----------------
+	IVideo::VideoState desired = IVideo::VideoState::None;
 
-    // 7. --- Terminal Lifecycle ---
-    bool animationsDone = Component::update(dt);
+	if (visibleNow && !hasFinishedLoops()) {
+		if (currentPage_->isMenuFastScrolling()) {
+			// Rule: Keep playing if already active, stay paused if new
+			if (actual == IVideo::VideoState::Playing || target == IVideo::VideoState::Playing) {
+				desired = IVideo::VideoState::Playing;
+			}
+			else {
+				desired = IVideo::VideoState::Paused;
+			}
+		}
+		else {
+			desired = IVideo::VideoState::Playing;
+		}
+	}
+	else {
+		desired = IVideo::VideoState::Paused;
+	}
 
-    if (!hasBeenOnScreen_) {
-        return false;
-    }
+	// Apply transitions
+	bool inFlight = (target != actual);
+	if (!inFlight && desired != IVideo::VideoState::None) {
+		if (desired == IVideo::VideoState::Playing && actual != IVideo::VideoState::Playing) {
+			videoInst_->resume();
+			LOG_DEBUG("VideoComponent", "[Transition] Resume: " + videoFile_);
+		}
+		else if (desired == IVideo::VideoState::Paused && actual != IVideo::VideoState::Paused) {
+			videoInst_->pause();
+			LOG_DEBUG("VideoComponent", "[Transition] Pause: " + videoFile_);
+		}
+	}
 
-    if (listId_ == -1 && numLoops_ > 0) {
-        if (hasFinishedLoops() && animationsDone) {
-            return true;
-        }
-        if (animationsDone && !visibleNow) {
-            return true;
-        }
-        return false;
-    }
+	// ---------------- Restart Logic ----------------
 
-    return animationsDone;
+	// Optimization: Clear restart flag if the video never actually played content
+	if (baseViewInfo.Restart && !hasBeenOnScreen_) {
+		baseViewInfo.Restart = false;
+		LOG_DEBUG("VideoComponent", "[Restart] Skipping - never left 0.0s: " + videoFile_);
+	}
+
+	// Mode 1: Restart-on-hide (Alpha 0 edge)
+	if (!visibleNow && wasVisible_ && baseViewInfo.Restart && hasBeenOnScreen_) {
+		restartOnHide_ = true;
+		baseViewInfo.Restart = false;
+		pendingRestart_ = false;
+		LOG_DEBUG("VideoComponent", "[Restart] Arming Restart-on-Hide: " + videoFile_);
+	}
+
+	// Execute direct or deferred seeks
+	if ((restartOnHide_ || baseViewInfo.Restart) && hasBeenOnScreen_) {
+		actual = videoInst_->getActualState();
+		target = videoInst_->getTargetState();
+		if (!(target != actual) && (actual == IVideo::VideoState::Playing || actual == IVideo::VideoState::Paused)) {
+			videoInst_->restart();
+			LOG_DEBUG("VideoComponent", "[Restart] Executing Seek to 0: " + videoFile_);
+			baseViewInfo.Restart = false;
+			restartOnHide_ = false;
+			pendingRestart_ = false;
+		}
+		else {
+			pendingRestart_ = true;
+		}
+	}
+
+	if (pendingRestart_) {
+		actual = videoInst_->getActualState();
+		target = videoInst_->getTargetState();
+		if (!(target != actual) && (actual == IVideo::VideoState::Playing || actual == IVideo::VideoState::Paused)) {
+			videoInst_->restart();
+			LOG_DEBUG("VideoComponent", "[Restart] Executing Deferred Seek: " + videoFile_);
+			baseViewInfo.Restart = false;
+			pendingRestart_ = false;
+		}
+	}
+
+	wasVisible_ = visibleNow;
+	return Component::update(dt);
 }
+
 void VideoComponent::allocateGraphicsMemory() {
 	Component::allocateGraphicsMemory();
 	if (videoInst_) {

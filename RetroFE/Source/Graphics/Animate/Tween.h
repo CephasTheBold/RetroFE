@@ -20,22 +20,13 @@
 #include <unordered_map>
 #include <optional>
 #include <vector>
-#include <memory>
 
 class ViewInfo;
 
 class Tween {
 public:
-    // Constructor initializes the basic data and parses filters if provided
+
     Tween(TweenProperty property, TweenAlgorithm type, float start, float end, float duration, const std::string& playlistFilter = "");
-
-    // Support efficient moving for use in std::vector<Tween>
-    Tween(Tween&&) noexcept = default;
-    Tween& operator=(Tween&&) noexcept = default;
-
-    // Disallow copies to prevent accidental "Deep Copy" cascades during UI updates
-    Tween(const Tween&) = delete;
-    Tween& operator=(const Tween&) = delete;
 
     // Animate using high-precision elapsed time
     float animate(double elapsedTime) const;
@@ -46,26 +37,17 @@ public:
 
     static TweenAlgorithm getTweenType(const std::string& name);
     static std::optional<TweenProperty> getTweenProperty(const std::string& name);
-
-    // Checks the filter tokens (efficiently handles nullptr)
     bool matchesPlaylist(const std::string& currentPlaylist) const;
 
-    // --- Optimized Memory Layout ---
-    // Core properties are kept contiguous for pre-fetcher efficiency
     TweenProperty property;
-    float         duration;
-    bool          startDefined{ true };
-
-    // The raw string filter (original text)
-    std::string   playlistFilter;
-
-    // OPTIMIZATION: Move heavy token vector to the heap.
-    // This keeps the core Tween object under 64 bytes (1 cache line), 
-    // ensuring fast iteration in animate() loops.
-    std::unique_ptr<std::vector<std::string>> playlistFilterTokens;
+    float  duration;
+    bool   startDefined{ true };
+    std::string playlistFilter;
+    std::vector<std::string> playlistFilterTokens;
 
 private:
-    // Easing functions use normalized progress (0.0 to 1.0)
+    // Easing functions use a normalized progress value for calculation.
+    // p: progress (0.0 to 1.0), b: beginning value, c: change in value (end - start).
     static float linear(float p, float b, float c);
     static float easeInQuadratic(float p, float b, float c);
     static float easeOutQuadratic(float p, float b, float c);

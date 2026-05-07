@@ -75,7 +75,7 @@ public:
 	virtual void setImage(const std::string&, int = -1) {};
 	int getId() const;
 	std::string playlistName;
-	void clearPendingRequests() { newRequests_.clear(); }
+
 	virtual bool recycleAsImage(const std::string& /*newFilePath*/, const std::string & /*newAltPath*/ = "") { return false; }
 	virtual bool recycleAsText(const std::string& /*newText*/) { return false; }
 
@@ -87,18 +87,17 @@ private:
 	bool animate();
 
     std::shared_ptr<AnimationEvents> tweens_;
-	std::shared_ptr<Animation> currentAnimation_ = nullptr;
-	SDL_Texture *backgroundTexture_;
+    Animation currentAnimation_;
+    SDL_Texture *backgroundTexture_;
     std::map<int, SDL_Texture*> sharedBackgroundTextures_;
     bool         pauseOnScroll_;
     ViewInfo     storeViewInfo_;
     unsigned int currentTweenIndex_;
     bool         currentTweenComplete_;
-	bool justStartedPriority_ = false; // Prevents idle-loop hijacking on the first frame
-	bool returningFromLaunch_ = false; // The latch
     double       elapsedTweenTime_;
+    std::string  animationRequestedType_;
     std::string  animationType_;
-	std::vector<std::string> newRequests_;
+    bool         animationRequested_;
     bool         menuScrollReload_;
     bool         animationDoneRemove_;
     int          menuIndex_;

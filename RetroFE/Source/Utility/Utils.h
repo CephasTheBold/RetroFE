@@ -59,6 +59,8 @@ public:
     static std::string getFileName(const std::string& filePath);
     static bool findMatchingFile(const std::string& prefix, const std::vector<std::string>& extensions, std::string& file);
     static bool findMatchingFile(std::string_view prefixNoExt, const std::string_view* extsBegin, const std::string_view* extsEnd, std::string& outPath);
+    static void coarseSleep(double seconds_to_sleep);
+    static void preciseSleep(double seconds_to_sleep);
     static std::string toLower(const std::string& inputStr);
     static std::string uppercaseFirst(std::string str);
     static std::string filterComments(const std::string& line);

@@ -247,35 +247,28 @@ bool Launcher::run(std::string collection, Item* collectionItem, Page* currentPa
         Uint64 start = SDL_GetPerformanceCounter();
         onFrameTick = [this, currentPage, last = start]() mutable {
             Uint64 now = SDL_GetPerformanceCounter();
-            if (last == 0) { last = now; return; }
             double f = static_cast<double>(SDL_GetPerformanceFrequency());
             float  dt = static_cast<float>((now - last) / f);
             last = now;
-            if (dt > 0.1f) dt = 0.1f;
+            if (dt > 0.1f) dt = 0.0167f;
             auto* mp = MusicPlayer::getInstance();
             if (mp) mp->pump();
 
             if (!currentPage) return;
             currentPage->update(dt);
 
+            bool multiple_display = SDL::getScreenCount() > 1;
             bool animateDuringGame = true;
             config_.getProperty(OPTION_ANIMATEDURINGGAME, animateDuringGame);
-            // Only proceed with drawing if there are secondary monitors to update
-            if (animateDuringGame && SDL::getScreenCount() > 1) {
+            if (animateDuringGame && multiple_display) {
                 for (int i = 0; i < SDL::getScreenCount(); ++i) {
-                    // THE FIX: Never draw RetroFE elements on the primary game monitor (0)
-                    if (i == 0) continue;
-
                     SDL_Renderer* r = SDL::getRenderer(i);
                     SDL_Texture* t = SDL::getRenderTarget(i);
                     if (!r || !t) continue;
-
                     SDL_SetRenderTarget(r, t);
                     SDL_SetRenderDrawColor(r, 0, 0, 0, 255);
                     SDL_RenderClear(r);
-
-                    currentPage->draw(i); // Draw only for this specific secondary monitor
-
+                    currentPage->draw(i);
                     SDL_SetRenderTarget(r, nullptr);
                     SDL_RenderCopy(r, t, nullptr, nullptr);
                     SDL_RenderPresent(r);

@@ -84,8 +84,6 @@ private:
     double lastWorkMs_ = 0.0;
     double lastLateUs_ = 0.0;
 
-    std::atomic<bool> timingResetRequested_{ false };
-
     void initializeMusicPlayer();
 
     //fps counter resources

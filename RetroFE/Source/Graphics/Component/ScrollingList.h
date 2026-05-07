@@ -211,8 +211,6 @@ private:
     bool selectedImage_;
     bool textFallback_{ false };
 
-    Item* lastItem_ = nullptr;
-
     std::vector<ViewInfo*>* scrollPoints_{ nullptr };
     std::shared_ptr<std::vector<std::shared_ptr<AnimationEvents>>> tweenPoints_;
 
