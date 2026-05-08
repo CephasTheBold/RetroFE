@@ -64,6 +64,8 @@ public:
 	bool createPipelineIfNeeded();
 	bool play(const std::string& file) override;
 	bool stop() override;
+	bool isReadyForReuse() const;
+	void prepareForReuse();
 	SDL_Texture* getTexture() const override;
 	void volumeUpdate() override;
 	void draw() override;

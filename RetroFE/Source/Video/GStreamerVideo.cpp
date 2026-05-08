@@ -541,6 +541,19 @@ bool GStreamerVideo::stop() {
 	return true;
 }
 
+bool GStreamerVideo::isReadyForReuse() const {
+	// Check the atomic state updated by the bus callback.
+	// If it's already transitioned to None/Ready, we know the blocking
+	// wait in prepareForReuse() will be near-instant.
+	return actualState_.load(std::memory_order_acquire) == IVideo::VideoState::None;
+}
+
+void GStreamerVideo::prepareForReuse() {
+	if (pipeline_) {
+		gst_element_get_state(pipeline_, nullptr, nullptr, GST_SECOND);
+	}
+}
+
 bool GStreamerVideo::unload() {
 	if (!initialized_) return false;
 

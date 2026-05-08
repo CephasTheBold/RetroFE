@@ -40,18 +40,35 @@ VideoPool::VideoPtr VideoPool::createNewVideo(int monitor, bool softOverlay) {
 }
 
 VideoPool::VideoPtr VideoPool::popBestAvailable(PoolInfo& pool, int monitor, int listId) {
-    if (pool.available.empty()) {
-        return nullptr;
+    if (pool.available.empty()) return nullptr;
+
+    // 1. Search from FRONT to BACK (Oldest to Newest).
+    // The oldest videos have had the most frames to finish their cleanup.
+    auto it = pool.available.begin();
+    while (it != pool.available.end()) {
+        if (auto* gsv = dynamic_cast<GStreamerVideo*>(it->get())) {
+            if (gsv->isReadyForReuse()) {
+                // Found one that is already done!
+                auto vid = std::move(*it);
+                pool.available.erase(it);
+                pool.currentActive++;
+                return vid;
+            }
+        }
+        ++it;
     }
 
-    // LIFO Logic: Grab the most recently released video from the back of the list.
-    // This keeps the instance "warm" in CPU cache and GStreamer internal state.
-    auto vid = std::move(pool.available.back());
-    pool.available.pop_back();
+    // 2. FALLBACK: If nothing is "instantly" ready, take the oldest one 
+    // and perform the synchronous wait. This is still better than 
+    // waiting on the one that was JUST released.
+    auto vid = std::move(pool.available.front());
+    pool.available.erase(pool.available.begin());
+
+    if (auto* gsv = dynamic_cast<GStreamerVideo*>(vid.get())) {
+        gsv->prepareForReuse(); // Blocks only as a last resort
+    }
 
     pool.currentActive++;
-    LOG_DEBUG("VideoPool", "Acquire (LIFO reuse) " + poolStateStr(monitor, listId, pool));
-
     return vid;
 }
 
