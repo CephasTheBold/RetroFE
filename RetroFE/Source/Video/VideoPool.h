@@ -28,7 +28,9 @@ class IVideo;
 // listId == -1 => non-pooled ("one-shot") videos.
 class VideoPool {
 public:
-    using VideoPtr = std::unique_ptr<IVideo>;
+    // C++20: Switched to shared_ptr to support atomic callback safety 
+    // and enable_shared_from_this in the GStreamer implementation.
+    using VideoPtr = std::shared_ptr<IVideo>;
 
     static VideoPtr acquireVideo(int monitor, int listId, bool softOverlay);
     static void releaseVideo(VideoPtr vid, int monitor, int listId);
@@ -41,16 +43,16 @@ public:
     static void shutdown();
 
     // Hint the pool that we'd like at least desiredTotal instances available+active.
-    // This does not pre-create; it just raises the max to avoid later "at cap" behavior.
     static void reserveCapacity(int monitor, int listId, size_t desiredTotal);
 
     static bool isShuttingDown() { return shuttingDown_; }
     static bool shuttingDown_;
 
+    static void reset();
 
 private:
     struct PoolInfo {
-        // Oldest-first; we push releases to the back.
+        // We use LIFO logic: back of the list is the most "warm" instance.
         std::list<VideoPtr> available;
 
         size_t currentActive = 0;
@@ -71,11 +73,11 @@ private:
     static void erasePoolIfIdle_nolock(int monitor, int listId);
     static std::string poolStateStr(int monitor, int listId, const PoolInfo& p);
 
-    // Policy: pick the best available instance:
-    // 1) most recently released "warm" (actualState != None)
-    // 2) oldest "cold" (actualState == None)
+    // Policy: pick the best available instance (Most recently used LIFO)
     static VideoPtr popBestAvailable(PoolInfo& pool, int monitor, int listId);
 
-    // Policy: create a new instance; returns nullptr on failure.
+    // Policy: create a new shared_ptr instance via std::make_shared
     static VideoPtr createNewVideo(int monitor, bool softOverlay);
+
+    static uint32_t currentGeneration_;
 };

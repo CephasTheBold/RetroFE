@@ -159,7 +159,11 @@ bool Component::update(float dt) {
 
         if (newTweens && newTweens->size() > 0) {
             animationType_ = animationRequestedType_;
-            currentAnimation_ = *newTweens;  // DEEP COPY: Ensures local ownership
+
+            // C++20: Copy the template into a temporary, then MOVE that temporary into the member.
+            // This invokes the move-assignment operator (pointer swap) instead of copy-assignment.
+            currentAnimation_ = Animation(*newTweens);
+
             currentTweenIndex_ = 0;
             elapsedTweenTime_ = 0;
             storeViewInfo_ = baseViewInfo;
@@ -178,7 +182,8 @@ bool Component::update(float dt) {
         }
 
         if (idleTweens && idleTweens->size() > 0) {
-            currentAnimation_ = *idleTweens; // DEEP COPY
+            // C++20: Move-assignment for efficient state transition
+            currentAnimation_ = Animation(*idleTweens);
             currentTweenIndex_ = 0;
             elapsedTweenTime_ = 0;
             storeViewInfo_ = baseViewInfo;
@@ -340,6 +345,7 @@ bool Component::animate() {
 
     return (currentTweenIndex_ >= currentAnimation_.size());
 }
+
 bool Component::isPlaying()
 {
     return false;

@@ -48,7 +48,8 @@ extern "C" {
 #endif
 }
 
-class GStreamerVideo final : public IVideo {
+class GStreamerVideo final : public IVideo,
+	public std::enable_shared_from_this<GStreamerVideo> {
 
 public:
 	explicit GStreamerVideo(int monitor);
@@ -97,8 +98,11 @@ public:
 	bool isPipelineReady() const override { return pipeLineReady_.load(std::memory_order_acquire); }
 	static void enablePlugin(const std::string& pluginName);
 	static void disablePlugin(const std::string& pluginName);
+	uint32_t getGeneration() const override { return generation_; }
+	void setGeneration(uint32_t gen) override { generation_ = gen; }
 	
 private:
+	uint32_t generation_ = 0;
 	struct AsyncState {
 		std::mutex mutex;
 		std::atomic<bool> alive{ true };
@@ -107,14 +111,10 @@ private:
 
 	// --- Callback context to avoid UAF in GStreamer/GLib callbacks ---
 	struct CallbackCtx {
-		// GLib atomic refcount so callbacks can hold refs safely across threads
-		grefcount ref{};
-
-		// Shared lifetime gate (refcounted independently of GStreamerVideo)
+		grefcount ref;
 		std::shared_ptr<AsyncState> state;
-
-		// Raw pointer to the instance; set to nullptr during teardown to detach safely
-		std::atomic<GStreamerVideo*> self{ nullptr };
+		// C++20: Atomic weak pointer to prevent circular references
+		std::atomic<std::weak_ptr<GStreamerVideo>> self;
 	};
 
 	// One ctx per pipeline/appsink set. Owned by this instance while pipeline_ exists.

@@ -24,22 +24,22 @@
 bool VideoFactory::enabled_ = true;
 int VideoFactory::numLoops_ = 0;
 
-std::unique_ptr<IVideo> VideoFactory::createVideo(int monitor, int numLoops, bool softOverlay, int listId, const int* perspectiveCorners) {
+std::shared_ptr<IVideo> VideoFactory::createVideo(int monitor, int numLoops, bool softOverlay, int listId, const int* perspectiveCorners) {
     if (!enabled_) {
         return nullptr;
     }
 
-    // VideoPool::acquireVideo now returns std::unique_ptr<IVideo>
+    // VideoPool::acquireVideo now returns std::shared_ptr<IVideo>
     auto instance = VideoPool::acquireVideo(monitor, listId, softOverlay);
     if (!instance) {
         LOG_ERROR("VideoFactory", "VideoPool failed to provide a video instance.");
         return nullptr;
     }
 
-    // Since instance is now a unique_ptr, use -> instead of .
+    // Since instance is now a shared_ptr, use -> instead of .
     if (!instance->initialize()) {
         LOG_ERROR("VideoFactory", "Failed to initialize video from VideoPool");
-        // No need to delete - unique_ptr will handle cleanup
+        // No need to delete - shared_ptr will handle cleanup
         return nullptr;
     }
 

@@ -13,33 +13,36 @@
  * You should have received a copy of the GNU General Public License
  * along with RetroFE.  If not, see <http://www.gnu.org/licenses/>.
  */
-
 #include "AnimationEvents.h"
-#include <string>
-#include <memory>
-#include <map>
 
-Animation* AnimationEvents::getAnimation(const std::string& tween, int index) {
-    // Ensure the tween group exists
-    if (animationMap_.find(tween) == animationMap_.end()) {
-        animationMap_[tween][-1] = Animation();
+Animation* AnimationEvents::getAnimation(std::string_view tween, int index) {
+    // C++20: find() now accepts string_view without allocation
+    auto itGroup = animationMap_.find(tween);
+
+    // Maintain original behavior: Create the group if it doesn't exist.
+    // This is required for the "menuScroll" scratchpad in ScrollingList.
+    if (itGroup == animationMap_.end()) {
+        // We convert to std::string once here during creation
+        animationMap_[std::string(tween)][-1] = Animation();
+        itGroup = animationMap_.find(tween);
     }
 
-    auto& group = animationMap_[tween];
+    auto& group = itGroup->second;
     auto it = group.find(index);
     if (it == group.end()) {
         index = -1; // Fallback to default index
     }
 
+    // Still returns a pointer to the internal object (Get or Create behavior)
     return &group[index];
 }
 
-const std::map<std::string, std::map<int, Animation>>& AnimationEvents::getAnimationMap() const {
+const AnimationEvents::AnimationMap& AnimationEvents::getAnimationMap() const {
     return animationMap_;
 }
 
 void AnimationEvents::setAnimation(const std::string& tween, int index, const Animation& animation) {
-    animationMap_[tween][index] = animation; // Performs a deep copy
+    animationMap_[tween][index] = animation;
 }
 
 void AnimationEvents::clear() {

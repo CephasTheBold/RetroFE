@@ -140,7 +140,7 @@ public:
     void deallocateTexture(size_t index);
     void setItems(std::vector<Item*>* items);
     void selectItemByName(std::string_view name);
-    void restartByMonitor(int monitor);
+    void restartByMonitor(int monitor) const;
     std::string getSelectedItemName();
     void destroyItems();
     void setPoints(std::vector<ViewInfo*>* points, std::shared_ptr<std::vector<std::shared_ptr<AnimationEvents>>> tweenPoints);

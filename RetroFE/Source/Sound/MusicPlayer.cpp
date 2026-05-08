@@ -98,8 +98,9 @@ namespace {
     }
 
     inline std::string toUtf8String(const fs::path& p) {
-        // Keep display strings and SDL_mixer paths UTF-8.
-        return p.u8string();
+        // p.u8string() now returns std::u8string (char8_t)
+        auto u8str = p.u8string();
+        return std::string(u8str.begin(), u8str.end());
     }
 
     inline void trimCR(std::string& s) {

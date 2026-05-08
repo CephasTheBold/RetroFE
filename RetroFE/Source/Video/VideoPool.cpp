@@ -24,14 +24,17 @@
 
 VideoPool::PoolMap VideoPool::pools_{};
 bool VideoPool::shuttingDown_ = false;
+uint32_t VideoPool::currentGeneration_ = 0;
 
 namespace {
     constexpr size_t POOL_BUFFER_INSTANCES = 2;
 }
 
 VideoPool::VideoPtr VideoPool::createNewVideo(int monitor, bool softOverlay) {
-    auto vid = std::make_unique<GStreamerVideo>(monitor);
+    auto vid = std::make_shared<GStreamerVideo>(monitor);
     if (!vid || vid->hasError()) return nullptr;
+
+    vid->setGeneration(currentGeneration_); // Tag new videos
     vid->setSoftOverlay(softOverlay);
     return vid;
 }
@@ -41,8 +44,8 @@ VideoPool::VideoPtr VideoPool::popBestAvailable(PoolInfo& pool, int monitor, int
         return nullptr;
     }
 
-    // LIFO: Grab the absolute most recently released video from the very back.
-    // O(1) instant removal, keeps CPU caches hot, lets OS page out the cold ones.
+    // LIFO Logic: Grab the most recently released video from the back of the list.
+    // This keeps the instance "warm" in CPU cache and GStreamer internal state.
     auto vid = std::move(pool.available.back());
     pool.available.pop_back();
 
@@ -55,7 +58,7 @@ VideoPool::VideoPtr VideoPool::popBestAvailable(PoolInfo& pool, int monitor, int
 VideoPool::VideoPtr VideoPool::acquireVideo(int monitor, int listId, bool softOverlay) {
     if (shuttingDown_) return nullptr;
 
-    // Non-pooled
+    // Non-pooled (listId -1)
     if (listId == -1) {
         return createNewVideo(monitor, softOverlay);
     }
@@ -63,138 +66,113 @@ VideoPool::VideoPtr VideoPool::acquireVideo(int monitor, int listId, bool softOv
     PoolInfo& pool = pools_[monitor][listId];
 
     if (pool.markedForCleanup) {
-        // If caller tries to acquire while pool is being cleaned up, treat as "no video".
-        // (Alternative policy: ignore cleanup flag and keep serving until fully idle.)
         LOG_DEBUG("VideoPool", "Acquire (bail: cleanup) " + poolStateStr(monitor, listId, pool));
         return nullptr;
     }
 
-    // 1) Reuse if possible
+    // 1) Try to reuse an existing "warm" video
     if (auto vid = popBestAvailable(pool, monitor, listId)) {
         vid->setSoftOverlay(softOverlay);
         return vid;
     }
 
-    // 2) Pre-latch behavior: always create so we can observe peak concurrency.
-    if (!pool.initialCountLatched) {
+    // 2) Growth Logic: If we haven't hit our latched max, create a new one.
+    if (!pool.initialCountLatched ||
+        (pool.currentActive + pool.available.size() < pool.requiredInstanceCount)) {
+
         pool.currentActive++;
-        pool.observedMaxActive = std::max(pool.observedMaxActive, pool.currentActive);
+
+        // Track the max concurrency during the "pre-latch" phase
+        if (!pool.initialCountLatched) {
+            pool.observedMaxActive = std::max(pool.observedMaxActive, pool.currentActive);
+        }
 
         auto vid = createNewVideo(monitor, softOverlay);
         if (!vid) {
             if (pool.currentActive > 0) pool.currentActive--;
-            LOG_WARNING("VideoPool", "Acquire (PreLatch create FAIL) " + poolStateStr(monitor, listId, pool));
+            LOG_WARNING("VideoPool", "Acquire (New create FAIL) " + poolStateStr(monitor, listId, pool));
             return nullptr;
         }
 
-        LOG_DEBUG("VideoPool", "Acquire (PreLatch create OK) " + poolStateStr(monitor, listId, pool));
+        LOG_DEBUG("VideoPool", "Acquire (New instance created) " + poolStateStr(monitor, listId, pool));
         return vid;
     }
 
-    // 3) Grow if under required capacity
-    const size_t total = pool.currentActive + pool.available.size();
-    if (total < pool.requiredInstanceCount) {
-        pool.currentActive++;
-
-        auto vid = createNewVideo(monitor, softOverlay);
-        if (!vid) {
-            if (pool.currentActive > 0) pool.currentActive--;
-            LOG_WARNING("VideoPool", "Acquire (Growth create FAIL) " + poolStateStr(monitor, listId, pool));
-            return nullptr;
-        }
-
-        LOG_DEBUG("VideoPool", "Acquire (Growth create OK) " + poolStateStr(monitor, listId, pool));
-        return vid;
-    }
-
-    // 4) At cap: if anything is available at all, steal most-recent (even if “cold”)
-    // (This means we never block; we always return something if there is anything available.)
+    // 3) At Capacity: If the pool is "full" but something is idle, steal it.
     if (!pool.available.empty()) {
-        auto it = std::prev(pool.available.end());
-        auto vid = std::move(*it);
-        pool.available.erase(it);
+        auto vid = std::move(pool.available.back());
+        pool.available.pop_back();
         pool.currentActive++;
 
-        LOG_DEBUG("VideoPool", "Acquire (MaxCap take-most-recent) " + poolStateStr(monitor, listId, pool));
         vid->setSoftOverlay(softOverlay);
+        LOG_DEBUG("VideoPool", "Acquire (MaxCap steal) " + poolStateStr(monitor, listId, pool));
         return vid;
     }
 
-    // 5) Fully drained and at cap: policy choice.
-    // For UI smoothness, prefer creating (rare, but avoids returning nullptr).
+    // 4) Emergency Fallback: If we are fully drained, create one anyway to avoid a black screen.
     pool.currentActive++;
-    auto vid = createNewVideo(monitor, softOverlay);
-    if (!vid) {
-        if (pool.currentActive > 0) pool.currentActive--;
-        LOG_WARNING("VideoPool", "Acquire (AtCap create FAIL) " + poolStateStr(monitor, listId, pool));
-        return nullptr;
-    }
-
-    LOG_DEBUG("VideoPool", "Acquire (AtCap create OK) " + poolStateStr(monitor, listId, pool));
-    return vid;
+    return createNewVideo(monitor, softOverlay);
 }
 
 void VideoPool::releaseVideo(VideoPtr vid, int monitor, int listId) {
     if (!vid) return;
     if (shuttingDown_) return;
 
-    // Non-pooled videos: just drop them
+    // One-shot videos are simply dropped; shared_ptr will destroy them 
+    // once background callbacks finish.
     if (listId == -1) return;
+
+    if (auto* gsv = dynamic_cast<GStreamerVideo*>(vid.get())) {
+        // ALWAYS trigger a stop/unload command.
+        // This tells background threads to finish up and release their refs.
+        gsv->unload();
+
+        if (gsv->getGeneration() != currentGeneration_) {
+            LOG_DEBUG("VideoPool", "Discarding old generation video.");
+            return; // The shared_ptr goes out of scope and memory is freed soon.
+        }
+    }
 
     PoolInfo& pool = pools_[monitor][listId];
 
-    // Safety: if caller releases to a pool that is being cleaned up, just drop.
+    // If the list was closed/cleaned up, drop the reference.
     if (pool.markedForCleanup) {
         if (pool.currentActive > 0) pool.currentActive--;
-
-        if (pool.currentActive == 0) {
-            erasePoolIfIdle_nolock(monitor, listId);
-        }
+        if (pool.currentActive == 0) erasePoolIfIdle_nolock(monitor, listId);
         return;
     }
 
-    // Unload BEFORE returning to the pool
+    // Reset GStreamer state synchronously on the main thread before returning to pool.
     if (auto* gsv = dynamic_cast<GStreamerVideo*>(vid.get())) {
         gsv->unload();
     }
 
-    if (pool.currentActive > 0) pool.currentActive--;
-    else {
-        LOG_WARNING("VideoPool", "Release (currentActive already 0) " + poolStateStr(monitor, listId, pool));
+    if (pool.currentActive > 0) {
+        pool.currentActive--;
     }
 
     // --- THE EVICTION CEILING ---
-    // If we have finished the warmup phase (latched), we enforce a strict memory cap.
     if (pool.initialCountLatched) {
-        // requiredInstanceCount already includes the POOL_BUFFER_INSTANCES.
-        // If our idle cache is already full, destroy this video.
+        // If our idle cache is already at the required capacity, destroy this instance.
         if (pool.available.size() >= pool.requiredInstanceCount) {
-            LOG_DEBUG("VideoPool", "Evicting excess video. Pool is at capacity (" +
-                std::to_string(pool.requiredInstanceCount) + ").");
-            // Returning early causes 'vid' (a unique_ptr) to fall out of scope and be destroyed!
+            LOG_DEBUG("VideoPool", "Evicting excess video. Pool capacity reached.");
+            // We return early; 'vid' shared_ptr goes out of scope and destroys the object.
             return;
         }
     }
 
-    // If we haven't hit the ceiling, cache it for reuse.
+    // Cache the video for reuse.
     pool.available.push_back(std::move(vid));
 
-    // Latch logic (calculates the ceiling)
+    // Latch logic: Calculate the steady-state max once we stop seeing new concurrent requests.
     if (!pool.initialCountLatched) {
-        const size_t candidate = pool.observedMaxActive + POOL_BUFFER_INSTANCES;
-        pool.requiredInstanceCount = std::max(pool.requiredInstanceCount, candidate);
+        pool.requiredInstanceCount = pool.observedMaxActive + POOL_BUFFER_INSTANCES;
         pool.initialCountLatched = true;
-
-        LOG_DEBUG("VideoPool", "Release (latch required=" + std::to_string(pool.requiredInstanceCount) + ") " +
+        LOG_DEBUG("VideoPool", "Release (LATCHED cap=" + std::to_string(pool.requiredInstanceCount) + ") " +
             poolStateStr(monitor, listId, pool));
     }
     else {
-        LOG_DEBUG("VideoPool", "Release (reuse) " + poolStateStr(monitor, listId, pool));
-    }
-
-    // If we were marked for cleanup and became idle, erase now
-    if (pool.markedForCleanup && pool.currentActive == 0) {
-        erasePoolIfIdle_nolock(monitor, listId);
+        LOG_DEBUG("VideoPool", "Release (Cache for reuse) " + poolStateStr(monitor, listId, pool));
     }
 }
 
@@ -207,7 +185,6 @@ void VideoPool::releaseVideoBatch(std::vector<VideoPtr> videos, int monitor, int
 
 void VideoPool::cleanup(int monitor, int listId) {
     if (shuttingDown_) return;
-    if (listId == -1) return;
 
     auto mit = pools_.find(monitor);
     if (mit == pools_.end()) return;
@@ -215,20 +192,19 @@ void VideoPool::cleanup(int monitor, int listId) {
     auto lit = mit->second.find(listId);
     if (lit == mit->second.end()) return;
 
-    PoolInfo& pool = lit->second;
-    pool.markedForCleanup = true;
-
+    lit->second.markedForCleanup = true;
     erasePoolIfIdle_nolock(monitor, listId);
 
-    LOG_DEBUG("VideoPool", "Marked for cleanup: Monitor: " + std::to_string(monitor) +
-        ", List ID: " + std::to_string(listId));
+    LOG_DEBUG("VideoPool", "Marked for cleanup: Mon:" + std::to_string(monitor) + " List:" + std::to_string(listId));
 }
 
 void VideoPool::shutdown() {
     LOG_INFO("VideoPool", "Starting VideoPool shutdown...");
     shuttingDown_ = true;
 
-    // Drop all pooled instances (unique_ptr destructors run on main thread)
+    // Dropping the map releases the Pool's shared_ptr references.
+    // Background threads still holding a reference via CallbackCtx will finish 
+    // their work before the objects are physically deleted.
     pools_.clear();
 
     LOG_INFO("VideoPool", "VideoPool shutdown complete.");
@@ -245,8 +221,8 @@ void VideoPool::erasePoolIfIdle_nolock(int monitor, int listId) {
     if (!pool.markedForCleanup || pool.currentActive != 0) return;
 
     pool.available.clear();
-
     mit->second.erase(lit);
+
     if (mit->second.empty()) {
         pools_.erase(mit);
     }
@@ -258,14 +234,17 @@ std::string VideoPool::poolStateStr(int monitor, int listId, const PoolInfo& p) 
         " Active=" + std::to_string(p.currentActive) +
         " Avail=" + std::to_string(p.available.size()) +
         " Req=" + std::to_string(p.requiredInstanceCount) +
-        (p.initialCountLatched ? " LATCHED" : " PRELATCH") +
-        (p.markedForCleanup ? " CLEANUP" : "");
+        (p.initialCountLatched ? " LATCHED" : " PRELATCH");
 }
 
 void VideoPool::reserveCapacity(int monitor, int listId, size_t desiredTotal) {
     if (shuttingDown_) return;
-    if (listId == -1) return;
-
     PoolInfo& pool = pools_[monitor][listId];
     pool.requiredInstanceCount = std::max(pool.requiredInstanceCount, desiredTotal);
+}
+
+void VideoPool::reset() {
+    LOG_INFO("VideoPool", "Reconstructing pools (Generation " + std::to_string(currentGeneration_ + 1) + ")");
+    currentGeneration_++;
+    pools_.clear(); // Immediately destroys all cached (available) videos
 }

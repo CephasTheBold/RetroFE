@@ -62,4 +62,6 @@ public:
 	virtual bool hasError() const = 0;
 	virtual bool unload() = 0;
 	virtual bool hasFinishedLoops() const = 0;
+	virtual uint32_t getGeneration() const = 0;
+	virtual void setGeneration(uint32_t gen) = 0;
 };

@@ -490,7 +490,6 @@ void RetroFE::initializeMusicPlayer() {
 // Launch a game/program
 void RetroFE::launchEnter() {
 	currentPage_->setIsLaunched(true);
-	currentPage_->restartAllByMonitor(0);
 	SDL_SetWindowGrab(SDL::getWindow(0), SDL_FALSE);
 
 	// --- NEW: Check if a reboot is already happening ---
@@ -527,6 +526,7 @@ void RetroFE::launchEnter() {
 // Return from the launch of a game/program
 void RetroFE::launchExit(bool userInitiated) {
 	currentPage_->setIsLaunched(false);
+	VideoPool::shuttingDown_ = false;
 	bool unloadSDL = false;
 	config_.getProperty(OPTION_UNLOADSDL, unloadSDL);
 	if (unloadSDL)
@@ -541,7 +541,7 @@ void RetroFE::launchExit(bool userInitiated) {
 #ifdef WIN32
 	// On Windows, SDL_RaiseWindow is not always enough to steal focus back from
 	// another application like Steam. We need to be more assertive using the native API.
-	SDL_SysWMinfo wminfo;
+	SDL_SysWMinfo wminfo{};
 	SDL_VERSION(&wminfo.version);
 	if (SDL_GetWindowWMInfo(SDL::getWindow(0), &wminfo)) {
 		HWND retroFeHWND = wminfo.info.win.window;
@@ -1214,7 +1214,7 @@ bool RetroFE::run() {
 
 				// Initialize display
 				currentPage_->onNewItemSelected();
-				currentPage_->reallocateMenuSpritePoints();  // Update playlist menu
+				currentPage_->allocateMenuSpritePoints(true);  // Update playlist menu
 
 				splashMode = false;
 

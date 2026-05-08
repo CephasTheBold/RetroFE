@@ -1337,11 +1337,52 @@ bool SDL::renderCopyF(SDL_Texture* texture,
 	const int m = viewInfo.Monitor;
 	if (m < 0 || m >= screenCount_ || !renderer_[m]) return true;
 
+	// --- START FAST PATH SCALE CACHE ---
+	// Stores calculated metrics per monitor to avoid redundant divisions.
+	struct ScaleCache {
+		int lastLW = -1, lastLH = -1, lastOW = -1, lastOH = -1, lastRot = -1;
+		bool lastMir = false, lastFS = false;
+		float scaleX = 1.0f, scaleY = 1.0f, dxL = 0.0f, dyL = 0.0f;
+	};
+	static ScaleCache cache[8]; // Simple static array for up to 8 monitors
+
 	const int outW = windowWidth_[m];
 	const int outH = windowHeight_[m];
+	const int rot = (rotation_[m] & 3);
+	const bool mir = mirror_[m];
+	const bool fs = fullscreen_[m];
 
-	float scaleX = layoutWidth > 0 ? float(outW) / float(layoutWidth) : 1.0f;
-	float scaleY = layoutHeight > 0 ? float(outH) / float(layoutHeight) : 1.0f;
+	// Recompute only if layout, window, rotation, mirroring, or fullscreen status changed
+	if (cache[m].lastLW != layoutWidth || cache[m].lastLH != layoutHeight ||
+		cache[m].lastOW != outW || cache[m].lastOH != outH ||
+		cache[m].lastRot != rot || cache[m].lastMir != mir || cache[m].lastFS != fs)
+	{
+		cache[m].scaleX = layoutWidth > 0 ? float(outW) / float(layoutWidth) : 1.0f;
+		cache[m].scaleY = layoutHeight > 0 ? float(outH) / float(layoutHeight) : 1.0f;
+
+		// Swapping scales for 90/270 degree hardware rotation
+		if ((rot & 1) == 1) {
+			cache[m].scaleX = layoutWidth > 0 ? float(outH) / float(layoutWidth) : 1.0f;
+			cache[m].scaleY = layoutHeight > 0 ? float(outW) / float(layoutHeight) : 1.0f;
+		}
+		if (mir) cache[m].scaleY /= 2.0f;
+
+		// Pre-calculate centered fullscreen layout offset
+		cache[m].dxL = 0.0f; cache[m].dyL = 0.0f;
+		if (fs) {
+			cache[m].dxL = 0.5f * float(displayWidth_[m] - outW) / std::max(cache[m].scaleX, 1e-6f);
+			cache[m].dyL = 0.5f * float(displayHeight_[m] - outH) / std::max(cache[m].scaleY, 1e-6f);
+		}
+
+		// Update tracking keys
+		cache[m].lastLW = layoutWidth; cache[m].lastLH = layoutHeight;
+		cache[m].lastOW = outW; cache[m].lastOH = outH;
+		cache[m].lastRot = rot; cache[m].lastMir = mir; cache[m].lastFS = fs;
+	}
+
+	const float scaleX = cache[m].scaleX;
+	const float scaleY = cache[m].scaleY;
+	// --- END FAST PATH SCALE CACHE ---
 
 	auto texW = (int)viewInfo.ImageWidth;
 	auto texH = (int)viewInfo.ImageHeight;
@@ -1354,13 +1395,15 @@ bool SDL::renderCopyF(SDL_Texture* texture,
 	SDL_Rect srcRect = src ? *src : SDL_Rect{ 0, 0, texW, texH };
 	SDL_FRect dstRect = *dest;
 
+	// Use cached fullscreen offset
+	dstRect.x += cache[m].dxL;
+	dstRect.y += cache[m].dyL;
+
 	if (dstRect.w <= 0.f || dstRect.h <= 0.f || srcRect.w <= 0 || srcRect.h <= 0)
 		return true;
 
 	SDL_FRect container{};
 	bool hasContainer = (viewInfo.ContainerWidth > 0.0f && viewInfo.ContainerHeight > 0.0f);
-	const int rot = (rotation_[m] & 3);
-	const bool mir = mirror_[m];
 
 	if (mir && !hasContainer) {
 		container = { 0.0f, 0.0f, float(layoutWidth), float(layoutHeight) };
@@ -1369,18 +1412,6 @@ bool SDL::renderCopyF(SDL_Texture* texture,
 	else if (hasContainer) {
 		container = { viewInfo.ContainerX, viewInfo.ContainerY,
 			viewInfo.ContainerWidth, viewInfo.ContainerHeight };
-	}
-
-	if ((rotation_[m] & 1) == 1) {
-		scaleX = layoutWidth > 0 ? float(outH) / float(layoutWidth) : 1.0f;
-		scaleY = layoutHeight > 0 ? float(outW) / float(layoutHeight) : 1.0f;
-	}
-	if (mir) scaleY /= 2.0f;
-
-	if (fullscreen_[m]) {
-		const float dxL = 0.5f * float(displayWidth_[m] - outW) / std::max(scaleX, 1e-6f);
-		const float dyL = 0.5f * float(displayHeight_[m] - outH) / std::max(scaleY, 1e-6f);
-		dstRect.x += dxL; dstRect.y += dyL;
 	}
 
 	const SDL_Rect src0 = srcRect;
@@ -1429,7 +1460,6 @@ bool SDL::renderCopyF(SDL_Texture* texture,
 	auto draw_quad = [&](const SDL_FRect& d, const SDL_FRect& dPx, float angleDeg,
 		bool flipH, bool flipV, float alpha01) -> bool
 		{
-			// --- 1. Exact UV Mapping (The "Scroll Shimmer" Fix) ---
 			float clipRatioX = (d.w > 0.f && dst0.w > 0.f) ? (d.x - dst0.x) / dst0.w : 0.f;
 			float clipRatioY = (d.h > 0.f && dst0.h > 0.f) ? (d.y - dst0.y) / dst0.h : 0.f;
 			float clipRatioW = (dst0.w > 0.f) ? d.w / dst0.w : 1.f;
@@ -1448,7 +1478,6 @@ bool SDL::renderCopyF(SDL_Texture* texture,
 			if (flipH) std::swap(u0, u1);
 			if (flipV) std::swap(v0, v1);
 
-			// --- 2. Floating-Point Safe Trigonometry ---
 			float cosA, sinA;
 			float remainder = fmodf(fabsf(angleDeg), 90.0f);
 			if (remainder < 0.001f || remainder > 89.999f) {
@@ -1465,14 +1494,11 @@ bool SDL::renderCopyF(SDL_Texture* texture,
 				sinA = sinf(rad);
 			}
 
-			// --- 3. Local Center Rotation & Culling ---
 			float cx = dPx.x + 0.5f * dPx.w;
 			float cy = dPx.y + 0.5f * dPx.h;
 
-			float c = fabsf(cosA);
-			float s_ = fabsf(sinA);
-			float hx = 0.5f * (c * dPx.w + s_ * dPx.h);
-			float hy = 0.5f * (s_ * dPx.w + c * dPx.h);
+			float hx = 0.5f * (fabsf(cosA) * dPx.w + fabsf(sinA) * dPx.h);
+			float hy = 0.5f * (fabsf(sinA) * dPx.w + fabsf(cosA) * dPx.h);
 
 			const float epsilon = 1.0f;
 			if (cx + hx < -epsilon || cy + hy < -epsilon ||
@@ -1480,12 +1506,11 @@ bool SDL::renderCopyF(SDL_Texture* texture,
 				return true;
 			}
 
-			// --- 4. Vertex Generation ---
 			SDL_FPoint pts[4] = {
-				{dPx.x, dPx.y},                 // TL
-				{dPx.x + dPx.w, dPx.y},         // TR
-				{dPx.x + dPx.w, dPx.y + dPx.h}, // BR
-				{dPx.x, dPx.y + dPx.h}          // BL
+				{dPx.x, dPx.y},
+				{dPx.x + dPx.w, dPx.y},
+				{dPx.x + dPx.w, dPx.y + dPx.h},
+				{dPx.x, dPx.y + dPx.h}
 			};
 
 			for (int i = 0; i < 4; ++i) {
@@ -1508,7 +1533,6 @@ bool SDL::renderCopyF(SDL_Texture* texture,
 		};
 
 	auto render_path = [&](bool reflect, int kind = -1) -> bool {
-		// Fast-fail culling before expensive clipping/rotation math
 		if (dst0.x + dst0.w < 0 || dst0.y + dst0.h < 0 ||
 			dst0.x >(float)layoutWidth || dst0.y >(float)layoutHeight) {
 			return true;
@@ -1533,7 +1557,7 @@ bool SDL::renderCopyF(SDL_Texture* texture,
 		if (d.w <= 0.f || d.h <= 0.f || s.w <= 0 || s.h <= 0) return true;
 
 		float angle = viewInfo.Angle;
-		if (!mir) angle += float(rot * 90); // Restored original hardware angle addition
+		if (!mir) angle += float(rot * 90);
 		SDL_FRect dPx = to_pixels(d);
 
 		bool ok = true;
@@ -1554,7 +1578,7 @@ bool SDL::renderCopyF(SDL_Texture* texture,
 			}
 		}
 		else {
-			apply_output_rotation_rect(dPx); // Restored original origin translation
+			apply_output_rotation_rect(dPx);
 			ok &= draw_quad(d, dPx, angle, fH, fV, a);
 		}
 		return ok;
@@ -1566,4 +1590,3 @@ bool SDL::renderCopyF(SDL_Texture* texture,
 	}
 	return ok;
 }
-

@@ -14,16 +14,17 @@
  * along with RetroFE.  If not, see <http://www.gnu.org/licenses/>.
  */
 #include "Animation.h"
-#include <string>
-#include <memory>
-#include <vector>
-
-#include "Animation.h"
+#include <utility> // for std::move
 
 Animation::Animation() = default;
 
 void Animation::Push(const TweenSet& set) {
-    animationVector_.push_back(set); // Triggers deep copy of the TweenSet
+    animationVector_.push_back(set); // Standard deep copy
+}
+
+void Animation::Push(TweenSet&& set) {
+    // C++20: Move the set into the vector to "steal" its internal Tween vector
+    animationVector_.emplace_back(std::move(set));
 }
 
 void Animation::Clear() {
@@ -37,6 +38,6 @@ TweenSet* Animation::tweenSet(unsigned int index) {
     return nullptr;
 }
 
-size_t Animation::size() const {
+size_t Animation::size() const noexcept {
     return animationVector_.size();
 }

@@ -36,7 +36,7 @@ public:
     void draw() override;
     void freeGraphicsMemory() override;
     void allocateGraphicsMemory() override;
-    std::unique_ptr<IVideo> extractVideo();
+    std::shared_ptr<IVideo> extractVideo();
     bool isPlaying() override;
     bool hasFinishedLoops();
     bool hasVideoStream();
@@ -54,7 +54,7 @@ public:
 
 private:
     std::string videoFile_;
-    std::unique_ptr<IVideo> videoInst_;
+    std::shared_ptr<IVideo> videoInst_;
     bool hasBeenOnScreen_{ false };
     bool wasVisible_{ false };
     bool softOverlay_;

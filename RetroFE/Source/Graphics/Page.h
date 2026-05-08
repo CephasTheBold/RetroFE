@@ -117,6 +117,7 @@ public:
     void initializeFonts( ) const;
     void playSelect();
     bool isSelectPlaying();
+    void allocateMenuSpritePoints(bool updatePlaylistMenu) const;
     std::string getCollectionName();
     CollectionInfo *getCollection();
     void  setMinShowTime(float value);
@@ -187,7 +188,7 @@ public:
     ScrollingList* getPlaylistMenu();
     void setPlaylistMenu(ScrollingList*);
     void setIsLaunched(bool isLaunched);
-    bool getIsLaunched();
+    bool getIsLaunched() const;
     bool playlistExists(const std::string&);
     void setSelectedItem();
     bool fromPreviousPlaylist = false;

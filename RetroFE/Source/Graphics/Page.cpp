@@ -1764,6 +1764,15 @@ bool Page::isSelectPlaying() {
 }
 
 
+void Page::allocateMenuSpritePoints(bool updatePlaylistMenu) const {
+	for (ScrollingList* menu : activeMenu_) {
+		if (menu && (!menu->isPlaylist() || updatePlaylistMenu)) {
+			menu->allocateSpritePoints();
+		}
+	}
+}
+
+
 void Page::reallocateMenuSpritePoints(bool updatePlaylistMenu) const {
 	for (ScrollingList* menu : activeMenu_) {
 		if (menu && (!menu->isPlaylist() || updatePlaylistMenu)) {
@@ -2060,6 +2069,6 @@ void Page::setIsLaunched(bool isLaunched) {
 	isLaunched_ = isLaunched;
 }
 
-bool Page::getIsLaunched() {
+bool Page::getIsLaunched() const {
 	return isLaunched_;
 }

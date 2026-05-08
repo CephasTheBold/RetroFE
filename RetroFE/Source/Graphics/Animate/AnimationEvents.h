@@ -18,20 +18,25 @@
 #include "Animation.h"
 #include <map>
 #include <string>
+#include <string_view>
 
 class AnimationEvents {
 public:
+    // C++20: Use std::less<> to enable transparent lookups
+    using InnerMap = std::map<int, Animation>;
+    using AnimationMap = std::map<std::string, InnerMap, std::less<>>;
+
     AnimationEvents() = default;
     ~AnimationEvents() = default;
 
-    // Returns a pointer to the Animation in the map for modification
-    Animation* getAnimation(const std::string& tween, int index = -1);
+    // C++20: Use std::string_view to avoid allocations during lookups
+    Animation* getAnimation(std::string_view tween, int index = -1);
 
     void setAnimation(const std::string& tween, int index, const Animation& animation);
     void clear();
 
-    const std::map<std::string, std::map<int, Animation>>& getAnimationMap() const;
+    const AnimationMap& getAnimationMap() const;
 
 private:
-    std::map<std::string, std::map<int, Animation>> animationMap_;
+    AnimationMap animationMap_;
 };

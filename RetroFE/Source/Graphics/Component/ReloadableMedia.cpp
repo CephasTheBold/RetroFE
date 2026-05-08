@@ -143,12 +143,6 @@ Component* ReloadableMedia::reloadTexture() {
     std::string typeLC = Utils::toLower(type_);
     Item* selectedItem = page.getSelectedItem(displayOffset_);
 
-    if (loadedComponent_ && !selectedItem) {
-
-        delete loadedComponent_;
-        loadedComponent_ = nullptr;
-    }
-
     if (!selectedItem) return nullptr;
 
     // build clone list

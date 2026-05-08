@@ -152,7 +152,7 @@ void ScrollingList::selectItemByName(std::string_view name)
     }
 }
 
-void ScrollingList::restartByMonitor(int monitor) {
+void ScrollingList::restartByMonitor(int monitor) const {
     for (Component* c : getComponents()) {
         if (c && c->baseViewInfo.Monitor == monitor)
             c->restart();
@@ -194,7 +194,7 @@ void ScrollingList::deallocateSpritePoints() {
         return;
 
     int monitor = baseViewInfo.Monitor;
-    std::vector<std::unique_ptr<IVideo>> pooledVideos;
+    std::vector<std::shared_ptr<IVideo>> pooledVideos;
 
     // Extract videos first, before deleting components
     for (Component* comp : components_.raw()) {
@@ -249,14 +249,19 @@ void ScrollingList::reallocateSpritePoints() {
     size_t itemsSize = items_->size();
     int monitor = baseViewInfo.Monitor;
 
+    // --- NEW: Reset the pool before we start releasing the current batch ---
+    // 1. Clears all idle/cached videos from VRAM instantly.
+    // 2. Increments the generation ID, ensuring the videos we are about to 
+    //    extract are marked as "obsolete".
+    VideoPool::reset();
+
     // --- Step 1: Extract video instances for batch release ---
-    std::vector<std::unique_ptr<IVideo>> pooledVideos;
+    std::vector<VideoPool::VideoPtr> pooledVideos;
 
     for (size_t i = 0; i < scrollPointsSize; ++i) {
         Component* comp = components_[i];
         if (!comp) continue;
 
-        // Pull the heavy video out so it can be pooled cleanly
         if (auto* videoComp = dynamic_cast<VideoComponent*>(comp)) {
             auto video = videoComp->extractVideo();
             if (video)
@@ -266,27 +271,24 @@ void ScrollingList::reallocateSpritePoints() {
 
     // --- Step 2: Batch release to pool ---
     if (!pooledVideos.empty()) {
+        // Because we called reset() above, releaseVideo will now detect 
+        // the generation mismatch and physically destroy these instances 
+        // instead of caching them.
         VideoPool::releaseVideoBatch(std::move(pooledVideos), monitor, listId_);
     }
-
-    // --- Step 3: Wait for releases to complete ---
-    ThreadPool::getInstance().wait();
 
     // --- Step 4: Reallocate components and assign tweens ---
     for (size_t i = 0; i < scrollPointsSize; ++i) {
         size_t index = loopIncrement(itemIndex_, i, itemsSize);
         Item const* item = (*items_)[index];
 
-        // --- RECYCLING ---
-        // allocateTexture will automatically grab components_[i].
-        // If it was an Image or Text, it recycles it. 
-        // If it was a now-empty VideoComponent, it safely deletes it.
+        // allocateTexture will now call VideoPool::acquireVideo, which 
+        // will find an empty pool and create brand-new instances.
         allocateTexture(i, item);
 
         Component* c = components_[i];
         if (c) {
             c->allocateGraphicsMemory();
-
             ViewInfo* view = (*scrollPoints_)[i];
             resetTweens(c, (*tweenPoints_)[i], view, view, 0);
         }
@@ -918,7 +920,7 @@ void ScrollingList::resetTweens(Component* c, std::shared_ptr<AnimationEvents> s
     TweenSet set;
     const float EPSILON_FLOAT = 0.0001f;
 
-    // Conditionally add Tweens only if properties differ, resolving C4244 warnings with static_cast
+    // Conditionally add Tweens only if properties differ
     if (currentViewInfo->Restart != nextViewInfo->Restart && scrollPeriod_ > minScrollTime_) {
         set.push(Tween(TWEEN_PROPERTY_RESTART, LINEAR, static_cast<float>(currentViewInfo->Restart), static_cast<float>(nextViewInfo->Restart), 0.0f));
     }
@@ -974,12 +976,11 @@ void ScrollingList::resetTweens(Component* c, std::shared_ptr<AnimationEvents> s
         set.push(Tween(TWEEN_PROPERTY_MONITOR, LINEAR, static_cast<float>(currentViewInfo->Monitor), static_cast<float>(nextViewInfo->Monitor), scrollTime));
     }
 
-    // Push the constructed set into the animation; this performs a deep copy
+    // C++20: Use std::move to trigger the rvalue overload and avoid deep-copying the vector
     if (set.size() > 0) {
-        scrollAnimation->Push(set);
+        scrollAnimation->Push(std::move(set));
     }
 }
-
 bool ScrollingList::allocateTexture(size_t index, const Item* item) {
     if (index >= components_.size()) return false;
 

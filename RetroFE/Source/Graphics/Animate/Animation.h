@@ -16,24 +16,32 @@
 #pragma once
 
 #include "TweenSet.h"
-#include <string>
 #include <vector>
-#include <map>
-#include <memory>
 
 class Animation {
 public:
     Animation();
+
+    // C++20: Explicit noexcept move support allows std::vector to optimize 
+    // reallocations and assignments.
+    Animation(Animation&& other) noexcept = default;
+    Animation& operator=(Animation&& other) noexcept = default;
+
     Animation(const Animation& copy) = default;
     Animation& operator=(const Animation& other) = default;
     ~Animation() = default;
 
-    void Push(const TweenSet& set); // Takes a copy of the set
+    // Overload for lvalues (standard copy)
+    void Push(const TweenSet& set);
+
+    // C++20: Overload for rvalues (move - avoids vector allocations)
+    void Push(TweenSet&& set);
+
     void Clear();
 
-    TweenSet* tweenSet(unsigned int index); // Returns pointer to internal set
-    size_t size() const;
+    [[nodiscard]] TweenSet* tweenSet(unsigned int index);
+    [[nodiscard]] size_t size() const noexcept;
 
 private:
-    std::vector<TweenSet> animationVector_; // Contiguous storage of sets
+    std::vector<TweenSet> animationVector_;
 };

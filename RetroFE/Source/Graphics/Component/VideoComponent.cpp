@@ -247,7 +247,7 @@ void VideoComponent::allocateGraphicsMemory() {
 	}
 }
 
-std::unique_ptr<IVideo> VideoComponent::extractVideo() {
+std::shared_ptr<IVideo> VideoComponent::extractVideo() {
 	instanceReady_ = false;
 	return std::move(videoInst_);
 }
