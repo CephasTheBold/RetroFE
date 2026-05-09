@@ -71,9 +71,9 @@ private:
 
     static inline const std::vector<std::string> imageExtensions = {
 #ifdef WIN32
-        "png", "gif", "jpg", "jpeg"
+        "qoi", "png", "gif", "jpg", "jpeg"
 #else
-        "png", "PNG", "gif", "GIF", "jpg", "JPG", "jpeg", "JPEG",
+        "qoi", "QOI", "png", "PNG", "gif", "GIF", "jpg", "JPG", "jpeg", "JPEG",
 #endif
     };
 
