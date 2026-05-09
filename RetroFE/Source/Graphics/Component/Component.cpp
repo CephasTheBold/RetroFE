@@ -186,10 +186,13 @@ bool Component::update(float dt) {
 
     // 2. Handle transitions to Idle state if nothing is running
     if (tweens_ && currentTweenComplete_) {
+        if (page.isMenuScrolling()) {
+            return currentTweenComplete_;
+        }
         animationType_ = "idle";
         Animation* idleTweens = tweens_->getAnimation("idle", menuIndex_);
 
-        if (idleTweens && idleTweens->size() == 0 && !page.isMenuScrolling()) {
+        if (idleTweens && idleTweens->size() == 0) {
             idleTweens = tweens_->getAnimation("menuIdle", menuIndex_);
         }
 
