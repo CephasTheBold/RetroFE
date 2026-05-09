@@ -19,7 +19,11 @@
 #include <fstream>
 
 
-VideoComponent* VideoBuilder::createVideo(const std::string& path, Page& page, const std::string& name, int monitor, int numLoops, bool softOverlay, int listId, const int* perspectiveCorners) {
+VideoComponent* VideoBuilder::createVideo(const std::string& path, Page& page, const std::string& name,
+    int monitor, int numLoops, bool softOverlay, int listId,
+    const int* perspectiveCorners,
+    Component* recycleTarget)
+{
     VideoComponent* component = nullptr;
 
     // Declare the extensions vector as static so it's only initialized once.
@@ -38,9 +42,12 @@ VideoComponent* VideoBuilder::createVideo(const std::string& path, Page& page, c
     std::string prefix = Utils::combinePath(path, name);
 
     if (std::string file; Utils::findMatchingFile(prefix, extensions, file)) {
-        component = new VideoComponent(page, file, monitor, numLoops, softOverlay, listId, perspectiveCorners);
-        //component->allocateGraphicsMemory();
+        // Attempt recycling
+        if (recycleTarget && recycleTarget->recycleAsVideo(file, name)) {
+            return static_cast<VideoComponent*>(recycleTarget);
+        }
+        // Fallback to new allocation
+        return new VideoComponent(page, file, monitor, numLoops, softOverlay, listId, perspectiveCorners);
     }
-
-    return component;
+    return nullptr;
 }

@@ -1014,14 +1014,9 @@ bool ScrollingList::allocateTexture(size_t index, const Item* item) {
         if (videoType_ == "null") return nullptr;
 
         return videoBuild.createVideo(
-            videoPath,
-            page,
-            logicalName,
-            baseViewInfo.Monitor,
-            -1,
-            false,
-            listId_,
-            perspectiveCornersInitialized_ ? perspectiveCorners_ : nullptr);
+            videoPath, page, logicalName, baseViewInfo.Monitor, -1, false, listId_,
+            perspectiveCornersInitialized_ ? perspectiveCorners_ : nullptr,
+            existingComponent); // <--- Pass for recycling
         };
 
     auto tryImageWithName = [&](const std::string& imagePath, const std::string& baseName) -> Component* {

@@ -264,6 +264,8 @@ void Text::updateGlyphPositions(FontManager* font, float scale, float maxWidth) 
 }
 
 bool Text::recycleAsText(const std::string& newText) {
+    this->Component::freeGraphicsMemory();
+    
     if (textData_ != newText) {
         textData_ = newText;
         needsUpdate_ = true;

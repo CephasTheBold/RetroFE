@@ -34,6 +34,7 @@ public:
     ~VideoComponent() override;
     bool update(float dt) override;
     void draw() override;
+    bool recycleAsVideo(const std::string& path, const std::string& name) override;
     void freeGraphicsMemory() override;
     void allocateGraphicsMemory() override;
     std::shared_ptr<IVideo> extractVideo();

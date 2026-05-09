@@ -54,6 +54,44 @@ VideoComponent::~VideoComponent() {
 	VideoComponent::freeGraphicsMemory();
 }
 
+bool VideoComponent::recycleAsVideo(const std::string& path, const std::string& name) {
+	if (path.empty()) return false;
+
+	// 1. Skip if it's the same file and the current instance is valid/not in error
+	if (videoFile_ == path && videoInst_ && !videoInst_->hasError()) {
+		return true;
+	}
+
+	// 2. Reset the internal animation/idle state (The 2.6s timer fix)
+	// This clears elapsedTweenTime_ and currentAnimation_ in the base class
+	this->Component::freeGraphicsMemory();
+
+	// 3. Update targeting metadata
+	videoFile_ = path;
+	// Note: monitor_, listId_, and perspectiveCorners_ are slot-specific and retained
+
+	// 4. Atomic Handoff: Release old video and acquire new one from pool
+	if (videoInst_) {
+		// Move the current instance to a temporary so allocateGraphicsMemory can pick up a new one
+		auto oldVideo = std::move(videoInst_);
+		instanceReady_ = false;
+		dimensionsUpdated_ = false; // Reset dimensions so the new video can lock its own size
+
+		// Acquire the new video instance for the updated videoFile_
+		allocateGraphicsMemory();
+
+		// Safely return the old instance to the pool
+		if (oldVideo) {
+			VideoPool::releaseVideo(std::move(oldVideo), monitor_, listId_);
+		}
+	}
+	else {
+		allocateGraphicsMemory();
+	}
+
+	return true;
+}
+
 bool VideoComponent::update(float dt) {
 
 	// 1. --- complete pending retarget on the main thread ---
