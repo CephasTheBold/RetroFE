@@ -76,6 +76,7 @@ public:
 	int getId() const;
 	std::string playlistName;
 
+	static void clearSharedTextures();
 	virtual bool recycleAsImage(const std::string& /*newFilePath*/, const std::string & /*newAltPath*/ = "") { return false; }
 	virtual bool recycleAsText(const std::string& /*newText*/) { return false; }
 
@@ -89,7 +90,7 @@ private:
     std::shared_ptr<AnimationEvents> tweens_;
     Animation currentAnimation_;
     SDL_Texture *backgroundTexture_;
-    std::map<int, SDL_Texture*> sharedBackgroundTextures_;
+    static std::map<int, SDL_Texture*> sharedBackgroundTextures_;
     bool         pauseOnScroll_;
     ViewInfo     storeViewInfo_;
     unsigned int currentTweenIndex_;

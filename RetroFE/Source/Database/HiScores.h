@@ -50,7 +50,7 @@ public:
 
     // -------- Local (hi2txt) --------
     void loadHighScores(const std::string& zipPath, const std::string& overridePath);
-    HighScoreData* getHighScoreTable(const std::string& gameName);
+    HighScoreData getHighScoreTable(const std::string& gameName);
     bool hasHiFile(const std::string& gameName) const;
     bool runHi2Txt(const std::string& gameName);
     void runHi2TxtAsync(const std::string& gameName);
@@ -62,7 +62,7 @@ public:
     bool loadGlobalCacheFromDisk();                               // reads compact V3 schema
     bool saveGlobalCacheToDisk() const;
 
-    HighScoreData* getGlobalHiScoreTable(Item* item) const;
+    HighScoreData getGlobalHiScoreTable(Item* item) const;
 
     // Accessors (storage-only)
     const GlobalGame* getGlobalGameById(const std::string& gameId) const;   // nullptr if missing

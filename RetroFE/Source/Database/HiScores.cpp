@@ -740,14 +740,15 @@ void HiScores::loadFromFile(const std::string& gameName, const std::string& file
 	}
 }
 
-// Retrieve a pointer to the high score table for a specific game
-HighScoreData* HiScores::getHighScoreTable(const std::string& gameName) {
-	std::shared_lock<std::shared_mutex> lock(scoresCacheMutex_);  // Shared lock for concurrent reads
+HighScoreData HiScores::getHighScoreTable(const std::string& gameName) {
+	std::shared_lock<std::shared_mutex> lock(scoresCacheMutex_);
 	auto it = scoresCache_.find(gameName);
 	if (it != scoresCache_.end()) {
-		return &it->second;
+		// Return a copy by value. This is safe even if the map is 
+		// later updated by a background hi2txt thread.
+		return it->second;
 	}
-	return nullptr;
+	return {}; // Return empty object if not found
 }
 
 // Check if a .hi file exists for the given game
@@ -2009,16 +2010,17 @@ static inline std::string prettyDateNumericDots_(const std::string& ymd_hms) {
 	return formatDateDotsLocale_(y, m, d, /*twoDigitYear=*/true);
 }
 
-HighScoreData* HiScores::getGlobalHiScoreTable(Item* item) const {
-	static thread_local HighScoreData scratch;
-	scratch.tables.clear();
-	if (!item) return &scratch;
+HighScoreData HiScores::getGlobalHiScoreTable(Item* item) const {
+	// 1. Return by value to ensure ownership isolation.
+	// This prevents the "Data Aliasing Hazard" during mass component reallocation.
+	HighScoreData result;
+	if (!item) return result;
 
 	const std::string idsCsv = item->iscoredId;
 	const std::string typesCsv = item->iscoredType;
 
 	const auto ids = splitCSV_(idsCsv);
-	if (ids.empty()) return &scratch;
+	if (ids.empty()) return result;
 
 	// Parse per-table sort modes (aligned with ids); repeat last if fewer provided.
 	std::vector<SortCfg> sorts;
@@ -2049,11 +2051,11 @@ HighScoreData* HiScores::getGlobalHiScoreTable(Item* item) const {
 			const GlobalGame& gg = it->second;
 			Page p;
 			p.rows = gg.rows;
-			p.title = titleFromGameName_(gg.gameName); // substring after last '_' (keeps spaces)
+			p.title = titleFromGameName_(gg.gameName);
 			pages.push_back(std::move(p));
 		}
 	}
-	if (pages.empty()) return &scratch;
+	if (pages.empty()) return result;
 
 	// Comparators parameterized by mode
 	auto cmpScore = [&](GlobalSort mode, const GlobalRow& a, const GlobalRow& b) {
@@ -2106,7 +2108,7 @@ HighScoreData* HiScores::getGlobalHiScoreTable(Item* item) const {
 				m == GlobalSort::DivideBy1000Asc || m == GlobalSort::MultiplyBy10Asc ||
 				m == GlobalSort::MultiplyBy100Asc || m == GlobalSort::MultiplyBy1000Asc);
 		if (ha && hb) return asc ? (va < vb) : (va > vb);
-		if (ha != hb) return ha; // numeric beats non-numeric
+		if (ha != hb) return ha;
 		int c = a.score.compare(b.score);
 		return asc ? (c < 0) : (c > 0);
 		};
@@ -2116,7 +2118,6 @@ HighScoreData* HiScores::getGlobalHiScoreTable(Item* item) const {
 		auto& pg = pages[i];
 		const SortCfg cfg = cfgOf(i);
 		const GlobalSort mode = cfg.mode;
-
 
 		const bool isTime = (mode == GlobalSort::TimeAsc || mode == GlobalSort::TimeDesc);
 		const bool isMoney = (mode == GlobalSort::MoneyAsc || mode == GlobalSort::MoneyDesc);
@@ -2179,8 +2180,6 @@ HighScoreData* HiScores::getGlobalHiScoreTable(Item* item) const {
 			std::stable_sort(pg.rows.begin(), pg.rows.end(),
 				[&](const GlobalRow& a, const GlobalRow& b) { return cmpMoney(mode, a, b); });
 			break;
-
-			// NEW scaled score types:
 			case GlobalSort::DivideBy10Asc:   case GlobalSort::DivideBy10Desc:
 			case GlobalSort::DivideBy100Asc:  case GlobalSort::DivideBy100Desc:
 			case GlobalSort::DivideBy1000Asc: case GlobalSort::DivideBy1000Desc:
@@ -2190,7 +2189,6 @@ HighScoreData* HiScores::getGlobalHiScoreTable(Item* item) const {
 			std::stable_sort(pg.rows.begin(), pg.rows.end(),
 				[&](const GlobalRow& a, const GlobalRow& b) { return cmpScaled(mode, a, b); });
 			break;
-
 			default:
 			if (isDist)
 				std::stable_sort(pg.rows.begin(), pg.rows.end(),
@@ -2211,12 +2209,11 @@ HighScoreData* HiScores::getGlobalHiScoreTable(Item* item) const {
 
 		constexpr size_t kRowsPerTable = 10;
 		t.rows.reserve(kRowsPerTable);
-		t.isPlaceholder.reserve(kRowsPerTable);  // NEW
+		t.isPlaceholder.reserve(kRowsPerTable);
 
 		size_t rank = 1;
 		for (const auto& r : pg.rows) {
 			if (rank > kRowsPerTable) break;
-
 			const std::string datePretty = prettyDateNumericDots_(r.date);
 			std::string scorePretty;
 
@@ -2232,51 +2229,34 @@ HighScoreData* HiScores::getGlobalHiScoreTable(Item* item) const {
 			else if (isWeight) {
 				long long canon; scorePretty = toCanonicalWeight_(mode, r.score, canon) ? fmtWeight_(mode, canon) : r.score;
 			}
-			else {
-				if (isScaledScoreMode_(mode)) {
-					double val;
-					if (getScaledScore_(mode, r.score, val)) {
-						const int dp = cfg.hasDpOverride ? cfg.dpOverride : -1;
-						scorePretty = formatScaledScoreStr_(mode, val, dp);
-					}
-					else {
-						scorePretty = formatThousands_(r.score);
-					}
+			else if (isScaledScoreMode_(mode)) {
+				double val;
+				if (getScaledScore_(mode, r.score, val)) {
+					const int dp = cfg.hasDpOverride ? cfg.dpOverride : -1;
+					scorePretty = formatScaledScoreStr_(mode, val, dp);
 				}
 				else {
 					scorePretty = formatThousands_(r.score);
 				}
 			}
+			else {
+				scorePretty = formatThousands_(r.score);
+			}
 
-			t.rows.push_back({
-				ordinal_(rank++),
-				r.player.empty() ? phName : r.player,
-				scorePretty.empty() ? phScore : scorePretty,
-				datePretty.empty() ? phDate : datePretty
-				});
-
-			// NEW: Mark placeholders (false = real data for all columns)
+			t.rows.push_back({ ordinal_(rank++), r.player.empty() ? phName : r.player, scorePretty.empty() ? phScore : scorePretty, datePretty.empty() ? phDate : datePretty });
 			t.isPlaceholder.push_back({ false, false, false, false });
 		}
 
 		for (; rank <= kRowsPerTable; ++rank) {
 			t.rows.push_back({ ordinal_(rank), phName, phScore, phDate });
-
-			// NEW: Mark ALL cells in this row as placeholders
-			// Column order: Rank, Name, Score, Date
-			t.isPlaceholder.push_back({
-				false,  // Rank is never a placeholder (always shows "10th" etc)
-				true,   // Name
-				true,   // Score
-				true    // Date
-				});
+			t.isPlaceholder.push_back({ false, true, true, true });
 		}
 
 		t.forceRedraw = true;
-		scratch.tables.push_back(std::move(t));
+		result.tables.push_back(std::move(t));
 	}
 
-	return &scratch;
+	return result; // 2. Return local object by value
 }
 
 const GlobalGame* HiScores::getGlobalGameById(const std::string& gameId) const {

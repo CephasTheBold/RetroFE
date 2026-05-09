@@ -32,6 +32,13 @@
  // Constructor / Destructor
  // ============================================================================
 
+static inline void setAlphaIfChanged_(SDL_Texture* tex, Uint8& cache, Uint8 target) {
+    if (tex && cache != target) {
+        SDL_SetTextureAlphaMod(tex, target);
+        cache = target;
+    }
+}
+
 ReloadableGlobalHiscores::ReloadableGlobalHiscores(
     Configuration& /*config*/,
     std::string textFormat,
@@ -48,7 +55,7 @@ ReloadableGlobalHiscores::ReloadableGlobalHiscores(
     , displayOffset_(displayOffset)
     , tablesNeedRedraw_(true)  // Tables need initial rendering
     , needsRedraw_(true)
-    , highScoreTable_(nullptr)
+    , highScoreTable_()
     , tableTexture_(nullptr)
     , intermediateTexture_(nullptr)
     , prevCompositeTexture_(nullptr)
@@ -101,7 +108,7 @@ void ReloadableGlobalHiscores::beginContext_(bool resetQr) {
     // rebuilds the table set for the new item. During that window, update()'s page-rotation
     // logic must not compute a new grid baseline from the previous item's table set.
     // Nulling this pointer prevents stale baselines (e.g., multi-table -> single-table).
-    highScoreTable_ = nullptr;
+    highScoreTable_ = HighScoreData();
 
     if (resetQr) {
         qrPhase_ = QrPhase::Hidden;
@@ -474,8 +481,8 @@ bool ReloadableGlobalHiscores::update(float dt) {
     // Only rotate pages (and compute baselines) once the current selection has been rendered.
     // This avoids computing a grid baseline from a stale table set during the debounce window
     // after a selection change.
-    if (!needsRedraw_ && reloadDebounceTimer_ <= 0.f && highScoreTable_ && !highScoreTable_->tables.empty()) {
-        const int totalTables = (int)highScoreTable_->tables.size();
+    if (!needsRedraw_ && reloadDebounceTimer_ <= 0.f && !highScoreTable_.tables.empty()) {
+        const int totalTables = (int)highScoreTable_.tables.size();
         int pageSize = std::max(1, gridBaselineValid_ ? gridBaselineSlots_ : gridPageSize_);
 
         // If baseline isn't computed yet, compute it here so update() and reloadTexture() agree.
@@ -654,7 +661,7 @@ void ReloadableGlobalHiscores::computeGridBaseline_(
     gridBaselineCellH_ = 0.f;
     gridBaselineRowMin_.clear();
 
-    if (!font || !highScoreTable_ || totalTables <= 0 || compW <= 1.f || compH <= 1.f) {
+    if (!font || highScoreTable_.tables.empty() || totalTables <= 0 || compW <= 1.f || compH <= 1.f) {
         return;
     }
 
@@ -734,7 +741,7 @@ void ReloadableGlobalHiscores::computeGridBaseline_(
             const float colPad0 = baseColumnPadding_ * drawableH0;
 
             for (int t = 0; t < firstPageCount; ++t) {
-                const auto& table = highScoreTable_->tables[t];
+                const auto& table = highScoreTable_.tables[t];
 
                 // Width: max per-column string width + padding between columns
                 float width0 = 0.0f;
@@ -868,63 +875,55 @@ void ReloadableGlobalHiscores::reloadTexture() {
             const float k = (mip->height > 0) ? (targetH / mip->height) : 1.0f;
             SDL_Texture* fillTex = mip->fillTexture;
             SDL_Texture* outlineTex = mip->outlineTexture;
-
             const float ySnap = std::round(y);
 
-            // Outline pass
-            if (outlineTex) {
+            // Helper to process UTF-8 strings for both passes
+            auto renderPass = [&](SDL_Texture* tex, bool isFill) {
+                if (!tex) return;
+                const unsigned char* ptr = (const unsigned char*)s.c_str();
+                const unsigned char* end = ptr + s.length();
                 float penX = x;
                 Uint16 prev = 0;
-                for (unsigned char uc : s) {
-                    Uint16 ch = (Uint16)uc;
-                    if (prev) penX += f->getKerning(prev, ch) * finalScale;
 
-                    auto it = mip->glyphs.find(ch);
+                while (ptr < end) {
+                    Uint32 ch;
+                    // UTF-8 Decoding (1, 2, or 3 byte sequences)
+                    if (*ptr < 0x80) ch = *ptr++;
+                    else if ((*ptr & 0xE0) == 0xC0) {
+                        if (ptr + 1 >= end) break;
+                        ch = ((*ptr & 0x1F) << 6) | (*(ptr + 1) & 0x3F);
+                        ptr += 2;
+                    }
+                    else if ((*ptr & 0xF0) == 0xE0) {
+                        if (ptr + 2 >= end) break;
+                        ch = ((*ptr & 0x0F) << 12) | ((*(ptr + 1) & 0x3F) << 6) | (*(ptr + 2) & 0x3F);
+                        ptr += 3;
+                    }
+                    else { ptr++; continue; }
+
+                    if (prev) penX += f->getKerning(prev, (Uint16)ch) * finalScale;
+
+                    auto it = mip->glyphs.find((Uint16)ch);
                     if (it != mip->glyphs.end()) {
                         const auto& g = it->second;
-                        const SDL_Rect& src = g.rect;
-                        SDL_FRect dst = {
-                            penX - g.fillX * k,
-                            ySnap - g.fillY * k,
-                            src.w * k,
-                            src.h * k
-                        };
-                        SDL_RenderCopyF(r, outlineTex, &src, &dst);
+                        if (isFill) {
+                            SDL_Rect srcFill{ g.rect.x + g.fillX, g.rect.y + g.fillY, g.fillW, g.fillH };
+                            SDL_FRect dstFill{ penX, ySnap, g.fillW * k, g.fillH * k };
+                            SDL_RenderCopyF(r, tex, &srcFill, &dstFill);
+                        }
+                        else {
+                            const SDL_Rect& src = g.rect;
+                            SDL_FRect dst = { penX - g.fillX * k, ySnap - g.fillY * k, src.w * k, src.h * k };
+                            SDL_RenderCopyF(r, tex, &src, &dst);
+                        }
                         penX += g.advance * k;
                     }
-                    prev = ch;
+                    prev = (Uint16)ch;
                 }
-            }
+                };
 
-            // Fill pass
-            {
-                float penX = x;
-                Uint16 prev = 0;
-                for (unsigned char uc : s) {
-                    Uint16 ch = (Uint16)uc;
-                    if (prev) penX += f->getKerning(prev, ch) * finalScale;
-
-                    auto it = mip->glyphs.find(ch);
-                    if (it != mip->glyphs.end()) {
-                        const auto& g = it->second;
-                        SDL_Rect srcFill{
-                            g.rect.x + g.fillX,
-                            g.rect.y + g.fillY,
-                            g.fillW,
-                            g.fillH
-                        };
-                        SDL_FRect dst{
-                            penX,
-                            ySnap,
-                            g.fillW * k,
-                            g.fillH * k
-                        };
-                        SDL_RenderCopyF(r, fillTex, &srcFill, &dst);
-                        penX += g.advance * k;
-                    }
-                    prev = ch;
-                }
-            }
+            renderPass(outlineTex, false);
+            renderPass(fillTex, true);
         };
 
     // --- Exact width measure (mip + kerning + outline overhang) ---
@@ -932,18 +931,35 @@ void ReloadableGlobalHiscores::reloadTexture() {
         if (!f || s.empty()) return 0.0f;
         const float targetH = scale * f->getMaxHeight();
         const FontManager::MipLevel* mip = f->getMipLevelForSize((int)targetH);
-        if (!mip || !mip->fillTexture) {
-            return (float)f->getWidth(s) * scale;
-        }
+        if (!mip || !mip->fillTexture) return (float)f->getWidth(s) * scale;
+
         const float k = (mip->height > 0) ? (targetH / mip->height) : 1.0f;
         const bool hasOutline = (mip->outlineTexture != nullptr);
+
+        const unsigned char* ptr = (const unsigned char*)s.c_str();
+        const unsigned char* end = ptr + s.length();
         float penX = 0.0f, minX = 0.0f, maxX = 0.0f;
         bool first = true;
         Uint16 prev = 0;
-        for (unsigned char uc : s) {
-            Uint16 ch = (Uint16)uc;
-            if (prev) penX += f->getKerning(prev, ch) * scale;
-            auto it = mip->glyphs.find(ch);
+
+        while (ptr < end) {
+            Uint32 ch;
+            if (*ptr < 0x80) ch = *ptr++;
+            else if ((*ptr & 0xE0) == 0xC0) {
+                if (ptr + 1 >= end) break;
+                ch = ((*ptr & 0x1F) << 6) | (*(ptr + 1) & 0x3F);
+                ptr += 2;
+            }
+            else if ((*ptr & 0xF0) == 0xE0) {
+                if (ptr + 2 >= end) break;
+                ch = ((*ptr & 0x0F) << 12) | ((*(ptr + 1) & 0x3F) << 6) | (*(ptr + 2) & 0x3F);
+                ptr += 3;
+            }
+            else { ptr++; continue; }
+
+            if (prev) penX += f->getKerning(prev, (Uint16)ch) * scale;
+
+            auto it = mip->glyphs.find((Uint16)ch);
             if (it != mip->glyphs.end()) {
                 const auto& g = it->second;
                 float left = penX;
@@ -954,18 +970,11 @@ void ReloadableGlobalHiscores::reloadTexture() {
                     left = std::min(left, oL);
                     right = std::max(right, oR);
                 }
-                if (first) {
-                    minX = left;
-                    maxX = right;
-                    first = false;
-                }
-                else {
-                    minX = std::min(minX, left);
-                    maxX = std::max(maxX, right);
-                }
+                if (first) { minX = left; maxX = right; first = false; }
+                else { minX = std::min(minX, left); maxX = std::max(maxX, right); }
                 penX += g.advance * k;
             }
-            prev = ch;
+            prev = (Uint16)ch;
         }
         return std::max(0.0f, maxX - minX);
         };
@@ -1049,7 +1058,7 @@ void ReloadableGlobalHiscores::reloadTexture() {
 
     Item* selectedItem = page.getSelectedItem(displayOffset_);
     if (!selectedItem || !renderer) {
-        highScoreTable_ = nullptr;
+        highScoreTable_ = HighScoreData();
 
         if (prevCompositeTexture_) {
             SDL_DestroyTexture(prevCompositeTexture_);
@@ -1073,7 +1082,7 @@ void ReloadableGlobalHiscores::reloadTexture() {
     }
 
     highScoreTable_ = HiScores::getInstance().getGlobalHiScoreTable(selectedItem);
-    if (!highScoreTable_ || highScoreTable_->tables.empty()) {
+    if (highScoreTable_.tables.empty()) {
         if (prevCompositeTexture_) {
             SDL_DestroyTexture(prevCompositeTexture_);
             prevCompositeTexture_ = nullptr;
@@ -1095,7 +1104,7 @@ void ReloadableGlobalHiscores::reloadTexture() {
         return;
     }
 
-    const int totalTables = (int)highScoreTable_->tables.size();
+    const int totalTables = (int)highScoreTable_.tables.size();
     const float compW = baseViewInfo.Width;
     const float compH = baseViewInfo.Height;
 
@@ -1275,7 +1284,7 @@ void ReloadableGlobalHiscores::reloadTexture() {
     // This keeps the layout stable across page rotation.
     size_t maxCols = 0;
     for (int gi = 0; gi < totalTables; ++gi)
-        maxCols = std::max(maxCols, highScoreTable_->tables[gi].columns.size());
+        maxCols = std::max(maxCols, highScoreTable_.tables[gi].columns.size());
     if (maxCols == 0) { needsRedraw_ = true; return; }
 
     std::vector<float> maxColW0(maxCols, 0.f);
@@ -1283,7 +1292,7 @@ void ReloadableGlobalHiscores::reloadTexture() {
     float height0Max = 0.f; // use worst-case height so scale doesn't vary per-page
 
     for (int gi = 0; gi < totalTables; ++gi) {
-        const auto& table = highScoreTable_->tables[gi];
+        const auto& table = highScoreTable_.tables[gi];
 
         for (size_t c = 0; c < maxCols; ++c) {
             float w = 0.f;
@@ -1310,7 +1319,7 @@ void ReloadableGlobalHiscores::reloadTexture() {
     // keep a max for fit-scale stability.
     std::vector<float> height0(Nvisible, std::max(height0Max, lineH0 * (1 + kRowsPerPage)));
     for (int t = 0; t < Nvisible; ++t) {
-        const auto& table = highScoreTable_->tables[startIdx + t];
+        const auto& table = highScoreTable_.tables[startIdx + t];
         float h = lineH0;
         if (!table.id.empty()) h += lineH0;
         h += lineH0 * kRowsPerPage;
@@ -1383,7 +1392,7 @@ void ReloadableGlobalHiscores::reloadTexture() {
 
         for (int t = 0; t < Nvisible; ++t) {
             const int gi = startIdx + t;
-            const auto& table = highScoreTable_->tables[gi];
+            const auto& table = highScoreTable_.tables[gi];
 
             const int slotCol = (t % cols);
             const int slotRow = (t / cols);

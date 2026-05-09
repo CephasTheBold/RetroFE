@@ -34,12 +34,12 @@ void GlibLoop::start() {
         g_main_context_pop_thread_default(ctx_);
 
         // Teardown
+        running_.store(false, std::memory_order_release);
+
         g_main_loop_unref(loop_);
         loop_ = nullptr;
         g_main_context_unref(ctx_);
         ctx_ = nullptr;
-
-        running_.store(false, std::memory_order_release);
         });
 }
 
@@ -220,14 +220,15 @@ template std::future<int> GlibLoop::invokeAsync<int>(std::function<int()>, int);
 guint GlibLoop::addBusWatch(GstBus* bus, GstBusFunc func, gpointer user_data, GDestroyNotify notify, int priority) {
     if (!isRunning() || !bus || !func) return 0;
 
-    std::promise<guint> pr;
-    auto fut = pr.get_future();
-    gst_object_ref(bus);
+    auto pr = std::make_shared<std::promise<guint>>();
+    auto fut = pr->get_future();
 
-    invoke([bus, func, user_data, notify, &pr, priority]() mutable {
+    gst_object_ref(bus); // <--- Keep it alive for the jump
+
+    invoke([bus, func, user_data, notify, pr, priority]() mutable {
         guint id = gst_bus_add_watch_full(bus, priority, func, user_data, notify);
-        pr.set_value(id);
-        gst_object_unref(bus);
+        pr->set_value(id);
+        gst_object_unref(bus); // <--- Done with it
         }, priority);
 
     return fut.get();

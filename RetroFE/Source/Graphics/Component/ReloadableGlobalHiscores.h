@@ -21,6 +21,7 @@
 #include <SDL.h>
 
 #include "Component.h"
+#include "../../Database/HiScores.h"
 
  // Forward declarations
 class Configuration;
@@ -141,7 +142,7 @@ private:
 
     bool           tablesNeedRedraw_;    // Tables need re-rendering (data/geometry changed)
     bool           needsRedraw_;
-    HighScoreData* highScoreTable_;
+    HighScoreData highScoreTable_;
 
     // Composite textures
     SDL_Texture* tableTexture_;             // Tables only (cached until data/geometry changes)

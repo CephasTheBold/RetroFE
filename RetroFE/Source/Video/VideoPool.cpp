@@ -159,11 +159,6 @@ void VideoPool::releaseVideo(VideoPtr vid, int monitor, int listId) {
         return;
     }
 
-    // Reset GStreamer state synchronously on the main thread before returning to pool.
-    if (auto* gsv = dynamic_cast<GStreamerVideo*>(vid.get())) {
-        gsv->unload();
-    }
-
     if (pool.currentActive > 0) {
         pool.currentActive--;
     }

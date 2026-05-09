@@ -20,6 +20,8 @@
 #include "../../SDL.h"
 #include "../PageBuilder.h"
 
+std::map<int, SDL_Texture*> Component::sharedBackgroundTextures_;
+
 Component::Component(Page &p)
 : page(p)
 {
@@ -60,6 +62,16 @@ void Component::freeGraphicsMemory() {
     elapsedTweenTime_ = 0;
 
     backgroundTexture_ = nullptr;
+}
+
+void Component::clearSharedTextures() {
+    for (auto const& [monitor, texture] : sharedBackgroundTextures_) {
+        if (texture) {
+            SDL_DestroyTexture(texture);
+        }
+    }
+    sharedBackgroundTextures_.clear();
+    LOG_DEBUG("Component", "Shared textures cleared.");
 }
 
 // used to draw lines in the layout using <container>

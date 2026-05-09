@@ -117,6 +117,7 @@ private:
 		std::shared_ptr<AsyncState> state;
 		// C++20: Atomic weak pointer to prevent circular references
 		std::atomic<std::weak_ptr<GStreamerVideo>> self;
+		std::atomic<uint64_t> sessionId{ 0 };
 	};
 
 	// One ctx per pipeline/appsink set. Owned by this instance while pipeline_ exists.

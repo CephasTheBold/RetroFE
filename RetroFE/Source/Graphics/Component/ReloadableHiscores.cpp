@@ -45,7 +45,7 @@ namespace {
 
 		float penX = 0.0f, minX = 0.0f, maxX = 0.0f;
 		bool first = true;
-		Uint32 prev = 0; // Use Uint32 for UTF-8
+		Uint32 prev = 0;
 
 		const char* ptr = s.c_str();
 		const char* end = ptr + s.size();
@@ -57,8 +57,7 @@ namespace {
 			if (c < 0x80) { codepoint = c; }
 			else if ((c & 0xE0) == 0xC0) {
 				if (ptr + 1 > end) break;
-				unsigned char b1 = static_cast<unsigned char>(*ptr++);
-				codepoint = ((c & 0x1F) << 6) | (b1 & 0x3F);
+				codepoint = ((c & 0x1F) << 6) | (static_cast<unsigned char>(*ptr++) & 0x3F);
 			}
 			else if ((c & 0xF0) == 0xE0) {
 				if (ptr + 2 > end) break;
@@ -73,52 +72,50 @@ namespace {
 				unsigned char b3 = static_cast<unsigned char>(*ptr++);
 				codepoint = ((c & 0x07) << 18) | ((b1 & 0x3F) << 12) | ((b2 & 0x3F) << 6) | (b3 & 0x3F);
 			}
-			else {
-				prev = 0;
-				continue;
-			}
+			else { prev = 0; continue; }
 
 			const Uint32 ch = codepoint;
 			if (prev) penX += f->getKerning(prev, ch) * scale;
 
-			// Check both static and dynamic maps
+			// FIXED: Safe multi-map lookup using pointers instead of cross-container iterators
+			const FontManager::GlyphInfo* g = nullptr;
 			auto it = mip->glyphs.find(ch);
-			if (it == mip->glyphs.end()) {
-				it = mip->dynamicGlyphs.find(ch);
+			if (it != mip->glyphs.end()) {
+				g = &it->second;
+			}
+			else {
+				auto itDyn = mip->dynamicGlyphs.find(ch);
+				if (itDyn != mip->dynamicGlyphs.end()) {
+					g = &itDyn->second;
+				}
 			}
 
-			if (it != mip->dynamicGlyphs.end() && it != mip->glyphs.end()) {
-				const auto& g = it->second;
-
+			if (g) {
 				float left = penX;
-				float right = penX + g.fillW * k;
+				float right = penX + g->fillW * k;
 
 				if (hasOutline) {
-					const float oL = penX - g.fillX * k;
-					const float oR = oL + g.rect.w * k;
+					const float oL = penX - g->fillX * k;
+					const float oR = oL + g->rect.w * k;
 					left = std::min(left, oL);
 					right = std::max(right, oR);
 				}
 
 				if (first) {
-					minX = left;
-					maxX = right;
+					minX = left; maxX = right;
 					first = false;
 				}
 				else {
 					minX = std::min(minX, left);
 					maxX = std::max(maxX, right);
 				}
-
-				penX += g.advance * k;
+				penX += g->advance * k;
 			}
-
 			prev = ch;
 		}
 
 		return std::max(0.0f, maxX - minX);
 	}
-
 	static void renderTextOutlined(
 		SDL_Renderer* r,
 		FontManager* f,
@@ -134,8 +131,10 @@ namespace {
 
 		const float ySnap = std::round(y);
 
-		// --- Outline pass ---
-		if (staticOutlineTex || mip->dynamicOutlineTexture) {
+		// Helper to perform a single pass (Outline or Fill)
+		auto doPass = [&](SDL_Texture* staticTex, SDL_Texture* dynamicTex, bool isFill) {
+			if (!staticTex && !dynamicTex) return;
+
 			float penX = x;
 			Uint32 prev = 0;
 			const char* ptr = s.c_str();
@@ -163,97 +162,50 @@ namespace {
 					unsigned char b3 = static_cast<unsigned char>(*ptr++);
 					codepoint = ((c & 0x07) << 18) | ((b1 & 0x3F) << 12) | ((b2 & 0x3F) << 6) | (b3 & 0x3F);
 				}
-				else {
-					prev = 0;
-					continue;
-				}
+				else { prev = 0; continue; }
 
 				const Uint32 ch = codepoint;
 				if (prev) penX += f->getKerning(prev, ch) * finalScale;
 
-				bool isDynamic = false;
+				// FIXED: Safe multi-map lookup
+				const FontManager::GlyphInfo* g = nullptr;
+				SDL_Texture* texToUse = nullptr;
+
 				auto it = mip->glyphs.find(ch);
-				if (it == mip->glyphs.end()) {
-					it = mip->dynamicGlyphs.find(ch);
-					isDynamic = true;
+				if (it != mip->glyphs.end()) {
+					g = &it->second;
+					texToUse = staticTex;
+				}
+				else {
+					auto itDyn = mip->dynamicGlyphs.find(ch);
+					if (itDyn != mip->dynamicGlyphs.end()) {
+						g = &itDyn->second;
+						texToUse = dynamicTex;
+					}
 				}
 
-				if (it != mip->dynamicGlyphs.end() || it != mip->glyphs.end()) {
-					const auto& g = it->second;
-					const SDL_Rect& src = g.rect;
-					SDL_FRect dst = { penX - g.fillX * k, ySnap - g.fillY * k, src.w * k, src.h * k };
-
-					SDL_Texture* texToUse = isDynamic ? mip->dynamicOutlineTexture : staticOutlineTex;
-					if (texToUse) {
+				if (g && texToUse) {
+					if (isFill) {
+						SDL_Rect srcFill{ g->rect.x + g->fillX, g->rect.y + g->fillY, g->fillW, g->fillH };
+						SDL_FRect dstFill{ penX, ySnap, g->fillW * k, g->fillH * k };
+						SDL_RenderCopyF(r, texToUse, &srcFill, &dstFill);
+					}
+					else {
+						const SDL_Rect& src = g->rect;
+						SDL_FRect dst = { penX - g->fillX * k, ySnap - g->fillY * k, src.w * k, src.h * k };
 						SDL_RenderCopyF(r, texToUse, &src, &dst);
 					}
-
-					penX += g.advance * k;
+					penX += g->advance * k;
 				}
 				prev = ch;
 			}
-		}
+			};
+
+		// --- Outline pass ---
+		doPass(staticOutlineTex, mip->dynamicOutlineTexture, false);
 
 		// --- Fill pass ---
-		{
-			float penX = x;
-			Uint32 prev = 0;
-			const char* ptr = s.c_str();
-			const char* end = ptr + s.size();
-
-			while (ptr < end) {
-				uint32_t codepoint = 0;
-				unsigned char c = static_cast<unsigned char>(*ptr++);
-
-				if (c < 0x80) { codepoint = c; }
-				else if ((c & 0xE0) == 0xC0) {
-					if (ptr + 1 > end) break;
-					codepoint = ((c & 0x1F) << 6) | (static_cast<unsigned char>(*ptr++) & 0x3F);
-				}
-				else if ((c & 0xF0) == 0xE0) {
-					if (ptr + 2 > end) break;
-					unsigned char b1 = static_cast<unsigned char>(*ptr++);
-					unsigned char b2 = static_cast<unsigned char>(*ptr++);
-					codepoint = ((c & 0x0F) << 12) | ((b1 & 0x3F) << 6) | (b2 & 0x3F);
-				}
-				else if ((c & 0xF8) == 0xF0) {
-					if (ptr + 3 > end) break;
-					unsigned char b1 = static_cast<unsigned char>(*ptr++);
-					unsigned char b2 = static_cast<unsigned char>(*ptr++);
-					unsigned char b3 = static_cast<unsigned char>(*ptr++);
-					codepoint = ((c & 0x07) << 18) | ((b1 & 0x3F) << 12) | ((b2 & 0x3F) << 6) | (b3 & 0x3F);
-				}
-				else {
-					prev = 0;
-					continue;
-				}
-
-				const Uint32 ch = codepoint;
-				if (prev) penX += f->getKerning(prev, ch) * finalScale;
-
-				bool isDynamic = false;
-				auto it = mip->glyphs.find(ch);
-				if (it == mip->glyphs.end()) {
-					it = mip->dynamicGlyphs.find(ch);
-					isDynamic = true;
-				}
-
-				if (it != mip->dynamicGlyphs.end() || it != mip->glyphs.end()) {
-					const auto& g = it->second;
-
-					SDL_Rect srcFill{ g.rect.x + g.fillX, g.rect.y + g.fillY, g.fillW, g.fillH };
-					SDL_FRect dst{ penX, ySnap, g.fillW * k, g.fillH * k };
-
-					SDL_Texture* texToUse = isDynamic ? mip->dynamicFillTexture : staticFillTex;
-					if (texToUse) {
-						SDL_RenderCopyF(r, texToUse, &srcFill, &dst);
-					}
-
-					penX += g.advance * k;
-				}
-				prev = ch;
-			}
-		}
+		doPass(staticFillTex, mip->dynamicFillTexture, true);
 	}
 
 } // namespace
@@ -291,7 +243,7 @@ ReloadableHiscores::ReloadableHiscores(Configuration& config, std::string textFo
 	, lastComputedDrawableHeight_(0.0f)
 	, lastComputedRowPadding_(0.0f)
 	, lastSelectedItem_(nullptr)
-	, highScoreTable_(nullptr)
+	, highScoreTable_()
 	, headerTexture_(nullptr)
 	, tableRowsTexture_(nullptr)
 	, tableRowsTextureHeight_(0)
@@ -367,7 +319,7 @@ bool ReloadableHiscores::update(float dt) {
 		// So, only proceed with param-based reload if no new item selection is pending.
 		if (shouldReloadBasedOnParams && !(newItemSelected || (newScrollItemSelected && getMenuScrollReload()))) {
 			// If currentTableIndex_ also changed (e.g. externally), ensure scroll resets
-			if (highScoreTable_ && !highScoreTable_->tables.empty() &&
+			if (!highScoreTable_.tables.empty() &&
 				cachedTableIndex_ != currentTableIndex_ && cacheValid_) {
 				resetScrollForParamReload = true;
 			}
@@ -376,9 +328,9 @@ bool ReloadableHiscores::update(float dt) {
 		}
 
 		// --- 2. Scrolling and Table Switching Logic ---
-		if (highScoreTable_ && !highScoreTable_->tables.empty()) {
+		if (!highScoreTable_.tables.empty()) {
 			// Ensure currentTableIndex_ is within bounds before use
-			if (currentTableIndex_ >= highScoreTable_->tables.size()) {
+			if (currentTableIndex_ >= highScoreTable_.tables.size()) {
 				LOG_WARNING("ReloadableHiscores", "currentTableIndex_ was out of bounds, resetting to 0.");
 				currentTableIndex_ = 0;
 				// This change in currentTableIndex_ should have triggered a reload if cache was valid for old index.
@@ -392,7 +344,7 @@ bool ReloadableHiscores::update(float dt) {
 			// Proceed only if cache is valid for the current table
 			// (reloadTexture above, or from a previous frame, should have made it valid)
 			if (cacheValid_ && cachedTableIndex_ == currentTableIndex_) {
-				const HighScoreTable& table = highScoreTable_->tables[currentTableIndex_];
+				const HighScoreTable& table = highScoreTable_.tables[currentTableIndex_];
 
 				// Use authoritative geometric values from cache
 				float drawableHeight = lastComputedDrawableHeight_;
@@ -425,8 +377,8 @@ bool ReloadableHiscores::update(float dt) {
 					needsRedraw_ = true;
 
 					if (currentPosition_ >= scrollCompletionTarget) {
-						if (highScoreTable_->tables.size() > 1) {
-							currentTableIndex_ = (currentTableIndex_ + 1) % highScoreTable_->tables.size();
+						if (highScoreTable_.tables.size() > 1) {
+							currentTableIndex_ = (currentTableIndex_ + 1) % highScoreTable_.tables.size();
 							waitEndTime_ = startTime_;
 							currentPosition_ = 0.0f;
 							tableDisplayTimer_ = 0.0f;
@@ -449,14 +401,14 @@ bool ReloadableHiscores::update(float dt) {
 					}
 
 					// Handle multi-table switching for static (non-scrolling) tables
-					if (highScoreTable_->tables.size() > 1) {
+					if (highScoreTable_.tables.size() > 1) {
 						currentTableDisplayTime_ = displayTime_; // Static display time
 						tableDisplayTimer_ += dt;
 
 						// LOG_DEBUG("ReloadableHiscores", "Static Table Display Timer: " + std::to_string(tableDisplayTimer_) + " / " + std::to_string(currentTableDisplayTime_));
 
 						if (tableDisplayTimer_ >= currentTableDisplayTime_) {
-							currentTableIndex_ = (currentTableIndex_ + 1) % highScoreTable_->tables.size();
+							currentTableIndex_ = (currentTableIndex_ + 1) % highScoreTable_.tables.size();
 							tableDisplayTimer_ = 0.0f;
 							waitEndTime_ = startTime_; // Optional: Add a pause before showing next static table
 							currentPosition_ = 0.0f;   // Ensure it's at top
@@ -470,7 +422,7 @@ bool ReloadableHiscores::update(float dt) {
 					}
 				}
 			}
-			else if (highScoreTable_ && !highScoreTable_->tables.empty()) {
+			else if (!highScoreTable_.tables.empty()) {
 				// highScoreTable exists, but cache is not valid for currentTableIndex_ OR cacheValid is false.
 				// This implies a reload is needed if not already handled by newItemSelected.
 				if (!(newItemSelected || (newScrollItemSelected && getMenuScrollReload()))) {
@@ -516,6 +468,7 @@ void ReloadableHiscores::allocateGraphicsMemory() {
 
 void ReloadableHiscores::freeGraphicsMemory() {
 	Component::freeGraphicsMemory();
+	lastSelectedItem_ = nullptr;
 	if (headerTexture_) { SDL_DestroyTexture(headerTexture_); headerTexture_ = nullptr; }
 	if (tableRowsTexture_) { SDL_DestroyTexture(tableRowsTexture_); tableRowsTexture_ = nullptr; }
 }
@@ -532,7 +485,6 @@ void ReloadableHiscores::initializeFonts() {
 
 
 void ReloadableHiscores::reloadTexture(bool resetScroll) {
-	
 	if (resetScroll) {
 		currentPosition_ = 0.0f;
 		waitStartTime_ = startTime_;
@@ -546,144 +498,217 @@ void ReloadableHiscores::reloadTexture(bool resetScroll) {
 		lastSelectedItem_ = selectedItem;
 		if (selectedItem) {
 			highScoreTable_ = HiScores::getInstance().getHighScoreTable(selectedItem->name);
-			if (highScoreTable_ && !highScoreTable_->tables.empty()) {
-				currentTableIndex_ = 0; // Reset to first table
-			}
+			if (!highScoreTable_.tables.empty()) currentTableIndex_ = 0;
 		}
 		else {
-			highScoreTable_ = nullptr;
+			highScoreTable_.tables.clear();
 		}
-		// Invalidate cache fully if item changes, forcing re-evaluation of everything
-		// for the new table or lack thereof.
-		// cachedTableIndex_ is effectively invalidated by currentTableIndex_ possibly changing.
-		// And we'll update it below after calculations.
 	}
 
-	// If no table, show a friendly message instead of drawing nothing.
-	if (!highScoreTable_ || highScoreTable_->tables.empty()) {
-		if (headerTexture_) { SDL_DestroyTexture(headerTexture_); headerTexture_ = nullptr; }
-		if (tableRowsTexture_) { SDL_DestroyTexture(tableRowsTexture_); tableRowsTexture_ = nullptr; }
-		tableRowsTextureHeight_ = 0;
+	SDL_Renderer* renderer = SDL::getRenderer(baseViewInfo.Monitor);
+	FontManager* font = baseViewInfo.font ? baseViewInfo.font : fontInst_;
+	if (!renderer || !font || font->getMaxHeight() <= 0) return;
 
-		SDL_Renderer* renderer = SDL::getRenderer(baseViewInfo.Monitor);
-		FontManager* font = baseViewInfo.font ? baseViewInfo.font : fontInst_;
-
-		if (renderer && font && font->getMaxHeight() > 0) {
-			float effectiveViewWidth = baseViewInfo.MaxWidth;
-			if (baseViewInfo.Width > 0 && baseViewInfo.Width < baseViewInfo.MaxWidth)
-				effectiveViewWidth = baseViewInfo.Width;
-
-			float effectiveViewHeight = baseViewInfo.Height;
-			if (effectiveViewHeight <= 0.0f) effectiveViewHeight = 1.0f;
-
-			// Split into two lines so it stays readable at typical layout widths.
-			const std::string line1 = "LOCAL SCORES NOT AVAILABLE";
-			const std::string line2 = "OR NOT YET SUPPORTED";
-			const std::string line3 = "FOR THIS GAME";
-			const std::vector<std::string> lines = { line1, line2, line3 };
-
-			const float scale = baseViewInfo.FontSize / static_cast<float>(font->getMaxHeight());
-			const float drawableHeight = font->getMaxAscent() * scale;
-			const float rowPadding = std::max(1.0f, baseRowPadding_ * drawableHeight);
-
-			const size_t gapCount = (lines.size() > 0) ? (lines.size() - 1) : 0;
-			const float totalTextHeight = drawableHeight * static_cast<float>(lines.size()) +
-				rowPadding * static_cast<float>(gapCount);
-			float y = (effectiveViewHeight - totalTextHeight) / 2.0f;
-			if (y < 0.0f) y = 0.0f;
-
-			// Mipmapping setup
-			const float targetPixelHeight = scale * font->getMaxHeight();
-			const FontManager::MipLevel* mip = font->getMipLevelForSize(static_cast<int>(targetPixelHeight));
-			SDL_Texture* fillTex = mip ? mip->fillTexture : nullptr;
-			SDL_Texture* outlineTex = mip ? mip->outlineTexture : nullptr;
-			const float mipRelativeScale = (mip && mip->height > 0) ? (targetPixelHeight / mip->height) : 1.0f;
-
-			// Make the message texture span the component area so we can center vertically.
-			headerTextureHeight_ = static_cast<int>(std::ceil(effectiveViewHeight));
-			cachedTotalTableWidth_ = effectiveViewWidth;
-			headerTexture_ = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET,
-				static_cast<int>(std::ceil(effectiveViewWidth)), headerTextureHeight_);
-			if (headerTexture_) {
-				SDL_SetTextureBlendMode(headerTexture_, SDL_BLENDMODE_BLEND);
-				SDL_Texture* oldTarget = SDL_GetRenderTarget(renderer);
-				SDL_SetRenderTarget(renderer, headerTexture_);
-				SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
-				SDL_RenderClear(renderer);
-
-				if (mip && fillTex) {
-					for (const auto& s : lines) {
-						const float w = measureTextWidthExact(font, s, scale);
-						float x = (effectiveViewWidth - w) / 2.0f;
-						if (x < 0.0f) x = 0.0f;
-						renderTextOutlined(renderer, font, mip, fillTex, outlineTex, s, x, y, scale, mipRelativeScale);
-						y += drawableHeight + rowPadding;
-					}
-				}
-
-				SDL_SetRenderTarget(renderer, oldTarget);
-			}
-
-			cacheValid_ = (headerTexture_ != nullptr);
-		}
-		else {
-			cacheValid_ = false;
-		}
-
-		needsRedraw_ = true;
+	// --- Path A: No Scores ---
+	if (highScoreTable_.tables.empty()) {
+		renderNoDataMessage(renderer, font); // Consolidate your message logic here
 		return;
 	}
 
-	// Ensure currentTableIndex_ is valid *before* using it.
-	if (currentTableIndex_ >= highScoreTable_->tables.size()) {
-		currentTableIndex_ = 0;
-		// This implies a table switch, scroll should ideally reset if not already handled
-		if (!resetScroll) { // If resetScroll wasn't already true from args
-			currentPosition_ = 0.0f;
-			waitStartTime_ = startTime_;
-			waitEndTime_ = 0.0f;
-		}
-	}
-
-	const HighScoreTable& table = highScoreTable_->tables[currentTableIndex_];
-	if (itemChanged || cachedTableIndex_ != currentTableIndex_) { // Update visible columns if item or table index changed
+	// --- Path B: Normal Rendering ---
+	const HighScoreTable& table = highScoreTable_.tables[currentTableIndex_];
+	if (itemChanged || cachedTableIndex_ != currentTableIndex_) {
 		updateVisibleColumns(table);
 	}
 
+	float effectiveViewWidth = (baseViewInfo.Width > 0 && baseViewInfo.Width < baseViewInfo.MaxWidth)
+		? baseViewInfo.Width : baseViewInfo.MaxWidth;
 
-	FontManager* font = baseViewInfo.font ? baseViewInfo.font : fontInst_;
-	float effectiveViewWidth = baseViewInfo.MaxWidth; // Default to MaxWidth
-	if (baseViewInfo.Width > 0 && baseViewInfo.Width < baseViewInfo.MaxWidth) {
-		effectiveViewWidth = baseViewInfo.Width;
-	}
 	std::vector<float> colWidths;
-	float totalTableWidth = 0;
-	float drawableHeight, rowPadding, paddingBetweenColumns; // These are 'out' params
+	float totalTableWidth = 0, drawableHeight, rowPadding, paddingBetweenColumns;
 
 	float finalScale = computeTableScaleAndWidths(
-		font, table,
-		drawableHeight, rowPadding, paddingBetweenColumns, // Pass by ref to be filled
-		colWidths, totalTableWidth,
-		effectiveViewWidth);
+		font, table, drawableHeight, rowPadding, paddingBetweenColumns,
+		colWidths, totalTableWidth, effectiveViewWidth);
 
-	// Store all authoritative calculated values
+	// Update authoritative cache
 	cachedColumnWidths_ = colWidths;
 	cachedTotalTableWidth_ = totalTableWidth;
 	lastScale_ = finalScale;
 	lastPaddingBetweenColumns_ = paddingBetweenColumns;
 	lastComputedDrawableHeight_ = drawableHeight;
 	lastComputedRowPadding_ = rowPadding;
-
-	// Cache the context under which these values were computed
 	cachedViewWidth_ = effectiveViewWidth;
 	cachedBaseFontSize_ = baseViewInfo.FontSize;
-	cachedTableIndex_ = currentTableIndex_; // The table for which this cache is valid
-	cacheValid_ = true;                     // Mark cache as valid
+	cachedTableIndex_ = currentTableIndex_;
+	cacheValid_ = true;
 
-	// Render textures using these authoritative values
-	renderHeaderTexture(font, table, finalScale, drawableHeight, rowPadding, paddingBetweenColumns, totalTableWidth);
-	renderTableRowsTexture(font, table, finalScale, drawableHeight, rowPadding, paddingBetweenColumns, totalTableWidth);
+	// --- Optimized Texture Allocation (The Allocation Guard) ---
+	int targetW = static_cast<int>(std::ceil(totalTableWidth));
+	int targetHeaderH = static_cast<int>(drawableHeight + rowPadding) * (table.id.empty() ? 1 : 2);
 
+	size_t rowsToRender = std::min(table.rows.size(), maxRows_);
+	int targetRowsH = static_cast<int>((drawableHeight + rowPadding) * rowsToRender);
+	if (targetRowsH <= 0) targetRowsH = 1;
+
+	// Only recreate textures if the size has changed. This prevents VRAM thrashing.
+	auto manageTexture = [&](SDL_Texture*& tex, int w, int h, int& currentH) {
+		int actualW, actualH;
+		bool sizeMismatch = true;
+		if (tex) {
+			SDL_QueryTexture(tex, nullptr, nullptr, &actualW, &actualH);
+			if (actualW == w && actualH == h) sizeMismatch = false;
+		}
+
+		if (sizeMismatch) {
+			if (tex) SDL_DestroyTexture(tex);
+			tex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, w, h);
+			if (tex) SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+		}
+		currentH = h;
+		};
+
+	// Use currentHeaderH_ and currentRowsH_ members to track heights across calls
+	manageTexture(headerTexture_, targetW, targetHeaderH, headerTextureHeight_);
+	manageTexture(tableRowsTexture_, targetW, targetRowsH, tableRowsTextureHeight_);
+
+	// --- Consolidated Render Pass ---
+	SDL_Texture* oldTarget = SDL_GetRenderTarget(renderer);
+
+	// Mipmapping Setup
+	const float targetPixelHeight = finalScale * font->getMaxHeight();
+	const FontManager::MipLevel* mip = font->getMipLevelForSize(static_cast<int>(targetPixelHeight));
+	if (mip) {
+		const float mipRelativeScale = (mip->height > 0) ? (targetPixelHeight / mip->height) : 1.0f;
+		SDL_Texture* fillTex = mip->fillTexture;
+		SDL_Texture* outlineTex = mip->outlineTexture;
+
+		// Draw Header
+		if (headerTexture_) {
+			SDL_SetRenderTarget(renderer, headerTexture_);
+			SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
+			SDL_RenderClear(renderer);
+
+			float y = 0.0f;
+			if (!table.id.empty()) {
+				float titleW = measureTextWidthExact(font, table.id, finalScale);
+				renderTextOutlined(renderer, font, mip, fillTex, outlineTex, table.id, (totalTableWidth - titleW) / 2.0f, y, finalScale, mipRelativeScale);
+				y += drawableHeight + rowPadding;
+			}
+
+			float x = 0.0f;
+			for (size_t i = 0; i < visibleColumnIndices_.size(); ++i) {
+				const std::string& hText = table.columns[visibleColumnIndices_[i]];
+				float hW = measureTextWidthExact(font, hText, finalScale);
+				renderTextOutlined(renderer, font, mip, fillTex, outlineTex, hText, x + (cachedColumnWidths_[i] - hW) / 2.0f, y, finalScale, mipRelativeScale);
+				x += cachedColumnWidths_[i] + paddingBetweenColumns;
+			}
+		}
+
+		// Draw Rows
+		if (tableRowsTexture_) {
+			SDL_SetRenderTarget(renderer, tableRowsTexture_);
+			SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
+			SDL_RenderClear(renderer);
+
+			for (size_t r = 0; r < rowsToRender; ++r) {
+				float y = (drawableHeight + rowPadding) * r;
+				float x = 0.0f;
+				for (size_t i = 0; i < visibleColumnIndices_.size(); ++i) {
+					size_t colIdx = visibleColumnIndices_[i];
+					if (colIdx < table.rows[r].size()) {
+						const std::string& cell = table.rows[r][colIdx];
+						float cW = measureTextWidthExact(font, cell, finalScale);
+						renderTextOutlined(renderer, font, mip, fillTex, outlineTex, cell, x + (cachedColumnWidths_[i] - cW) / 2.0f, y, finalScale, mipRelativeScale);
+					}
+					x += cachedColumnWidths_[i] + paddingBetweenColumns;
+				}
+			}
+		}
+	}
+
+	SDL_SetRenderTarget(renderer, oldTarget);
+	needsRedraw_ = true;
+}
+
+void ReloadableHiscores::renderNoDataMessage(SDL_Renderer* renderer, FontManager* font) {
+	// 1. Cleanup: We definitely don't need the rows texture for a static message
+	if (tableRowsTexture_) {
+		SDL_DestroyTexture(tableRowsTexture_);
+		tableRowsTexture_ = nullptr;
+	}
+	tableRowsTextureHeight_ = 0;
+
+	// 2. Determine component dimensions for centering
+	float viewW = (baseViewInfo.Width > 0 && baseViewInfo.Width < baseViewInfo.MaxWidth)
+		? baseViewInfo.Width : baseViewInfo.MaxWidth;
+	float viewH = (baseViewInfo.Height > 0) ? baseViewInfo.Height : 1.0f;
+
+	// 3. Define the message
+	const std::vector<std::string> lines = {
+		"LOCAL SCORES NOT AVAILABLE",
+		"OR NOT YET SUPPORTED",
+		"FOR THIS GAME"
+	};
+
+	// 4. Calculate metrics (Matching your table's look)
+	const float scale = baseViewInfo.FontSize / static_cast<float>(font->getMaxHeight());
+	const float drawableHeight = font->getMaxAscent() * scale;
+	const float rowPadding = std::max(1.0f, baseRowPadding_ * drawableHeight);
+
+	const float totalTextHeight = (drawableHeight * lines.size()) + (rowPadding * (lines.size() - 1));
+	float y = (viewH - totalTextHeight) * 0.5f;
+	if (y < 0.0f) y = 0.0f;
+
+	// 5. Allocation Guard: Reuse headerTexture_ if it's already the right size
+	int targetW = static_cast<int>(std::ceil(viewW));
+	int targetH = static_cast<int>(std::ceil(viewH));
+
+	int currentW, currentH;
+	bool needsNewTexture = true;
+	if (headerTexture_) {
+		SDL_QueryTexture(headerTexture_, nullptr, nullptr, &currentW, &currentH);
+		if (currentW == targetW && currentH == targetH) needsNewTexture = false;
+	}
+
+	if (needsNewTexture) {
+		if (headerTexture_) SDL_DestroyTexture(headerTexture_);
+		headerTexture_ = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, targetW, targetH);
+		if (headerTexture_) SDL_SetTextureBlendMode(headerTexture_, SDL_BLENDMODE_BLEND);
+	}
+
+	if (!headerTexture_) return;
+
+	// 6. Setup Mipmapping
+	const float targetPixelHeight = scale * font->getMaxHeight();
+	const FontManager::MipLevel* mip = font->getMipLevelForSize(static_cast<int>(targetPixelHeight));
+
+	// 7. Render Pass
+	SDL_Texture* oldTarget = SDL_GetRenderTarget(renderer);
+	SDL_SetRenderTarget(renderer, headerTexture_);
+	SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
+	SDL_RenderClear(renderer);
+
+	if (mip && mip->fillTexture) {
+		const float mipRelativeScale = (mip->height > 0) ? (targetPixelHeight / mip->height) : 1.0f;
+
+		for (const auto& line : lines) {
+			float textW = measureTextWidthExact(font, line, scale);
+			float x = (viewW - textW) * 0.5f;
+			if (x < 0.0f) x = 0.0f;
+
+			renderTextOutlined(renderer, font, mip, mip->fillTexture, mip->outlineTexture,
+				line, x, y, scale, mipRelativeScale);
+			y += drawableHeight + rowPadding;
+		}
+	}
+
+	// 8. Finalize State
+	SDL_SetRenderTarget(renderer, oldTarget);
+
+	headerTextureHeight_ = targetH;
+	cachedTotalTableWidth_ = viewW;
+	cacheValid_ = true;
 	needsRedraw_ = true;
 }
 
@@ -692,7 +717,7 @@ void ReloadableHiscores::draw() {
 
 	if (baseViewInfo.Alpha <= 0.0f) return;
 
-	const bool hasTable = (highScoreTable_ && !highScoreTable_->tables.empty());
+	const bool hasTable = (!highScoreTable_.tables.empty());
 	if (hasTable) {
 		if (!headerTexture_ || !tableRowsTexture_) return;
 	}

@@ -42,6 +42,7 @@ public:
 
 private:
     void reloadTexture(bool resetScroll = true);
+    void renderNoDataMessage(SDL_Renderer* renderer, FontManager* font);
     float computeTableScaleAndWidths(FontManager* font, const HighScoreTable& table, float& outDrawableHeight, float& outRowPadding, float& outPaddingBetweenColumns, std::vector<float>& outColumnWidths, float& outTotalTableWidth, float widthConstraint);
     void updateVisibleColumns(const HighScoreTable& table);
 
@@ -85,9 +86,13 @@ private:
     float lastComputedDrawableHeight_; // Drawable height based on final scale
     float lastComputedRowPadding_;     // Row padding based on final scale
 
+    int currentHeaderW = 0, currentHeaderH = 0;
+    int currentRowsW = 0, currentRowsH = 0;
+    Uint8 lastAlphaCache_ = 255;
+
     // Resources
     Item* lastSelectedItem_;
-    HighScoreData* highScoreTable_;
+    HighScoreData highScoreTable_;
 	SDL_Texture* headerTexture_;
 	SDL_Texture* tableRowsTexture_;
 	int tableRowsTextureHeight_;

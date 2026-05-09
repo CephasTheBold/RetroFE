@@ -617,7 +617,7 @@ void RetroFE::freeGraphicsMemory() {
 		{
 			currentPage_->deInitializeFonts();
 		}
-
+		Component::clearSharedTextures();
 		SDL::deInitialize();
 		input_.clearJoysticks();
 	}
@@ -680,6 +680,7 @@ bool RetroFE::deInitialize() {
 
 	initialized = false;
 	Image::cleanupTextureCache();
+	Component::clearSharedTextures();
 	VideoPool::shutdown();
 	ThreadPool::getInstance().wait();
 	HiScores::getInstance().saveGlobalCacheToDisk();
@@ -2870,7 +2871,6 @@ bool RetroFE::run() {
 
 			if (!currentPage_->getIsLaunched())
 				render();
-
 
 			// Only do custom frame pacing if vsync is OFF
 			if (!vSync)
