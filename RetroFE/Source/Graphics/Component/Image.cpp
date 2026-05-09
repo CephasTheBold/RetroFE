@@ -111,22 +111,12 @@ bool Image::startAsyncLoad(const std::string& path) {
 
 void Image::finalizeLoad() {
 	std::string path = currentLoadingPath_;
-
-	// 1. Check Cache first
-	{
-		std::lock_guard<std::mutex> lock(g_ImageCacheMutex);
-		if (useTextureCaching_ && loadFromCache(path)) {
-			status_ = LoadStatus::Ready;
-			return;
-		}
-	}
-
 	AsyncLoadResult res = loadTask_.get();
 	loadTask_ = {};
 
 	if (!res.success) {
+		// Fallback to alt file logic
 		if (path == file_ && !altFile_.empty()) {
-			status_ = LoadStatus::Unloaded;
 			startAsyncLoad(altFile_);
 			return;
 		}
@@ -134,67 +124,50 @@ void Image::finalizeLoad() {
 		return;
 	}
 
-	// 2. Prepare the NEW assets
+	// Prepare new assets on the main thread (Renderer calls must be main thread)
 	SDL_Renderer* renderer = SDL::getRenderer(baseViewInfo.Monitor);
 	SDL_Texture* newTexture = nullptr;
-	std::vector<SharedSurface> newAnimatedSurfaces;
-	std::vector<int> newFrameDelays;
-
 	if (res.staticSurface) {
 		newTexture = SDL_CreateTextureFromSurface(renderer, res.staticSurface.get());
 	}
-	else if (!res.animatedSurfaces.empty()) {
-		newAnimatedSurfaces = res.animatedSurfaces;
-		newFrameDelays = res.frameDelays;
+
+	// --- THE ATOMIC SWAP ---
+	// Cleanup old local assets only now that we have the new ones
+	if (animatedTexture_) {
+		SDL_DestroyTexture(animatedTexture_);
+		animatedTexture_ = nullptr;
+	}
+	if (texture_ && !isUsingCachedStaticTexture_) {
+		SDL_DestroyTexture(texture_);
 	}
 
-	// 3. THE SWAP: Only clear old assets if we actually have new ones to show
-	if (newTexture || !newAnimatedSurfaces.empty()) {
-		// Cleanup old local assets before overwriting pointers (Prevent Leaks)
-		if (animatedTexture_) {
-			SDL_DestroyTexture(animatedTexture_);
-			animatedTexture_ = nullptr;
-		}
-		if (texture_ && !isUsingCachedStaticTexture_) {
-			SDL_DestroyTexture(texture_);
-		}
+	// Assign new data
+	texture_ = newTexture;
+	animatedSurfaces_ = res.animatedSurfaces;
+	frameDelays_ = res.frameDelays;
+	baseViewInfo.ImageWidth = (float)res.w;
+	baseViewInfo.ImageHeight = (float)res.h;
 
-		// Assign new assets
-		texture_ = newTexture;
-		animatedSurfaces_ = newAnimatedSurfaces;
-		frameDelays_ = newFrameDelays;
-
-		baseViewInfo.ImageWidth = (float)res.w;
-		baseViewInfo.ImageHeight = (float)res.h;
-		status_ = LoadStatus::Ready;
-
-		if (!animatedSurfaces_.empty()) {
-			createAnimatedStreamingTexture(res.w, res.h);
-		}
-
-		if (useTextureCaching_) {
-			std::lock_guard<std::mutex> lock(g_ImageCacheMutex);
-			auto key = pathCache_.getKey(path, baseViewInfo.Monitor);
-			CachedImage ci;
-			ci.texture = texture_;
-			ci.animatedSurfaces = animatedSurfaces_;
-			ci.frameDelays = frameDelays_;
-			ci.w = res.w;
-			ci.h = res.h;
-			textureCache_[key] = ci;
-			isUsingCachedStaticTexture_ = (texture_ != nullptr);
-			isUsingCachedSurfaces_ = !animatedSurfaces_.empty();
-		}
-		else {
-			isUsingCachedStaticTexture_ = false; // Instance owns this now
-			isUsingCachedSurfaces_ = false;
-		}
+	if (!animatedSurfaces_.empty()) {
+		createAnimatedStreamingTexture(res.w, res.h);
 		primeAnimatedTextureIfNeeded();
-		resetAnimationState();
+	}
+
+	// Update Cache Status
+	if (useTextureCaching_) {
+		std::lock_guard<std::mutex> lock(g_ImageCacheMutex);
+		CachedImage ci = { texture_, animatedSurfaces_, frameDelays_, res.w, res.h };
+		textureCache_[pathCache_.getKey(path, baseViewInfo.Monitor)] = ci;
+		isUsingCachedStaticTexture_ = (texture_ != nullptr);
+		isUsingCachedSurfaces_ = !animatedSurfaces_.empty();
 	}
 	else {
-		status_ = LoadStatus::Error;
+		isUsingCachedStaticTexture_ = false;
+		isUsingCachedSurfaces_ = false;
 	}
+
+	status_ = LoadStatus::Ready;
+	resetAnimationState();
 }
 
 // -------------------- Render Logic --------------------
@@ -384,24 +357,61 @@ void Image::cleanupTextureCache() {
 bool Image::recycleAsImage(const std::string& newFilePath, const std::string& newAltPath) {
 	if (newFilePath.empty() && newAltPath.empty()) return false;
 
-	// 1. Skip if the file is already the one we are showing
-	if (file_ == newFilePath && altFile_ == newAltPath && status_ != LoadStatus::Error) {
+	// 1. Exit if already showing this file
+	if (file_ == newFilePath && altFile_ == newAltPath && status_ == LoadStatus::Ready) {
 		return true;
 	}
 
-	// 2. SOFT RESET: Update the paths
+	this->Component::freeGraphicsMemory();
+
+	// 2. Silent Cache Check: If found, swap immediately without a status change
+	{
+		std::lock_guard<std::mutex> lock(g_ImageCacheMutex);
+		auto it = textureCache_.find(pathCache_.getKey(newFilePath, baseViewInfo.Monitor));
+		if (it != textureCache_.end()) {
+			file_ = newFilePath;
+			altFile_ = newAltPath;
+
+			const CachedImage& ci = it->second;
+
+			// Cleanup current local assets BEFORE taking cached ones
+			// (Only if they aren't also from the cache)
+			if (animatedTexture_) {
+				SDL_DestroyTexture(animatedTexture_);
+				animatedTexture_ = nullptr;
+			}
+			if (texture_ && !isUsingCachedStaticTexture_) {
+				SDL_DestroyTexture(texture_);
+			}
+
+			texture_ = ci.texture;
+			animatedSurfaces_ = ci.animatedSurfaces;
+			frameDelays_ = ci.frameDelays;
+			baseViewInfo.ImageWidth = (float)ci.w;
+			baseViewInfo.ImageHeight = (float)ci.h;
+
+			isUsingCachedStaticTexture_ = (texture_ != nullptr);
+			isUsingCachedSurfaces_ = !animatedSurfaces_.empty();
+
+			if (isUsingCachedSurfaces_) {
+				createAnimatedStreamingTexture(ci.w, ci.h);
+				primeAnimatedTextureIfNeeded();
+				resetAnimationState();
+			}
+
+			status_ = LoadStatus::Ready; // Keep the engine happy
+			return true;
+		}
+	}
+
+	// 3. Uncached Path: Keep drawing the old image while the new one loads
 	file_ = newFilePath;
 	altFile_ = newAltPath;
 
-	// 3. FORCE THE LOAD: Bypass the status guard in allocateGraphicsMemory
-	status_ = LoadStatus::Unloaded;
-
-	// 4. TRIGGER ASYNC: This will now move status to 'Loading'
-	allocateGraphicsMemory();
-
-	// NOTE: We do NOT zero out ImageWidth/Height and do NOT call freeGraphicsMemory().
-	// This allows the draw() function to keep using the existing texture_ 
-	// and dimensions until finalizeLoad() swaps them for the new ones.
+	// We set status to Loading so draw() knows to check for completion,
+	// but we do NOT clear the current texture_ pointer yet!
+	status_ = LoadStatus::Loading;
+	startAsyncLoad(file_);
 
 	return true;
 }
