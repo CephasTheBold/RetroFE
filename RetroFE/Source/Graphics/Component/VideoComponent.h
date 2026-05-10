@@ -52,6 +52,7 @@ public:
     void pause();
     void resume();
     void restart();
+    void setHighPriority(bool isHigh) override { isHighPriority_ = isHigh; }
 
     // Properties
     unsigned long long getCurrent();
@@ -80,6 +81,7 @@ private:
 
     bool dimensionsUpdated_ = false;
     bool instanceReady_ = false;
+    bool isHighPriority_ = false;
 
     // --- Deferred Retry Logic ---
     bool pendingVideoRetry_ = false;

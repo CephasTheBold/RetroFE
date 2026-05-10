@@ -1193,6 +1193,8 @@ bool ScrollingList::allocateTexture(size_t index, const Item* item) {
 
     if (t) {
         t->playlistName = playlistName;
+        // TAG THE VIP: If this slot index matches the layout's selected index, it gets priority!
+        t->setHighPriority(static_cast<int>(index) == selectedOffsetIndex_);
         components_[index] = t;
     }
 

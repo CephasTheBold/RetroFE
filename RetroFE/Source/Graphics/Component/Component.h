@@ -73,6 +73,7 @@ public:
 	bool getPauseOnScroll() const;
 	virtual void setText(const std::string&, int = -1) {};
 	virtual void setImage(const std::string&, int = -1) {};
+	virtual void setHighPriority(bool /*isHigh*/) {};
 	int getId() const;
 	std::string playlistName;
 

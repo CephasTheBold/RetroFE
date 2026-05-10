@@ -39,6 +39,7 @@
 
 VideoComponent::VideoComponent(Page& p, const std::string& videoFile, int monitor, int numLoops, bool softOverlay, int listId, const int* perspectiveCorners)
     : Component(p), videoFile_(videoFile), softOverlay_(softOverlay), numLoops_(numLoops), monitor_(monitor), listId_(listId), currentPage_(&p) {
+    isHighPriority_ = (listId_ == -1);
     if (perspectiveCorners) {
         std::copy(perspectiveCorners, perspectiveCorners + 8, perspectiveCorners_);
         hasPerspective_ = true;
@@ -66,7 +67,7 @@ bool VideoComponent::recycleAsVideo(const std::string& path, const std::string& 
     hasBeenOnScreen_ = false;
     wasVisible_ = false;
     wasPlayingBeforeFastScroll_ = false;
-
+    isHighPriority_ = (listId_ == -1);
     desiredState_ = PlaybackTarget::Paused;
     pendingCommand_ = PlaybackCommand::None;
 
@@ -210,12 +211,30 @@ bool VideoComponent::update(float dt) {
 
     // 4. Retry / Initiate playback orchestrator
     if (!instanceReady_ && !videoInst_->hasError()) {
+
+        // --- EXPLICIT VIP PRIORITIZATION ---
+        // If the layout engine hasn't flagged this as the selected/main item,
+        // voluntarily yield the CPU for 32ms (2 frames). This guarantees the 
+        // high-priority asset gets the first available decoder slots.
+        if (retryAttempts_ == 0) {
+            if (isHighPriority_) {
+                LOG_DEBUG("VideoComponent", "VIP Priority granted for: " + videoFile_);
+            }
+            else {
+                LOG_DEBUG("VideoComponent", "Standard priority yield (32ms) for: " + videoFile_);
+                pendingVideoRetry_ = true;
+                retryAttempts_ = 1; // Mark that we did our initial yield
+                nextRetryTime_ = SDL_GetTicks64() + 32;
+                return Component::update(dt);
+            }
+        }
+
         instanceReady_ = videoInst_->open(videoFile_);
 
         if (!instanceReady_) {
             // CPU Preroll limit hit! Trigger exponential backoff.
             pendingVideoRetry_ = true;
-            retryAttempts_++;
+            retryAttempts_ = std::max(1u, retryAttempts_ + 1); // Use std::max to ensure we scale correctly
             const uint32_t delay = std::min(250u, 16u * (1u << std::min(retryAttempts_, 4u)));
             nextRetryTime_ = SDL_GetTicks64() + delay;
             return Component::update(dt);
