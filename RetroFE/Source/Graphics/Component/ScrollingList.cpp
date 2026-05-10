@@ -253,7 +253,7 @@ void ScrollingList::reallocateSpritePoints() {
     // 1. Clears all idle/cached videos from VRAM instantly.
     // 2. Increments the generation ID, ensuring the videos we are about to 
     //    extract are marked as "obsolete".
-    VideoPool::reset();
+    VideoPool::reset(baseViewInfo.Monitor, listId_);
 
     // --- Step 1: Extract video instances for batch release ---
     std::vector<VideoPool::VideoPtr> pooledVideos;

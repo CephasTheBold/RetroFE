@@ -14,60 +14,88 @@
  * along with RetroFE.  If not, see <http://www.gnu.org/licenses/>.
  */
 #pragma once
+
 #include "Component.h"
-#include "Image.h"
-#include "../Page.h"
-#include "../../Collection/Item.h"
-#include "../../Video/IVideo.h"
-#include "../../Video/VideoFactory.h"
-#include <SDL.h>
-#include <thread>
 #include <string>
-#include <string_view>
-#include <atomic>
 #include <memory>
 
+class IVideo;
+class Page;
+struct VideoSnapshot;
+
+enum class PlaybackTarget {
+    Paused,
+    Playing
+};
+
+enum class PlaybackCommand {
+    None,
+    Restart
+};
 
 class VideoComponent : public Component {
 public:
-    explicit VideoComponent(Page& p, const std::string& videoFile, int monitor, int numLoops = -1, bool softOverlay = false, int listId = -1, const int* perspectiveCorners = nullptr);
+    VideoComponent(Page& p, const std::string& videoFile, int monitor, int numLoops, bool softOverlay, int listId = -1, const int* perspectiveCorners = nullptr);
     ~VideoComponent() override;
+
     bool update(float dt) override;
     void draw() override;
-    bool recycleAsVideo(const std::string& path, const std::string& name) override;
-    void freeGraphicsMemory() override;
     void allocateGraphicsMemory() override;
-    std::shared_ptr<IVideo> extractVideo();
-    bool isPlaying() override;
+    void freeGraphicsMemory() override;
+    std::string_view filePath();
+
+    // Controls
+    void skipForward();
+    void skipBackward();
+    void skipForwardp();
+    void skipBackwardp();
+    void pause();
+    void resume();
+    void restart();
+
+    // Properties
+    unsigned long long getCurrent();
+    unsigned long long getDuration();
+    bool isPaused();
+    bool isPlaying();
     bool hasFinishedLoops();
     bool hasVideoStream();
-    void skipForward() override;
-    void skipBackward() override;
-    void skipForwardp() override;
-    void skipBackwardp() override;
-    void pause() override;
-    void resume();
-    void restart() override;
-    unsigned long long getCurrent() override;
-    unsigned long long getDuration() override;
-    bool isPaused() override;
-    std::string_view filePath();
+
+    // Pooling / Recycling
+    bool recycleAsVideo(const std::string& path, const std::string& name);
+    std::shared_ptr<IVideo> extractVideo();
 
 private:
     std::string videoFile_;
     std::shared_ptr<IVideo> videoInst_;
-    bool hasBeenOnScreen_{ false };
-    bool wasVisible_{ false };
-    bool softOverlay_;
-    int numLoops_;
+    Page* currentPage_;
+
     int monitor_;
     int listId_;
-    Page* currentPage_{ nullptr };
-    int perspectiveCorners_[8]{ 0 }; // Initialize to zeros
-    bool hasPerspective_{ false };
-    bool dimensionsUpdated_ = false; // Track if dimensions have been updated for the current video
-    bool instanceReady_{ false }; // Track if the video instance is ready to play
-    bool pendingRestart_{ false }; // Track if a restart is pending after fast-scroll
-    bool pendingRetarget_ = false;
-    bool restartOnHide_ = false;
+    int numLoops_;
+    bool softOverlay_;
+
+    bool hasPerspective_ = false;
+    int perspectiveCorners_[8] = { 0 };
+
+    bool dimensionsUpdated_ = false;
+    bool instanceReady_ = false;
+
+    // --- Deferred Retry Logic ---
+    bool pendingVideoRetry_ = false;
+    uint32_t retryAttempts_ = 0;
+    uint64_t nextRetryTime_ = 0;
+
+    // --- Clean Intent Orchestration State ---
+    bool wasVisible_ = false;
+    bool hasBeenOnScreen_ = false;
+    bool wasPlayingBeforeFastScroll_ = false;
+
+    PlaybackTarget desiredState_{ PlaybackTarget::Paused };
+    PlaybackCommand pendingCommand_{ PlaybackCommand::None };
+
+    // Orchestration Pipeline Helpers
+    bool checkVisibility() const;
+    void computeDesiredIntent(bool visibleNow, const VideoSnapshot& snap);
+    void syncPlaybackIntent(const VideoSnapshot& snap);
 };

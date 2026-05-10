@@ -21,6 +21,7 @@
 #include <unordered_map>
 #include <memory>
 #include <string>
+#include <deque>
 
 class IVideo;
 
@@ -48,20 +49,17 @@ public:
     static bool isShuttingDown() { return shuttingDown_; }
     static bool shuttingDown_;
 
-    static void reset();
+    static void reset(int monitor, int listId);
 
 private:
     struct PoolInfo {
-        // We use LIFO logic: back of the list is the most "warm" instance.
-        std::list<VideoPtr> available;
+        std::deque<VideoPtr> ready;
+        std::deque<VideoPtr> draining;
 
         size_t currentActive = 0;
-        size_t observedMaxActive = 0;
-
-        // Once latched, this becomes the “steady state max total” (active + available).
         size_t requiredInstanceCount = 0;
+        size_t observedMaxActive = 0;
         bool initialCountLatched = false;
-
         bool markedForCleanup = false;
     };
 
@@ -69,15 +67,10 @@ private:
     using PoolMap = std::unordered_map<int, ListPoolMap>;
 
     static PoolMap pools_;
-
+    static void pumpDrainingToReady(PoolInfo& pool);
     static void erasePoolIfIdle_nolock(int monitor, int listId);
     static std::string poolStateStr(int monitor, int listId, const PoolInfo& p);
 
-    // Policy: pick the best available instance (Most recently used LIFO)
-    static VideoPtr popBestAvailable(PoolInfo& pool, int monitor, int listId);
-
     // Policy: create a new shared_ptr instance via std::make_shared
     static VideoPtr createNewVideo(int monitor, bool softOverlay);
-
-    static uint32_t currentGeneration_;
 };
