@@ -104,29 +104,29 @@ VideoPool::VideoPtr VideoPool::acquireVideo(int monitor, int listId, bool softOv
 void VideoPool::releaseVideo(VideoPtr vid, int monitor, int listId) {
     if (!vid || shuttingDown_ || listId == -1) return;
 
-    if (auto* gsv = dynamic_cast<GStreamerVideo*>(vid.get())) {
-        gsv->unload();
-    }
-
     PoolInfo& pool = pools_[monitor][listId];
-    if (pool.markedForCleanup) {
-        if (pool.currentActive > 0) pool.currentActive--;
-        if (pool.currentActive == 0) erasePoolIfIdle_nolock(monitor, listId);
-        return;
-    }
 
     if (pool.currentActive > 0) pool.currentActive--;
 
-    // Eviction Ceiling
+    // Eviction ceiling — destroy without unloading, stop() handles cleanup
     if (pool.initialCountLatched) {
         size_t totalCached = pool.ready.size() + pool.draining.size();
         if (totalCached >= pool.requiredInstanceCount) {
             LOG_DEBUG("VideoPool", "Release (Evicting excess video) " + poolStateStr(monitor, listId, pool));
-            return; // Destroy excess instance
+            return;
         }
     }
 
-    // All returning videos go to draining first.
+    if (pool.markedForCleanup) {
+        if (pool.currentActive == 0) erasePoolIfIdle(monitor, listId);
+        return;
+    }
+
+    // Only unload videos that are actually being returned to the pool
+    if (auto* gsv = dynamic_cast<GStreamerVideo*>(vid.get())) {
+        gsv->unload();
+    }
+
     pool.draining.push_back(std::move(vid));
 
     if (!pool.initialCountLatched) {
@@ -139,7 +139,7 @@ void VideoPool::releaseVideo(VideoPtr vid, int monitor, int listId) {
     }
 }
 
-void VideoPool::erasePoolIfIdle_nolock(int monitor, int listId) {
+void VideoPool::erasePoolIfIdle(int monitor, int listId) {
     auto mit = pools_.find(monitor);
     if (mit == pools_.end()) return;
 
@@ -173,9 +173,17 @@ void VideoPool::cleanup(int monitor, int listId) {
     if (lit == mit->second.end()) return;
 
     lit->second.markedForCleanup = true;
-    erasePoolIfIdle_nolock(monitor, listId);
+    erasePoolIfIdle(monitor, listId);
 
     LOG_DEBUG("VideoPool", "Marked for cleanup: Mon:" + std::to_string(monitor) + " List:" + std::to_string(listId));
+}
+
+void VideoPool::decrementActive(int monitor, int listId) {
+    auto mit = pools_.find(monitor);
+    if (mit == pools_.end()) return;
+    auto lit = mit->second.find(listId);
+    if (lit == mit->second.end()) return;
+    if (lit->second.currentActive > 0) lit->second.currentActive--;
 }
 
 void VideoPool::shutdown() {
@@ -203,16 +211,25 @@ void VideoPool::reserveCapacity(int monitor, int listId, size_t desiredTotal) {
 
 void VideoPool::reset(int monitor, int listId) {
     auto mit = pools_.find(monitor);
-    if (mit == pools_.end()) return; // No videos for this monitor
+    if (mit == pools_.end()) return;
 
     auto lit = mit->second.find(listId);
-    if (lit == mit->second.end()) return; // Ignored seamlessly: No videos for this list
+    if (lit == mit->second.end()) return;
 
-    LOG_INFO("VideoPool", "Resetting pool cache for Mon:" + std::to_string(monitor) + " List:" + std::to_string(listId));
+    LOG_INFO("VideoPool", "Resetting pool cache for Mon:" + std::to_string(monitor) 
+        + " List:" + std::to_string(listId));
 
     auto& pool = lit->second;
 
-    // Clear the currently cached videos to free up RAM/VRAM for the new collection
+    // Videos in draining have unload() tasks running on the thread pool.
+    // Those tasks hold gst_object_ref(p) so destruction is safe here —
+    // the weak.lock() in the task will return null and Idle is never stored,
+    // which is correct since these instances are being discarded.
     pool.ready.clear();
     pool.draining.clear();
+
+    // currentActive represents videos still held by VideoComponents.
+    // Do NOT reset it — those components will call releaseVideo() normally.
+    // Do NOT reset initialCountLatched or requiredInstanceCount —
+    // pool size is constant once learned.
 }

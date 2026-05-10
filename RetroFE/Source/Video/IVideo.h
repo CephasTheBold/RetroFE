@@ -73,7 +73,6 @@ public:
     virtual void updateFrame() = 0; // Renamed from draw()
     virtual VideoDim getDimensions() = 0;
     virtual void setSoftOverlay(bool value) = 0;
-    virtual void volumeUpdate() = 0;
     virtual void setVolume(float volume) = 0;
 
     // --- Playback Controls ---

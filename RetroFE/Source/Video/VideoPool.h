@@ -40,6 +40,8 @@ public:
     // Marks a pool for cleanup. If there are no active instances, the pool is erased immediately.
     static void cleanup(int monitor, int listId);
 
+    static void decrementActive(int monitor, int listId);
+
     // Clears all pools and disables further pooling.
     static void shutdown();
 
@@ -68,7 +70,7 @@ private:
 
     static PoolMap pools_;
     static void pumpDrainingToReady(PoolInfo& pool);
-    static void erasePoolIfIdle_nolock(int monitor, int listId);
+    static void erasePoolIfIdle(int monitor, int listId);
     static std::string poolStateStr(int monitor, int listId, const PoolInfo& p);
 
     // Policy: create a new shared_ptr instance via std::make_shared

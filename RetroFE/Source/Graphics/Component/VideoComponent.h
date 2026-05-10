@@ -78,6 +78,7 @@ private:
 
     bool hasPerspective_ = false;
     int perspectiveCorners_[8] = { 0 };
+    float lastVolume_ = -1.0f;
 
     bool dimensionsUpdated_ = false;
     bool instanceReady_ = false;

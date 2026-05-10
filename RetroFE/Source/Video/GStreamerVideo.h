@@ -86,7 +86,6 @@ public:
     bool stop() override;
     bool isReadyForReuse() const;
     SDL_Texture* getTexture() const override;
-    void volumeUpdate() override;
     void updateFrame() override; // Renamed from draw
     void setNumLoops(int n);
     bool isPlaying() override;
@@ -150,6 +149,11 @@ private:
     std::atomic<PlaybackState> playbackState_{ PlaybackState::None };
     std::atomic<uint64_t> playbackEpoch_{ 0 };
     static std::atomic<uint64_t> nextUniquePlaybackEpoch_;
+
+    // The "Contract": True from open() until the first ASYNC_DONE
+    std::atomic<bool> awaitingInitialPreroll_{ false };
+    // The "Truth": Updated via GST_MESSAGE_STATE_CHANGED
+    std::atomic<GstState> actualGstState_{ GST_STATE_NULL };
 
     // === Hardware Budget / CPU Preroll Gatekeeper ===
     std::atomic<uint64_t> prerollToken_{ 0 };
@@ -226,4 +230,5 @@ private:
     AudioBus::SourceId videoSourceId_{ 0 };
     std::shared_ptr<AudioBus::Handle> audioHandle_;
     GstElement* audioSink_{ nullptr };
+    float lastVolume_ = -1.0f;
 };

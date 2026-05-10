@@ -61,7 +61,7 @@ bool VideoComponent::recycleAsVideo(const std::string& path, const std::string& 
     this->Component::freeGraphicsMemory();
     videoFile_ = path;
 
-    // Reset clean state
+    // Reset state flags
     instanceReady_ = false;
     dimensionsUpdated_ = false;
     hasBeenOnScreen_ = false;
@@ -70,20 +70,16 @@ bool VideoComponent::recycleAsVideo(const std::string& path, const std::string& 
     isHighPriority_ = (listId_ == -1);
     desiredState_ = PlaybackTarget::Paused;
     pendingCommand_ = PlaybackCommand::None;
-
-    // Reset retry orchestrator
     pendingVideoRetry_ = false;
     retryAttempts_ = 0;
     nextRetryTime_ = 0;
+    lastVolume_ = -1.0f;
 
     if (videoInst_) {
-        auto oldVideo = std::move(videoInst_);
-        allocateGraphicsMemory();
-        if (oldVideo) {
-            VideoPool::releaseVideo(std::move(oldVideo), monitor_, listId_);
-        }
+        videoInst_->unload();
     }
     else {
+        // No existing instance — acquire from pool normally
         allocateGraphicsMemory();
     }
 
@@ -268,8 +264,10 @@ bool VideoComponent::update(float dt) {
         }
     }
 
-    videoInst_->setVolume(baseViewInfo.Volume);
-    videoInst_->volumeUpdate();
+    if (std::abs(baseViewInfo.Volume - lastVolume_) > 1e-4f) {
+        lastVolume_ = baseViewInfo.Volume;
+        videoInst_->setVolume(baseViewInfo.Volume);
+    }
 
     // 6. --- ORCHESTRATION PIPELINE ---
     computeDesiredIntent(visibleNow, snap);
@@ -293,6 +291,9 @@ void VideoComponent::allocateGraphicsMemory() {
 
 std::shared_ptr<IVideo> VideoComponent::extractVideo() {
     instanceReady_ = false;
+    if (videoInst_ && listId_ != -1) {
+        VideoPool::decrementActive(monitor_, listId_);
+    }
     return std::move(videoInst_);
 }
 
@@ -315,8 +316,11 @@ void VideoComponent::draw() {
         return;
     }
 
-    // Snapshot handles readiness safety; updateFrame() consumes staged frames
-    if (videoInst_->isPipelineReady()) {
+    const auto snap = videoInst_->getSnapshot();
+
+    // Hardware Safety: Only update the frame if the hardware has actually 
+    // reached at least the PAUSED state.
+    if (snap.pipelineReady && snap.actualState != VideoState::None) {
         videoInst_->updateFrame();
     }
 
