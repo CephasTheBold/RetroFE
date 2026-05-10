@@ -215,7 +215,6 @@ void ScrollingList::deallocateSpritePoints() {
     // Batch release videos
     if (!pooledVideos.empty()) {
         VideoPool::releaseVideoBatch(std::move(pooledVideos), monitor, listId_);
-        ThreadPool::getInstance().wait();  // Ensure they're cleaned up now
     }
 }
 
@@ -295,24 +294,13 @@ void ScrollingList::reallocateSpritePoints() {
     }
 }
 
-void ScrollingList::destroyItems()
-{
+void ScrollingList::destroyItems() {
+    // Pool cleanup is handled by freeGraphicsMemory() ? deallocateSpritePoints().
+    // By the time destroyItems() is called from the destructor, all videos
+    // have already been extracted and released. Just delete the component shells.
     auto& data = components_.raw();
-    size_t componentSize = data.size();
-
-    // Clean up the pool - listId_ will always be valid
-    if (listId_ == -1) {
-        LOG_ERROR("ScrollingList", "Attempting to clean up video pool with invalid listId_ (-1).");
-        return;
-	}
-    LOG_DEBUG("ScrollingList", "Cleaning up video pool for list: " + std::to_string(listId_));
-    VideoPool::cleanup(baseViewInfo.Monitor, listId_);
-    ThreadPool::getInstance().wait();
-
-    // Delete all components
-    for (unsigned int i = 0; i < componentSize; ++i) {
+    for (size_t i = 0; i < data.size(); ++i) {
         if (Component* component = data[i]) {
-            //component->freeGraphicsMemory();
             delete component;
             data[i] = nullptr;
         }
@@ -722,12 +710,15 @@ void ScrollingList::allocateGraphicsMemory( )
     allocateSpritePoints( );
 }
 
-void ScrollingList::freeGraphicsMemory()
-{
+void ScrollingList::freeGraphicsMemory() {
     Component::freeGraphicsMemory();
     scrollPeriod_ = 0;
-    // Clean up components
-    deallocateSpritePoints();
+    deallocateSpritePoints();  // extracts all videos, releases to pool
+
+    // Now currentActive is 0 — safe to mark for cleanup
+    if (listId_ != -1) {
+        VideoPool::cleanup(baseViewInfo.Monitor, listId_);
+    }
 }
 
 void ScrollingList::triggerEnterEvent( )
@@ -984,21 +975,18 @@ void ScrollingList::resetTweens(Component* c, std::shared_ptr<AnimationEvents> s
 bool ScrollingList::allocateTexture(size_t index, const Item* item) {
     if (index >= components_.size()) return false;
 
-    // --- RECYCLING 1: Grab the existing component to attempt recycling ---
     Component* existingComponent = components_[index];
-    components_[index] = nullptr; // Clear the slot temporarily so we own it
+    components_[index] = nullptr;
 
-    // --- THE GHOST LEAK FIX: Keep VideoPool counters perfectly synced ---
-    // If the component scrolling off screen is a video, extract and release it
-    // before the builder tries to recycle it or the cleanup block deletes it!
-    if (existingComponent) {
-        if (auto* videoComp = dynamic_cast<VideoComponent*>(existingComponent)) {
-            if (auto vid = videoComp->extractVideo()) {
-                VideoPool::releaseVideo(std::move(vid), baseViewInfo.Monitor, listId_);
-            }
-        }
-    }
-    // ---------------------------------------------------------------------
+    // DO NOT extract/release here. Two paths handle cleanup correctly:
+    //
+    // PATH A — Recycling succeeds (t == existingComponent):
+    //   The same VideoComponent reuses its pool slot. Pool accounting unchanged.
+    //
+    // PATH B — Recycling fails (t != existingComponent):
+    //   The cleanup block at the bottom calls delete existingComponent.
+    //   Its destructor calls freeGraphicsMemory() -> releaseVideo().
+    //   One clean decrement. Correct.
 
     Component* t = nullptr;
     std::string layoutName;
@@ -1012,110 +1000,66 @@ bool ScrollingList::allocateTexture(size_t index, const Item* item) {
 
     auto tryVideo = [&](const std::string& videoPath, const std::string& logicalName) -> Component* {
         if (videoType_ == "null") return nullptr;
-
         return videoBuild.createVideo(
             videoPath, page, logicalName, baseViewInfo.Monitor, -1, false, listId_,
             perspectiveCornersInitialized_ ? perspectiveCorners_ : nullptr,
-            existingComponent); // <--- Pass for recycling
+            existingComponent);
         };
 
     auto tryImageWithName = [&](const std::string& imagePath, const std::string& baseName) -> Component* {
         if (imageType_.empty()) return nullptr;
-
-        std::string imageName = baseName;
-        if (isSelectedItem) {
-            imageName += "-selected";
-        }
-
-        // --- RECYCLING 2: Pass existingComponent to the Builder ---
+        std::string imageName = isSelectedItem ? baseName + "-selected" : baseName;
         return imageBuild.CreateImage(
-            imagePath,
-            page,
-            imageName,
-            baseViewInfo.Monitor,
-            baseViewInfo.Additive,
-            useTextureCaching_,
-            existingComponent // <-- Pass for recycling
-        );
+            imagePath, page, imageName,
+            baseViewInfo.Monitor, baseViewInfo.Additive,
+            useTextureCaching_, existingComponent);
         };
 
-    // For system/ROM fallback we keep the old "try -selected then plain" behavior.
     auto tryImageWithFallbackType = [&](const std::string& imagePath) -> Component* {
         if (imageType_.empty()) return nullptr;
-
         const std::string fallbackName = imageType_;
-
         if (isSelectedItem) {
-            // --- RECYCLING 3: Pass existingComponent to the Builder ---
             if (Component* c = imageBuild.CreateImage(
-                imagePath,
-                page,
-                fallbackName + "-selected",
-                baseViewInfo.Monitor,
-                baseViewInfo.Additive,
-                useTextureCaching_,
-                existingComponent)) { // <-- Pass for recycling
+                imagePath, page, fallbackName + "-selected",
+                baseViewInfo.Monitor, baseViewInfo.Additive,
+                useTextureCaching_, existingComponent))
                 return c;
-            }
         }
-
-        // --- RECYCLING 4: Pass existingComponent to the Builder ---
         return imageBuild.CreateImage(
-            imagePath,
-            page,
-            fallbackName,
-            baseViewInfo.Monitor,
-            baseViewInfo.Additive,
-            useTextureCaching_,
-            existingComponent // <-- Pass for recycling
-        );
+            imagePath, page, fallbackName,
+            baseViewInfo.Monitor, baseViewInfo.Additive,
+            useTextureCaching_, existingComponent);
         };
 
-    // -------- Main media search loop --------
-        // Fetch the allocation-free string_view cache from the Item
     const std::vector<std::string_view>& cachedNames = item->baseNameCandidates(typeLC);
 
-    // Iterate through the cached names, adding an extra iteration at the end for "default"
     for (size_t iter = 0; iter <= cachedNames.size(); ++iter) {
-
-        // Convert the string_view to a string for the builder, or use "default" on the final pass
         std::string name = (iter < cachedNames.size()) ? std::string(cachedNames[iter]) : "default";
 
         std::string imagePath;
         std::string videoPath;
 
-        // 1) Collection or _common (layout / non-layout)
         if (layoutMode_) {
             std::string base = Utils::combinePath(Configuration::absolutePath, "layouts", layoutName, "collections");
             std::string subPath = commonMode_ ? "_common" : collectionName;
             buildPaths(imagePath, videoPath, base, subPath, imageType_, videoType_);
         }
         else {
-            if (commonMode_) {
-                buildPaths(imagePath, videoPath,
-                    Configuration::absolutePath,
-                    "collections/_common",
-                    imageType_, videoType_);
-            }
+            if (commonMode_)
+                buildPaths(imagePath, videoPath, Configuration::absolutePath, "collections/_common", imageType_, videoType_);
             else {
                 config_.getMediaPropertyAbsolutePath(collectionName, imageType_, false, imagePath);
                 config_.getMediaPropertyAbsolutePath(collectionName, videoType_, false, videoPath);
             }
         }
 
-        if (!t) {
-            t = tryVideo(videoPath, name);
-        }
-        if (!t) {
-            t = tryImageWithName(imagePath, name);
-        }
+        if (!t) t = tryVideo(videoPath, name);
+        if (!t) t = tryImageWithName(imagePath, name);
         if (t) break;
 
-        // 2) Per-item collection fallback (ALWAYS allowed)
         {
             std::string itemImagePath;
             std::string itemVideoPath;
-
             if (layoutMode_) {
                 std::string base = Utils::combinePath(Configuration::absolutePath, "layouts", layoutName, "collections");
                 buildPaths(itemImagePath, itemVideoPath, base, item->collectionInfo->name, imageType_, videoType_);
@@ -1124,26 +1068,19 @@ bool ScrollingList::allocateTexture(size_t index, const Item* item) {
                 config_.getMediaPropertyAbsolutePath(item->collectionInfo->name, imageType_, false, itemImagePath);
                 config_.getMediaPropertyAbsolutePath(item->collectionInfo->name, videoType_, false, itemVideoPath);
             }
-
-            if (!t) {
-                t = tryVideo(itemVideoPath, name);
-            }
-            if (!t) {
-                t = tryImageWithName(itemImagePath, name);
-            }
+            if (!t) t = tryVideo(itemVideoPath, name);
+            if (!t) t = tryImageWithName(itemImagePath, name);
         }
 
         if (t) break;
     }
 
-    // -------- System collection fallback --------
     if (!t) {
         std::string imagePath;
         std::string videoPath;
 
         if (layoutMode_) {
-            imagePath = Utils::combinePath(Configuration::absolutePath,
-                "layouts", layoutName, "collections",
+            imagePath = Utils::combinePath(Configuration::absolutePath, "layouts", layoutName, "collections",
                 commonMode_ ? "_common" : item->name);
             imagePath = Utils::combinePath(imagePath, "system_artwork");
             videoPath = imagePath;
@@ -1159,56 +1096,37 @@ bool ScrollingList::allocateTexture(size_t index, const Item* item) {
                 config_.getMediaPropertyAbsolutePath(item->name, videoType_, true, videoPath);
             }
         }
-
-        if (!t) {
-            t = tryVideo(videoPath, videoType_);
-        }
-        if (!t) {
-            t = tryImageWithFallbackType(imagePath);
-        }
+        if (!t) t = tryVideo(videoPath, videoType_);
+        if (!t) t = tryImageWithFallbackType(imagePath);
     }
 
-    // -------- ROM directory fallback --------
     if (!t) {
         const std::string romPath = item->filepath;
-
-        if (!t) {
-            t = tryVideo(romPath, videoType_);
-        }
-        if (!t) {
-            t = tryImageWithFallbackType(romPath);
-        }
+        if (!t) t = tryVideo(romPath, videoType_);
+        if (!t) t = tryImageWithFallbackType(romPath);
     }
 
-    // -------- Text Fallback & Recycling --------
     if (!t && textFallback_) {
-        // --- RECYCLING 5: Attempt Text Recycling ---
-        if (existingComponent && existingComponent->recycleAsText(item->title)) {
+        if (existingComponent && existingComponent->recycleAsText(item->title))
             t = existingComponent;
-        }
-        else {
+        else
             t = new Text(item->title, page, fontInst_, baseViewInfo.Monitor);
-        }
     }
 
     if (t) {
         t->playlistName = playlistName;
-        // TAG THE VIP: If this slot index matches the layout's selected index, it gets priority!
-        t->setHighPriority(static_cast<int>(index) == selectedOffsetIndex_);
+        t->setHighPriority(index == selectedOffsetIndex_);
         components_[index] = t;
     }
 
-    // --- RECYCLING 6: Cleanup ---
-    // If we didn't recycle the existing component (because the type changed or recycling failed), 
-    // it will not be equal to 't'. We must delete it to prevent a memory leak.
+    // If recycling failed and a new component was created, delete the old one.
+    // Its destructor calls freeGraphicsMemory() -> releaseVideo() cleanly.
     if (existingComponent != nullptr && existingComponent != t) {
         delete existingComponent;
     }
-    // ----------------------------
 
     return true;
 }
-
 void ScrollingList::buildPaths(std::string& imagePath, std::string& videoPath, const std::string& base, const std::string& subPath, const std::string& mediaType, const std::string& videoType) {
     imagePath = Utils::combinePath(base, subPath, "medium_artwork", mediaType);
     videoPath = Utils::combinePath(base, subPath, "medium_artwork", videoType);

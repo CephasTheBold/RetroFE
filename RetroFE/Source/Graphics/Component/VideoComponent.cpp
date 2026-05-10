@@ -291,9 +291,6 @@ void VideoComponent::allocateGraphicsMemory() {
 
 std::shared_ptr<IVideo> VideoComponent::extractVideo() {
     instanceReady_ = false;
-    if (videoInst_ && listId_ != -1) {
-        VideoPool::decrementActive(monitor_, listId_);
-    }
     return std::move(videoInst_);
 }
 
