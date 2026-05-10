@@ -495,10 +495,10 @@ bool GStreamerVideo::stop() {
 bool GStreamerVideo::isReadyForReuse() const {
     if (!pipeline_) return true;
 
-    // In an instant-uri architecture, we do NOT want the pipeline to drop to READY.
-    // If the C++ state machine has marked this instance as Idle (via unload), 
-    // it is instantly ready to receive a new URI, regardless of what GStreamer 
-    // is doing internally (as g_object_set("uri") will handle the flush).
+    // The C++ state machine marks this instance as Idle via unload().
+    // At that point, the pipeline has been flushed to GST_STATE_READY,
+    // meaning its VRAM and file handles are safely released, and it is 
+    // instantly ready to receive a new URI from the pool.
     return lifecycle_.load(std::memory_order_acquire) == PipelineLifecycle::Idle;
 }
 
@@ -529,6 +529,8 @@ bool GStreamerVideo::unload() {
     }
 
     if (!pipeline_) return true;
+
+    gst_element_set_state(pipeline_, GST_STATE_READY);
 
     if (videoSourceId_ != 0) {
         AudioBus::instance().setGain(audioHandle_, 0.0f);
@@ -679,7 +681,7 @@ bool GStreamerVideo::createPipelineIfNeeded() {
 
     gint flags = GST_PLAY_FLAG_VIDEO | GST_PLAY_FLAG_AUDIO;
     flags &= ~(1 << 4);
-    g_object_set(pipeline_, "flags", flags, "instant-uri", TRUE, nullptr);
+    g_object_set(pipeline_, "flags", flags, nullptr);
 
     g_object_set(videoSink_,
         "emit-signals", FALSE,
@@ -877,6 +879,8 @@ bool GStreamerVideo::open(const std::string& file) {
         }
         stagedSample_.epoch = 0;
     }
+
+    gst_element_set_state(pipeline_, GST_STATE_READY);
 
     // 5. Apply new URI
     gchar* uri = gst_filename_to_uri(file.c_str(), nullptr);
