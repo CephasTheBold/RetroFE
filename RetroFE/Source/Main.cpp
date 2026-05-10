@@ -37,6 +37,12 @@
 #include <fstream>
 #include <vector>
 
+#ifdef WIN32
+#include <windows.h>
+#include <mmsystem.h>
+#pragma comment(lib, "winmm.lib")
+#endif
+
 namespace fs = std::filesystem;
 static bool ImportConfiguration(Configuration* c);
 std::vector<std::string> settingsFromCLI;
@@ -118,7 +124,9 @@ int main(int argc, char** argv)
     Configuration::initialize();
     Configuration config;
     std::string dbPath = Utils::combinePath(Configuration::absolutePath, "meta.db");
-
+#ifdef WIN32
+    timeBeginPeriod(1);
+#endif
     // Check to see if an argument was passed
     if (argc > 1)
     {
@@ -362,7 +370,10 @@ int main(int argc, char** argv)
     gst_deinit();
     SDL::deInitialize(true);
     Logger::deInitialize();
-
+#ifdef WIN32
+    // Release the 1ms timer request back to the OS
+    timeEndPeriod(1);
+#endif
     return 0;
 }
 
