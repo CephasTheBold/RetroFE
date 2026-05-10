@@ -222,31 +222,16 @@ gboolean GStreamerVideo::busCallback(GstBus*, GstMessage* msg, gpointer user_dat
         case GST_MESSAGE_ASYNC_DONE:
         if (fromPipeline && video->lifecycle_.load(std::memory_order_acquire) == PipelineLifecycle::Starting) {
 
-            // GStreamer guarantees the async state change is finished here.
+            // --- NEW VIDEO DETECTION FOR PLAYBIN ---
+            // Query the number of video streams directly from the pipeline
+            gint n_video = 0;
+            g_object_get(video->pipeline_, "n-video", &n_video, NULL);
+            video->hasVideoStream_.store(n_video > 0, std::memory_order_release);
+
             video->lifecycle_.store(PipelineLifecycle::Ready, std::memory_order_release);
 
-            // Free the CPU budget using the active token
             uint64_t activeToken = video->prerollToken_.load(std::memory_order_acquire);
             video->releaseDecodeSlot(activeToken);
-        }
-        break;
-
-        case GST_MESSAGE_STREAM_COLLECTION:
-        if (fromPipeline) {
-            GstStreamCollection* collection = nullptr;
-            gst_message_parse_stream_collection(msg, &collection);
-
-            int nVideo = 0;
-            if (collection) {
-                const guint size = gst_stream_collection_get_size(collection);
-                for (guint i = 0; i < size; ++i) {
-                    GstStream* stream = gst_stream_collection_get_stream(collection, i);
-                    if (stream && (gst_stream_get_stream_type(stream) & GST_STREAM_TYPE_VIDEO))
-                        ++nVideo;
-                }
-                gst_object_unref(collection);
-            }
-            video->hasVideoStream_.store(nVideo > 0, std::memory_order_release);
         }
         break;
 
@@ -612,7 +597,7 @@ bool GStreamerVideo::createPipelineIfNeeded() {
         return true;
     }
 
-    pipeline_ = gst_element_factory_make("playbin3", "player");
+    pipeline_ = gst_element_factory_make("playbin", "player");
     videoSink_ = gst_element_factory_make("appsink", "video_sink");
 
     if (!pipeline_ || !videoSink_) {
@@ -1015,28 +1000,26 @@ void GStreamerVideo::elementSetupCallback([[maybe_unused]] GstElement* playbin,
             G_OBJECT_GET_CLASS(e), p) != nullptr;
         };
 
-    if (g_str_has_prefix(name, "multiqueue")) {
-        const guint64 max_bytes = 15 * 1024 * 1024;
-        if (has_prop(element, "max-size-bytes"))
-            g_object_set(element, "max-size-bytes", max_bytes, NULL);
-        if (has_prop(element, "use-interleave"))
-            g_object_set(element, "use-interleave", FALSE, NULL);
-    }
-    else if (g_str_has_prefix(name, "queue") ||
-        g_str_has_prefix(name, "aqueue") ||
-        g_str_has_prefix(name, "vqueue"))
+    if (g_str_has_prefix(name, "queue") ||
+    g_str_has_prefix(name, "aqueue") ||
+    g_str_has_prefix(name, "vqueue"))
     {
-        if (has_prop(element, "max-size-bytes"))
-            g_object_set(element, "max-size-bytes", (guint64)(12 * 1024 * 1024), NULL);
+        // Increase buffer count to prevent "Queue full" warnings with audio-only files
         if (has_prop(element, "max-size-buffers"))
-            g_object_set(element, "max-size-buffers", 8, NULL);
+            g_object_set(element, "max-size-buffers", 100, NULL);
+
+        if (has_prop(element, "max-size-bytes"))
+            g_object_set(element, "max-size-bytes", (guint64)(15 * 1024 * 1024), NULL);
+
         if (has_prop(element, "max-size-time"))
-            g_object_set(element, "max-size-time", (guint64)(250 * GST_MSECOND), NULL);
+            g_object_set(element, "max-size-time", (guint64)(500 * GST_MSECOND), NULL);
+
         if (has_prop(element, "flush-on-eos"))
             g_object_set(element, "flush-on-eos", TRUE, NULL);
+
         if (has_prop(element, "silent"))
             g_object_set(element, "silent", TRUE, NULL);
-    }
+}
 
     if (!Configuration::HardwareVideoAccel &&
         GST_IS_VIDEO_DECODER(element))
