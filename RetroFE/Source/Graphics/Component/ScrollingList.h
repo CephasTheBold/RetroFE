@@ -173,6 +173,7 @@ public:
     void setScrollAcceleration(float value);
     void setStartScrollTime(float value);
     void setMinScrollTime(float value);
+    void setCoastFriction(float value);
     void enableTextFallback(bool value);
     bool horizontalScroll{ false };
     void deallocateSpritePoints();
@@ -234,6 +235,7 @@ private:
     float minScrollTime_{ 0.500 };
     float scrollPeriod_{ 0 };
 	float letterSkipTimer_{ 0 };
+    float coastFriction_{ 0.0f };
 
     Configuration& config_;
     FontManager* fontInst_;

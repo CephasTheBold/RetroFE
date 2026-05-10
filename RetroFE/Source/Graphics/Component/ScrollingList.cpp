@@ -1271,12 +1271,30 @@ void ScrollingList::updateScrollPeriod(  )
     }
 }
 
+void ScrollingList::setCoastFriction(float value) {
+    // If it's explicitly disabled, leave it at 0
+    if (value <= 0.0f) {
+        coastFriction_ = 0.0f;
+        return;
+    }
+
+    // Prevent invalid values that would cause infinite coasting (friction must be > 1)
+    if (value <= 1.0f) {
+        value = 1.01f;
+    }
+
+    coastFriction_ = value;
+}
+
 void ScrollingList::decelerateScrollPeriod() {
-    // Multiplicative friction factor:
-    // 1.1f = Very light/floats (drifts for a long time)
-    // 1.2f = Standard "weighted" feel
-    // 1.4f = Heavy/High-friction
-    scrollPeriod_ *= 1.3f;
+    // If disabled, instantly snap to the start time (legacy behavior)
+    if (coastFriction_ == 0.0f) {
+        scrollPeriod_ = startScrollTime_;
+        return;
+    }
+
+    // Apply the friction multiplier
+    scrollPeriod_ *= coastFriction_;
 
     if (scrollPeriod_ > startScrollTime_) {
         scrollPeriod_ = startScrollTime_;

@@ -1137,6 +1137,7 @@ ScrollingList* PageBuilder::buildMenu(xml_node<>* menuXml, Page& page, int monit
 	xml_attribute<> const* scrollTimeXml = menuXml->first_attribute("scrollTime");
 	xml_attribute<> const* scrollAccelerationXml = menuXml->first_attribute("scrollAcceleration");
 	xml_attribute<> const* minScrollTimeXml = menuXml->first_attribute("minScrollTime");
+	xml_attribute<> const* coastFrictionXml = menuXml->first_attribute("coastFriction");
 	xml_attribute<> const* scrollOrientationXml = menuXml->first_attribute("orientation");
 	xml_attribute<> const* selectedImage = menuXml->first_attribute("selectedImage");
 	xml_attribute<> const* textFallbackXml = menuXml->first_attribute("textFallback");
@@ -1256,6 +1257,10 @@ ScrollingList* PageBuilder::buildMenu(xml_node<>* menuXml, Page& page, int monit
 
 	if (minScrollTimeXml) {
 		menu->setMinScrollTime(Utils::convertFloat(minScrollTimeXml->value()));
+	}
+
+	if (coastFrictionXml) {
+		menu->setCoastFriction(Utils::convertFloat(coastFrictionXml->value()));
 	}
 
 	if (scrollOrientationXml) {
