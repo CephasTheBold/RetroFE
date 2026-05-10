@@ -161,9 +161,12 @@ public:
     bool isGamesScrolling() const;
     bool  isPlaying() const;
     void  resetScrollPeriod() const;
+    void decelerateScrollPeriod();
+    bool canMenuCoast() const;
     void  updateScrollPeriod() const;
     bool  isMenuFastScrolling() const;
     void  scroll(bool forward, bool playlist);
+    ScrollDirection getScrolling() const { return scrolling_; }
     bool  hasSubs();
     int   getLayoutWidth(int layout);
     int   getLayoutHeight(int layout);
@@ -231,6 +234,7 @@ private:
     std::list<CollectionInfo *> deleteCollectionList_;
     std::map<std::string, size_t> lastPlaylistOffsets_;
 
+    ScrollDirection scrolling_ = ScrollDirectionIdle;
     bool scrollActive_;
     bool playlistScrollActive_;
     bool gameScrollActive_;

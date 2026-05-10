@@ -180,6 +180,8 @@ public:
     void reallocateSpritePoints();
     void resetScrollPeriod();
     void updateScrollPeriod();
+    void decelerateScrollPeriod();
+    bool canCoast() const;
     bool isFastScrolling() const;
     void scroll(bool forward);
     bool isPlaylist() const;

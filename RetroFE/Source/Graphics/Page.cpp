@@ -676,22 +676,18 @@ void Page::setText(const std::string& text, int id) {
 
 
 void Page::setScrolling(ScrollDirection direction) {
+	scrolling_ = direction; // Store the direction for getScrolling()
+
 	switch (direction) {
 		case ScrollDirectionForward:
 		case ScrollDirectionBack:
-		if (!scrollActive_)
-		{
-			menuScroll();
-		}
+		if (!scrollActive_) menuScroll();
 		scrollActive_ = gameScrollActive_ = true;
 		playlistScrollActive_ = false;
 		break;
 		case ScrollDirectionPlaylistForward:
 		case ScrollDirectionPlaylistBack:
-		if (!scrollActive_)
-		{
-			playlistScroll();
-		}
+		if (!scrollActive_) playlistScroll();
 		scrollActive_ = playlistScrollActive_ = true;
 		gameScrollActive_ = false;
 		break;
@@ -700,7 +696,6 @@ void Page::setScrolling(ScrollDirection direction) {
 		scrollActive_ = playlistScrollActive_ = gameScrollActive_ = false;
 		break;
 	}
-
 }
 
 
@@ -1824,6 +1819,20 @@ void Page::resetScrollPeriod() const {
 	}
 }
 
+void Page::decelerateScrollPeriod() {
+	for (ScrollingList* menu : activeMenu_) {
+		if (menu) {
+			menu->decelerateScrollPeriod();
+		}
+	}
+}
+
+bool Page::canMenuCoast() const {
+	for (ScrollingList* menu : activeMenu_) {
+		if (menu && menu->canCoast()) return true;
+	}
+	return false;
+}
 
 void Page::updateScrollPeriod() const {
 	for (auto& menu : activeMenu_) {

@@ -1269,9 +1269,29 @@ void ScrollingList::updateScrollPeriod(  )
     }
 }
 
+void ScrollingList::decelerateScrollPeriod() {
+    // Multiplicative friction factor:
+    // 1.1f = Very light/floats (drifts for a long time)
+    // 1.2f = Standard "weighted" feel
+    // 1.4f = Heavy/High-friction
+    scrollPeriod_ *= 1.3f;
+
+    if (scrollPeriod_ > startScrollTime_) {
+        scrollPeriod_ = startScrollTime_;
+    }
+}
+
+bool ScrollingList::canCoast() const {
+    // Give it plenty of room to finish that smooth landing
+    return scrollPeriod_ < (startScrollTime_ * 0.98f);
+}
+
 bool ScrollingList::isFastScrolling() const {
-    // Return true if the user is holding Letter Skip, OR if they are holding standard scroll
-    return (letterSkipTimer_ > 0.0f) || (scrollPeriod_ == minScrollTime_);
+    // Only trigger if we are significantly faster than the start.
+    // If start is 0.2 and min is 0.05, maybe 0.07 is the "Intentional" point.
+    float triggerThreshold = minScrollTime_ + (scrollAcceleration_ * 0.5f);
+
+    return (letterSkipTimer_ > 0.0f) || (scrollPeriod_ <= triggerThreshold);
 }
 
 void ScrollingList::scroll(bool forward) {
