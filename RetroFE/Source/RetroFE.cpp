@@ -183,6 +183,7 @@ void RetroFE::render() {
 	static uint64_t lastFpsUpdateTimestamp = 0;
 	static bool prevShowFps = false; // Detect transition
 	static bool waitingForFpsData = false;
+	static size_t displayedMemMB = 0;
 
 	// --- Live Work (kept; Late single-frame removed from display) ---
 	static double displayedWorkMsLive = 0.0;
@@ -285,6 +286,7 @@ void RetroFE::render() {
 			const int denom = std::max(1, framesSinceFpsUpdate);
 			displayedLateAvgUs = lateSumUsInWindow / (double)denom;
 			displayedLateMaxUs = lateMaxUsInWindow;
+			displayedMemMB = Utils::getMemoryUsage() / 1024;
 
 			// snap to 1s boundary
 			lastFpsUpdateTimestamp = now_ticks64 - (windowMs % 1000);
@@ -337,7 +339,7 @@ void RetroFE::render() {
 				displayedLateAvgUs,
 				displayedLateMaxUs,
 				displayedRenderMs,
-				Utils::getMemoryUsage() / 1024,
+				displayedMemMB,
 				outW, outH);
 		}
 

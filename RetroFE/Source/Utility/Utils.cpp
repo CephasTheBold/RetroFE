@@ -700,9 +700,12 @@ size_t Utils::getMemoryUsage() {
     std::string line;
     while (std::getline(status, line)) {
         if (line.compare(0, 6, "VmRSS:") == 0) {
-            size_t kb = 0;
-            sscanf(line.c_str(), "VmRSS: %zu kB", &kb);
-            return kb;
+            // Find the first digit in the string
+            size_t firstDigit = line.find_first_of("0123456789");
+            if (firstDigit != std::string::npos) {
+                // Convert the substring to a number
+                return std::stoul(line.substr(firstDigit));
+            }
         }
     }
     return 0;
