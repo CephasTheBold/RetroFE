@@ -37,6 +37,7 @@ std::vector<int>            SDL::displayWidth_;
 std::vector<int>            SDL::displayHeight_;
 std::vector<int>            SDL::windowWidth_;
 std::vector<int>            SDL::windowHeight_;
+std::vector<int>            SDL::displayRefresh_;
 std::vector<bool>           SDL::fullscreen_;
 std::vector<int>            SDL::rotation_;
 std::vector<bool>           SDL::mirror_;
@@ -265,6 +266,7 @@ bool SDL::initialize(Configuration& config) {
 			}
 		}
 
+		displayRefresh_.push_back(mode.refresh_rate);
 		windowWidth_.push_back(mode.w);
 		displayWidth_.push_back(mode.w);
 		std::string hString = "";

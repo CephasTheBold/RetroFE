@@ -71,6 +71,9 @@ public:
     static int getDisplayHeight(int index) {
         return (index < screenCount_ ? displayHeight_[index] : displayHeight_[0]);
     }
+    static int getDisplayRefresh(int index) {
+        return (index < screenCount_ ? displayRefresh_[index] : displayRefresh_[0]);
+    }
     static bool isMirrorEnabled(int index) {
         return (index < screenCount_ ? mirror_[index] : mirror_[0]);
     }
@@ -84,6 +87,7 @@ private:
     static std::vector<int>            displayHeight_;
     static std::vector<int>            windowWidth_;
     static std::vector<int>            windowHeight_;
+    static std::vector<int>            displayRefresh_;
     static std::vector<bool>           fullscreen_;
     static std::vector<int>            rotation_;
     static std::vector<bool>           mirror_;

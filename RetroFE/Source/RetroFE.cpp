@@ -181,23 +181,24 @@ void RetroFE::render() {
 	static double displayedFps = 0.0;
 	static double displayedRenderMs = 0.0;
 	static uint64_t lastFpsUpdateTimestamp = 0;
-	static bool prevShowFps = false; // Detect transition
+	static bool prevShowFps = false;
 	static bool waitingForFpsData = false;
 	static size_t displayedMemMB = 0;
 
-	// --- Live Work (kept; Late single-frame removed from display) ---
+	// --- Live Work and Window Stats ---
 	static double displayedWorkMsLive = 0.0;
 	static uint64_t lastWorkLateUpdatePerfTicks = 0;
-
-	// --- 1s window stats for Work/Late (stable + meaningful granularity) ---
 	static double workSumMsInWindow = 0.0;
 	static double lateSumUsInWindow = 0.0;
 	static double lateMaxUsInWindow = 0.0;
-
 	static double displayedLateAvgUs = 0.0;
 	static double displayedLateMaxUs = 0.0;
 
-	const uint64_t r_startTicks = SDL_GetPerformanceCounter(); // render timing start
+	// --- Visual Throttling ---
+	static uint64_t lastVisualUpdateTimestamp = 0;
+	const uint32_t visualUpdateInterval = 250; // Rebuild texture at 4Hz
+
+	const uint64_t r_startTicks = SDL_GetPerformanceCounter();
 
 	// --- 1. Clear render targets & draw ---
 	for (int i = 0; i < SDL::getScreenCount(); ++i) {
@@ -217,6 +218,7 @@ void RetroFE::render() {
 		if (currentPage_) currentPage_->draw(i);
 
 		// Draw overlay into the render target (screen 0 only)
+		// We only draw if the texture exists; we no longer create it here.
 		if (showFps_ && i == 0 && fpsOverlayTexture_) {
 			SDL_Rect dst{ 20, 20, fpsOverlayW_, fpsOverlayH_ };
 			SDL_RenderCopy(rr, fpsOverlayTexture_, nullptr, &dst);
@@ -232,7 +234,6 @@ void RetroFE::render() {
 		SDL_SetRenderTarget(rr, nullptr);
 		SDL_RenderCopy(rr, rt, nullptr, nullptr);
 		SDL_RenderPresent(rr);
-
 	}
 
 	// --- 3. Timing for THIS render() call ---
@@ -245,130 +246,116 @@ void RetroFE::render() {
 
 	if (showFpsJustEnabled) {
 		lastFpsUpdateTimestamp = SDL_GetTicks64();
+		lastVisualUpdateTimestamp = SDL_GetTicks64();
 		framesSinceFpsUpdate = 0;
 		accumulatedRenderMs = 0.0;
 		waitingForFpsData = true;
 
-		// reset live work stabilizer
 		displayedWorkMsLive = 0.0;
 		lastWorkLateUpdatePerfTicks = 0;
-
-		// reset 1s window stats
 		workSumMsInWindow = 0.0;
 		lateSumUsInWindow = 0.0;
 		lateMaxUsInWindow = 0.0;
-
 		displayedLateAvgUs = 0.0;
 		displayedLateMaxUs = 0.0;
 	}
 
 	if (showFps_) {
+		const uint64_t now_ticks64 = SDL_GetTicks64();
+
+		// --- A. Per-frame math (always runs for accuracy) ---
 		framesSinceFpsUpdate++;
 		accumulatedRenderMs += currentRenderDurationMs;
+		workSumMsInWindow += this->lastWorkMs_;
+		lateSumUsInWindow += this->lastLateUs_;
+		lateMaxUsInWindow = std::max(lateMaxUsInWindow, this->lastLateUs_);
 
-		// --- Accumulate 1s window stats for Work/Late (every frame) ---
-		{
-			const double w = this->lastWorkMs_;
-			const double l = this->lastLateUs_;
-			workSumMsInWindow += w;
-			lateSumUsInWindow += l;
-			lateMaxUsInWindow = std::max(lateMaxUsInWindow, l);
-		}
-
-		const uint64_t now_ticks64 = SDL_GetTicks64();
+		// --- B. 1-Second Averaging Window ---
 		if (now_ticks64 - lastFpsUpdateTimestamp >= 1000) {
 			const uint64_t windowMs = now_ticks64 - lastFpsUpdateTimestamp;
 
 			displayedFps = (windowMs > 0) ? (framesSinceFpsUpdate * 1000.0 / (double)windowMs) : 0.0;
 			displayedRenderMs = accumulatedRenderMs / std::max(1, framesSinceFpsUpdate);
 
-			// --- Compute displayed 1s window stats ---
 			const int denom = std::max(1, framesSinceFpsUpdate);
 			displayedLateAvgUs = lateSumUsInWindow / (double)denom;
 			displayedLateMaxUs = lateMaxUsInWindow;
 			displayedMemMB = Utils::getMemoryUsage() / 1024;
 
-			// snap to 1s boundary
 			lastFpsUpdateTimestamp = now_ticks64 - (windowMs % 1000);
 			framesSinceFpsUpdate = 0;
 			accumulatedRenderMs = 0.0;
 			waitingForFpsData = false;
 
-			// reset window accumulators for next window
 			workSumMsInWindow = 0.0;
 			lateSumUsInWindow = 0.0;
 			lateMaxUsInWindow = 0.0;
 		}
 
-		// --- Optional live Work update (10Hz) ---
-		{
-			const uint64_t nowPerfTicks = SDL_GetPerformanceCounter();
-			const uint64_t updateIntervalTicks = (uint64_t)((double)freq_ * 0.1); // 0.1s = 10Hz
-
-			if (lastWorkLateUpdatePerfTicks == 0 ||
-				(nowPerfTicks - lastWorkLateUpdatePerfTicks) >= updateIntervalTicks)
-			{
-				lastWorkLateUpdatePerfTicks = nowPerfTicks;
-
-				double workMs = this->lastWorkMs_;
-				workMs = std::round(workMs * 100.0) / 100.0; // 0.01ms
-
-				displayedWorkMsLive = workMs;
-			}
+		// --- C. Live Work Update (10Hz) ---
+		const uint64_t nowPerfTicks = SDL_GetPerformanceCounter();
+		const uint64_t updateIntervalTicks = (uint64_t)((double)freq_ * 0.1);
+		if (lastWorkLateUpdatePerfTicks == 0 || (nowPerfTicks - lastWorkLateUpdatePerfTicks) >= updateIntervalTicks) {
+			lastWorkLateUpdatePerfTicks = nowPerfTicks;
+			displayedWorkMsLive = std::round(this->lastWorkMs_ * 100.0) / 100.0;
 		}
 
-		// --- Compose overlay text ---
-		char overlayText[420];
-		int outW = 0, outH = 0;
-		SDL_Renderer* renderer0 = SDL::getRenderer(0);
-		if (renderer0) {
-			SDL_GetRendererOutputSize(renderer0, &outW, &outH);
-		}
+		// --- D. Visual Coalescing Gate (The Performance Fix) ---
+		if (now_ticks64 - lastVisualUpdateTimestamp >= visualUpdateInterval) {
+			lastVisualUpdateTimestamp = now_ticks64;
 
-		if (waitingForFpsData) {
-			snprintf(overlayText, sizeof(overlayText),
-				"FPS: -- | Frame: -- ms | Work: -- ms | Late(avg/max): --/-- us | Draw: -- ms | Mem: -- MB | Res: %dx%d",
-				outW, outH);
-		}
-		else {
-			snprintf(overlayText, sizeof(overlayText),
-				"FPS: %.1f | Frame: %.2f ms | Work: %.2f ms | Late(avg/max): %.1f/%.0f us | Draw: %.2f ms | Mem: %zu MB | Res: %dx%d",
-				displayedFps,
-				this->lastFrameTimeMs_,
-				displayedWorkMsLive,
-				displayedLateAvgUs,
-				displayedLateMaxUs,
-				displayedRenderMs,
-				displayedMemMB,
-				outW, outH);
-		}
-
-		// Update the overlay texture only when the text changes
-		if (lastOverlayText_ != overlayText) {
-			lastOverlayText_ = overlayText;
-
-			if (fpsOverlayTexture_) {
-				SDL_DestroyTexture(fpsOverlayTexture_);
-				fpsOverlayTexture_ = nullptr;
+			char overlayText[420];
+			int outW = 0, outH = 0;
+			SDL_Renderer* renderer0 = SDL::getRenderer(0);
+			if (renderer0) {
+				SDL_GetRendererOutputSize(renderer0, &outW, &outH);
 			}
 
-			if (debugFont_) {
-				SDL_Color color{ 255, 255, 0, 255 };
-				SDL_Surface* surf = TTF_RenderText_Blended(debugFont_, overlayText, color);
-				if (surf) {
-					SDL_Renderer* r0 = SDL::getRenderer(0);
-					if (r0) {
-						fpsOverlayTexture_ = SDL_CreateTextureFromSurface(r0, surf);
-						fpsOverlayW_ = surf->w;
-						fpsOverlayH_ = surf->h;
+			if (waitingForFpsData) {
+				snprintf(overlayText, sizeof(overlayText),
+					"FPS: -- | Frame: -- ms | Work: -- ms | Late(avg/max): --/-- us | Draw: -- ms | Mem: -- MB | Res: %dx%d",
+					outW, outH);
+			}
+			else {
+				snprintf(overlayText, sizeof(overlayText),
+					"FPS: %.1f | Frame: %.2f ms | Work: %.2f ms | Late(avg/max): %.1f/%.0f us | Draw: %.2f ms | Mem: %zu MB | Res: %dx%d",
+					displayedFps,
+					this->lastFrameTimeMs_,
+					displayedWorkMsLive,
+					displayedLateAvgUs,
+					displayedLateMaxUs,
+					displayedRenderMs,
+					displayedMemMB,
+					outW, outH);
+			}
+
+			// Only swap the texture if the string actually changed
+			if (lastOverlayText_ != overlayText) {
+				lastOverlayText_ = overlayText;
+
+				if (fpsOverlayTexture_) {
+					SDL_DestroyTexture(fpsOverlayTexture_);
+					fpsOverlayTexture_ = nullptr;
+				}
+
+				if (debugFont_) {
+					SDL_Color color{ 255, 255, 0, 255 };
+					// Using RenderText_Solid as it's the fastest path for debug text
+					SDL_Surface* surf = TTF_RenderText_Solid(debugFont_, overlayText, color);
+					if (surf) {
+						if (renderer0) {
+							fpsOverlayTexture_ = SDL_CreateTextureFromSurface(renderer0, surf);
+							fpsOverlayW_ = surf->w;
+							fpsOverlayH_ = surf->h;
+						}
+						SDL_FreeSurface(surf);
 					}
-					SDL_FreeSurface(surf);
 				}
 			}
 		}
 	}
 	else {
-		// Overlay disabled: release texture and reset state
+		// --- 5. Cleanup when disabled ---
 		if (fpsOverlayTexture_) {
 			SDL_DestroyTexture(fpsOverlayTexture_);
 			fpsOverlayTexture_ = nullptr;
@@ -376,6 +363,7 @@ void RetroFE::render() {
 		fpsOverlayW_ = 0;
 		fpsOverlayH_ = 0;
 		lastOverlayText_.clear();
+		lastVisualUpdateTimestamp = 0;
 
 		accumulatedRenderMs = 0.0;
 		framesSinceFpsUpdate = 0;
@@ -383,16 +371,11 @@ void RetroFE::render() {
 		displayedRenderMs = 0.0;
 		lastFpsUpdateTimestamp = 0;
 		waitingForFpsData = false;
-
-		// reset live work stabilizer
 		displayedWorkMsLive = 0.0;
 		lastWorkLateUpdatePerfTicks = 0;
-
-		// reset 1s window stats
 		workSumMsInWindow = 0.0;
 		lateSumUsInWindow = 0.0;
 		lateMaxUsInWindow = 0.0;
-
 		displayedLateAvgUs = 0.0;
 		displayedLateMaxUs = 0.0;
 	}
@@ -508,6 +491,7 @@ void RetroFE::launchEnter() {
 		LOG_INFO("RetroFE", "Unloading SDL for launch (no reboot).");
 		VideoPool::shuttingDown_ = true;
 		VideoPool::shutdown();
+		ThreadPool::getInstance().wait(); // drain before proceeding
 		freeGraphicsMemory();
 		Image::cleanupTextureCache();
 	}
@@ -701,6 +685,15 @@ bool RetroFE::deInitialize() {
 
 // Run RetroFE
 bool RetroFE::run() {
+#ifdef WIN32	
+	bool highPriority = false;
+	config_.getProperty(OPTION_HIGHPRIORITY, highPriority);
+	if (highPriority) {
+		SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+		SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
+		LOG_INFO("RetroFE", "High priority enabled for this process.");
+	}
+#endif
 	std::string controlsConfPath = Utils::combinePath(Configuration::absolutePath, "controls");
 	if (!fs::exists(controlsConfPath + ".conf"))
 	{
@@ -931,6 +924,11 @@ bool RetroFE::run() {
 	constexpr float MAX_DT = 1.0f / 15.0f;    // clamp to ~15 FPS
 	constexpr float SMOOTH_FACTOR = 0.10f;    // 10% smoothing factor (higher = faster adaptation)
 
+
+	int hardwareHz = SDL::getDisplayRefresh(0);
+	if (hardwareHz <= 0) hardwareHz = fps; // Fallback to config if HW query fails
+
+	double hardwareFrameMs = 1000.0 / static_cast<double>(hardwareHz);
 
 	auto kickFetch = [&]() {
 		HiScores::getInstance().refreshGlobalAllFromSingleCallAsync(
@@ -2893,41 +2891,59 @@ bool RetroFE::run() {
 				render();
 
 			// Only do custom frame pacing if vsync is OFF
+// Inside the while (running) loop:
 			if (!vSync)
 			{
 				const double currentFrameIntervalMs = activelyAnimating ? fpsTime : fpsIdleTime;
 				const double frameInterval_s = currentFrameIntervalMs / 1000.0;
 
-				// schedule next frame
+				// 1. Calculate the STRICT DEADLINE for this frame.
+				// This is the point in time we were SUPPOSED to hit.
+				const uint64_t originalTargetTicks = (uint64_t)llround((nextFrameTime + currentFrameIntervalMs) * (double)freq_ / 1000.0);
+
+				// 2. Schedule the next frame's theoretical time
 				nextFrameTime += currentFrameIntervalMs;
 
-				// re-anchor if we fell behind (prevents “late spiral”)
+				// 3. Re-anchor logic (Prevents the "Spiral of Death")
 				const double nowMs = SDL_GetPerformanceCounter() * 1000.0 / (double)freq_;
 				if (nextFrameTime < nowMs) {
 					nextFrameTime = nowMs;
 				}
 
-				const uint64_t targetTicks =
-					(uint64_t)llround(nextFrameTime * (double)freq_ / 1000.0);
+				// 4. Calculate the adjusted target for the actual sleep call
+				const uint64_t sleepTargetTicks = (uint64_t)llround(nextFrameTime * (double)freq_ / 1000.0);
 
 				const uint64_t workEndTicks = SDL_GetPerformanceCounter();
 				lastWorkMs_ = (double)(workEndTicks - loopStart) * 1000.0 / (double)freq_;
 
-				sleepUntilTicks(targetTicks, (uint64_t)freq_, frameInterval_s);
+				// 5. High-precision sleep
+				sleepUntilTicks(sleepTargetTicks, (uint64_t)freq_, frameInterval_s);
 
 				const uint64_t afterSleepTicks = SDL_GetPerformanceCounter();
-				lastLateUs_ = (afterSleepTicks > targetTicks)
-					? (double)(afterSleepTicks - targetTicks) * 1e6 / (double)freq_
+
+				// 6. CALCULATE LATE relative to the STRICT hardware deadline
+				// If afterSleepTicks is past originalTargetTicks, we are jittering.
+				lastLateUs_ = (afterSleepTicks > originalTargetTicks)
+					? (double)(afterSleepTicks - originalTargetTicks) * 1e6 / (double)freq_
 					: 0.0;
 
 				lastFrameTimeMs_ = (double)(afterSleepTicks - loopStart) * 1000.0 / (double)freq_;
 			}
-			else
+			else // vSync is ON
 			{
 				const uint64_t loopEnd = SDL_GetPerformanceCounter();
-				lastWorkMs_ = (double)(loopEnd - loopStart) * 1000.0 / (double)freq_;
-				lastLateUs_ = 0.0;
-				lastFrameTimeMs_ = lastWorkMs_;
+				const double frameTimeMs = (double)(loopEnd - loopStart) * 1000.0 / (double)freq_;
+
+				// With V-Sync, "Work" includes the time spent waiting inside SDL_RenderPresent.
+				lastWorkMs_ = frameTimeMs;
+
+				// Calculate Late: Did the frame take longer than the hardware interval?
+				// We use a 0.5ms epsilon to ignore minor OS scheduling fluctuations.
+				lastLateUs_ = (frameTimeMs > (hardwareFrameMs + 0.5))
+					? (frameTimeMs - hardwareFrameMs) * 1000.0
+					: 0.0;
+
+				lastFrameTimeMs_ = frameTimeMs;
 			}
 
 		}
