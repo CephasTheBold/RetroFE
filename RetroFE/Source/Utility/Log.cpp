@@ -20,6 +20,8 @@
 #include <ctime>
 #include <unordered_map>
 #include <unordered_set>
+#include <chrono>
+#include <iomanip>
 #include <vector>
 #include "../Database/Configuration.h"
 #include "../Database/GlobalOpts.h"
@@ -60,20 +62,29 @@ void Logger::deInitialize()
 }
 
 
-void Logger::write(Zone zone, const std::string& component, const std::string& message)
-{
+void Logger::write(Zone zone, const std::string& component, const std::string& message) {
     std::scoped_lock lock(writeMutex_); // Ensures thread safety
 
-    std::string zoneStr(zoneToString(zone)); // Explicit conversion from string_view to string
+    std::string zoneStr(zoneToString(zone));
 
-    std::time_t rawtime = std::time(NULL);
-    struct tm const* timeinfo = std::localtime(&rawtime);
+    // --- Capture High-Resolution Time ---
+    auto now = std::chrono::system_clock::now();
+    auto now_time_t = std::chrono::system_clock::to_time_t(now);
+
+    // Extract just the milliseconds remainder
+    auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now.time_since_epoch()) % 1000;
+
+    struct tm const* timeinfo = std::localtime(&now_time_t);
 
     static char timeStr[60];
     std::strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", timeinfo);
 
     std::stringstream ss;
-    ss << "[" << timeStr << "] [" << zoneStr << "] [" << component << "] " << message << std::endl;
+    // Format: [YYYY-MM-DD HH:MM:SS.mmm]
+    ss << "[" << timeStr << "." << std::setfill('0') << std::setw(3) << now_ms.count() << "] "
+        << "[" << zoneStr << "] [" << component << "] " << message << std::endl;
+
     std::cout << ss.str();
     std::cout.flush();
 }
