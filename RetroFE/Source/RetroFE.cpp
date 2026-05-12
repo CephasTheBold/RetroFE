@@ -1293,7 +1293,7 @@ bool RetroFE::run() {
 			setState(RETROFE_PLAYLIST_REQUEST);
 			break;
 			case RETROFE_SCROLL_FORWARD:
-			if (currentPage_ && currentPage_->isIdle())
+			if (currentPage_ && currentPage_->isMenuIdle())
 			{
 				currentPage_->setScrolling(Page::ScrollDirectionForward);
 				currentPage_->scroll(true, false);
@@ -1302,7 +1302,7 @@ bool RetroFE::run() {
 			setState(RETROFE_IDLE);
 			break;
 			case RETROFE_SCROLL_BACK:
-			if (currentPage_ && currentPage_->isIdle())
+			if (currentPage_ && currentPage_->isMenuIdle())
 			{
 				currentPage_->setScrolling(Page::ScrollDirectionBack);
 				currentPage_->scroll(false, false);
@@ -1312,7 +1312,7 @@ bool RetroFE::run() {
 			break;
 
 			case RETROFE_SCROLL_COAST:
-			if (currentPage_ && currentPage_->isIdle())
+			if (currentPage_ && currentPage_->isMenuIdle())
 			{
 				// Now getScrolling() returns the valid enum you added
 				const Page::ScrollDirection dir = currentPage_->getScrolling();
@@ -1329,7 +1329,7 @@ bool RetroFE::run() {
 
 
 			case RETROFE_SCROLL_PLAYLIST_FORWARD:
-			if (currentPage_ && currentPage_->isIdle())
+			if (currentPage_ && currentPage_->isMenuIdle())
 			{
 				currentPage_->setScrolling(Page::ScrollDirectionPlaylistForward);
 				currentPage_->scroll(true, true);
@@ -1621,7 +1621,7 @@ bool RetroFE::run() {
 
 			// Wait for onHighlightExit animation to finish; load art
 			case RETROFE_HIGHLIGHT_EXIT:
-			if (currentPage_ && currentPage_->isIdle())
+			if (currentPage_ && currentPage_->isMenuIdle())
 			{
 				currentPage_->highlightLoadArt();
 				setState(RETROFE_HIGHLIGHT_LOAD_ART);
@@ -1655,6 +1655,7 @@ bool RetroFE::run() {
 					state_tmp == RETROFE_PLAYLIST_REQUEST))
 			{
 				state_ = state_tmp;
+				break;
 			}
 			else if (currentPage_ && currentPage_->isIdle())
 			{
