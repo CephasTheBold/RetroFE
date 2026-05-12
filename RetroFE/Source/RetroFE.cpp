@@ -1239,6 +1239,10 @@ bool RetroFE::run() {
 					}
 				}
 
+				currentTime_ = static_cast<float>(SDL_GetPerformanceCounter() * 1.0 / freq_);
+				keyLastTime_ = currentTime_;
+				lastLaunchReturnTime_ = currentTime_;
+
 				setState(RETROFE_LOAD_ART);
 			}
 			break;
@@ -3318,7 +3322,7 @@ RetroFE::RETROFE_STATE RetroFE::processUserInput(Page* page) {
 #endif
 		return RETROFE_QUIT;
 	}
-
+	if (currentTime_ - keyLastTime_ > keyDelayTime_) {
 	// 4. Directional Scroll Mapping (Horizontal vs. Vertical)
 	if (page->isHorizontalScroll())
 	{
@@ -3392,7 +3396,7 @@ RetroFE::RETROFE_STATE RetroFE::processUserInput(Page* page) {
 			return RETROFE_SCROLL_BACK;
 		}
 	}
-
+	}
 	// 5. Instant Feedback Inputs (Music Volume)
 	if (input_.keystate(UserInput::KeyCodeMusicVolumeUp)) {
 		keyLastTime_ = currentTime_;

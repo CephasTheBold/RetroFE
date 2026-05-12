@@ -145,7 +145,7 @@ public:
     void destroyItems();
     void setPoints(std::vector<ViewInfo*>* points, std::shared_ptr<std::vector<std::shared_ptr<AnimationEvents>>> tweenPoints);
     size_t getSelectedIndex() const;
-    void setSelectedIndex(unsigned int index);
+    void setItemIndex(unsigned int index);
     size_t getSize() const;
     void pageUp();
     void pageDown();

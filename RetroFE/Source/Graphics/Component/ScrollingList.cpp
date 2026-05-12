@@ -138,6 +138,9 @@ void ScrollingList::setItems(std::vector<Item*>* items) {
 
 void ScrollingList::selectItemByName(std::string_view name)
 {
+    if (!items_ || items_->empty())
+        return;
+    
     size_t size = items_->size();
     size_t index = 0;
 
@@ -678,6 +681,9 @@ void ScrollingList::subChange(bool increment)
 
 void ScrollingList::cfwLetterSubUp()
 {
+    if (!items_ || items_->empty())
+        return;
+
     if (Utils::toLower(collectionName) != (*items_)[(itemIndex_+selectedOffsetIndex_) % items_->size()]->collectionInfo->lowercaseName())
         subChange(true);
     else
@@ -686,6 +692,9 @@ void ScrollingList::cfwLetterSubUp()
 
 void ScrollingList::cfwLetterSubDown()
 {
+    if (!items_ || items_->empty())
+        return;
+    
     if (Utils::toLower(collectionName) != (*items_)[(itemIndex_+selectedOffsetIndex_) % items_->size()]->collectionInfo->lowercaseName()) {
         subChange(false);
         if (Utils::toLower(collectionName) == (*items_)[(itemIndex_+selectedOffsetIndex_) % items_->size()]->collectionInfo->lowercaseName()) {
@@ -849,6 +858,8 @@ bool ScrollingList::update(float dt)
         return done;
     if (!items_) 
         return done;
+    if (!scrollPoints_ || scrollPoints_->empty())
+        return done;
 
     if (letterSkipTimer_ > 0.0f) {
         letterSkipTimer_ -= dt;
@@ -876,7 +887,7 @@ size_t ScrollingList::getSelectedIndex( ) const
     return loopIncrement( itemIndex_, selectedOffsetIndex_, items_->size( ) );
 }
 
-void ScrollingList::setSelectedIndex( unsigned int index )
+void ScrollingList::setItemIndex( unsigned int index )
 {
      if ( !items_ ) return;
      itemIndex_ = loopDecrement( index, selectedOffsetIndex_, items_->size( ) );
