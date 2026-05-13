@@ -76,6 +76,12 @@ ScrollingList::ScrollingList( Configuration &c,
     , useTextureCaching_(useTextureCaching)
 {
     listId_ = nextListId++;
+    config_.getProperty(OPTION_LAYOUT, layoutName_);
+    imageTypeLC_ = Utils::toLower(imageType_);
+
+    // Pre-build the base paths so they are only calculated ONCE
+    layoutCollectionsBase_ = Utils::combinePath(Configuration::absolutePath, "layouts", layoutName_, "collections");
+    commonCollectionsBase_ = Utils::combinePath(Configuration::absolutePath, "collections", "_common");
 }
 
 
@@ -162,12 +168,12 @@ void ScrollingList::restartByMonitor(int monitor) const {
     }
 }
 
-std::string ScrollingList::getSelectedItemName()
-{
-    size_t size = items_->size();
-    if (!size)
-        return "";
-    
+const std::string& ScrollingList::getSelectedItemName() {
+    if (!items_ || items_->empty()) {
+        static const std::string empty = "";
+        return empty;
+    }
+
     size_t idx = loopIncrement(itemIndex_, selectedOffsetIndex_, items_->size());
     return (*items_)[idx]->name;
 }
@@ -910,7 +916,7 @@ size_t ScrollingList::getSize() const
     return items_->size();
 }
 
-void ScrollingList::resetTweens(Component* c, std::shared_ptr<AnimationEvents> sets, ViewInfo* currentViewInfo, ViewInfo* nextViewInfo, float scrollTime) const {
+void ScrollingList::resetTweens(Component* c, const std::shared_ptr<AnimationEvents>& sets, ViewInfo* currentViewInfo, ViewInfo* nextViewInfo, float scrollTime) const {
     if (!c || !sets || !currentViewInfo || !nextViewInfo) return;
 
     // Sync non-animated properties to ensure smooth transitions
@@ -994,27 +1000,17 @@ void ScrollingList::resetTweens(Component* c, std::shared_ptr<AnimationEvents> s
         scrollAnimation->Push(std::move(set));
     }
 }
+
 bool ScrollingList::allocateTexture(size_t index, const Item* item) {
     if (index >= components_.size()) return false;
 
     Component* existingComponent = components_[index];
     components_[index] = nullptr;
 
-    // DO NOT extract/release here. Two paths handle cleanup correctly:
-    //
-    // PATH A — Recycling succeeds (t == existingComponent):
-    //   The same VideoComponent reuses its pool slot. Pool accounting unchanged.
-    //
-    // PATH B — Recycling fails (t != existingComponent):
-    //   The cleanup block at the bottom calls delete existingComponent.
-    //   Its destructor calls freeGraphicsMemory() -> releaseVideo().
-    //   One clean decrement. Correct.
-
     Component* t = nullptr;
-    std::string layoutName;
-    config_.getProperty(OPTION_LAYOUT, layoutName);
-    std::string typeLC = Utils::toLower(imageType_);
-    std::string selectedItemName = getSelectedItemName();
+
+    // 1. Fetch by const reference (ZERO dynamic allocation)
+    const std::string& selectedItemName = getSelectedItemName();
     const bool isSelectedItem = (selectedImage_ && item->name == selectedItemName);
 
     ImageBuilder imageBuild;
@@ -1053,7 +1049,8 @@ bool ScrollingList::allocateTexture(size_t index, const Item* item) {
             useTextureCaching_, existingComponent);
         };
 
-    const std::vector<std::string_view>& cachedNames = item->baseNameCandidates(typeLC);
+    // 2. Pass the cached lowercase string (ZERO dynamic allocation)
+    const std::vector<std::string_view>& cachedNames = item->baseNameCandidates(imageTypeLC_);
 
     for (size_t iter = 0; iter <= cachedNames.size(); ++iter) {
         std::string name = (iter < cachedNames.size()) ? std::string(cachedNames[iter]) : "default";
@@ -1062,13 +1059,15 @@ bool ScrollingList::allocateTexture(size_t index, const Item* item) {
         std::string videoPath;
 
         if (layoutMode_) {
-            std::string base = Utils::combinePath(Configuration::absolutePath, "layouts", layoutName, "collections");
+            // 3. Pass the pre-computed base path (Saves multiple string creations)
             std::string subPath = commonMode_ ? "_common" : collectionName;
-            buildPaths(imagePath, videoPath, base, subPath, imageType_, videoType_);
+            buildPaths(imagePath, videoPath, layoutCollectionsBase_, subPath, imageType_, videoType_);
         }
         else {
-            if (commonMode_)
-                buildPaths(imagePath, videoPath, Configuration::absolutePath, "collections/_common", imageType_, videoType_);
+            if (commonMode_) {
+                // Use the cached common path
+                buildPaths(imagePath, videoPath, commonCollectionsBase_, "", imageType_, videoType_);
+            }
             else {
                 config_.getMediaPropertyAbsolutePath(collectionName, imageType_, false, imagePath);
                 config_.getMediaPropertyAbsolutePath(collectionName, videoType_, false, videoPath);
@@ -1083,8 +1082,8 @@ bool ScrollingList::allocateTexture(size_t index, const Item* item) {
             std::string itemImagePath;
             std::string itemVideoPath;
             if (layoutMode_) {
-                std::string base = Utils::combinePath(Configuration::absolutePath, "layouts", layoutName, "collections");
-                buildPaths(itemImagePath, itemVideoPath, base, item->collectionInfo->name, imageType_, videoType_);
+                // 3. Pass the pre-computed base path again
+                buildPaths(itemImagePath, itemVideoPath, layoutCollectionsBase_, item->collectionInfo->name, imageType_, videoType_);
             }
             else {
                 config_.getMediaPropertyAbsolutePath(item->collectionInfo->name, imageType_, false, itemImagePath);
@@ -1102,15 +1101,15 @@ bool ScrollingList::allocateTexture(size_t index, const Item* item) {
         std::string videoPath;
 
         if (layoutMode_) {
-            imagePath = Utils::combinePath(Configuration::absolutePath, "layouts", layoutName, "collections",
-                commonMode_ ? "_common" : item->name);
+            // 4. Use the cached base path to skip redundant string operations
+            imagePath = Utils::combinePath(layoutCollectionsBase_, commonMode_ ? "_common" : item->name);
             imagePath = Utils::combinePath(imagePath, "system_artwork");
             videoPath = imagePath;
         }
         else {
             if (commonMode_) {
-                imagePath = Utils::combinePath(Configuration::absolutePath, "collections", "_common");
-                imagePath = Utils::combinePath(imagePath, "system_artwork");
+                // Use cached base path
+                imagePath = Utils::combinePath(commonCollectionsBase_, "system_artwork");
                 videoPath = imagePath;
             }
             else {
@@ -1141,14 +1140,13 @@ bool ScrollingList::allocateTexture(size_t index, const Item* item) {
         components_[index] = t;
     }
 
-    // If recycling failed and a new component was created, delete the old one.
-    // Its destructor calls freeGraphicsMemory() -> releaseVideo() cleanly.
     if (existingComponent != nullptr && existingComponent != t) {
         delete existingComponent;
     }
 
     return true;
 }
+
 void ScrollingList::buildPaths(std::string& imagePath, std::string& videoPath, const std::string& base, const std::string& subPath, const std::string& mediaType, const std::string& videoType) {
     imagePath = Utils::combinePath(base, subPath, "medium_artwork", mediaType);
     videoPath = Utils::combinePath(base, subPath, "medium_artwork", videoType);

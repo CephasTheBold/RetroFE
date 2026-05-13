@@ -55,7 +55,7 @@ void Component::freeGraphicsMemory() {
     menuIndex_ = -1;
 
     // Clear the locally owned animation data to release contiguous vector memory
-    currentAnimation_.Clear();
+    currentAnimation_ = nullptr;
 
     currentTweenIndex_ = 0;
     currentTweenComplete_ = true;
@@ -133,14 +133,12 @@ void Component::setId( int id )
     id_ = id;
 }
 
-bool Component::isIdle() const
-{
-    return (currentTweenComplete_ || animationType_ == "idle" || animationType_ == "menuIdle" || animationType_ == "attract");
+bool Component::isIdle() const {
+    return (currentTweenComplete_ || isIdleAnimationType_);
 }
 
-bool Component::isAttractIdle() const
-{
-    return (currentTweenComplete_ || animationType_ == "idle" || animationType_ == "menuIdle");
+bool Component::isAttractIdle() const {
+    return (currentTweenComplete_ || isAttractIdleAnimationType_);
 }
 
 bool Component::isMenuScrolling() const
@@ -153,8 +151,10 @@ bool Component::isPlaylistScrolling() const
     return (!currentTweenComplete_ && animationType_ == "playlistScroll");
 }
 
-void Component::setTweens(std::shared_ptr<AnimationEvents> set) {
-    tweens_ = std::move(set);
+void Component::setTweens(const std::shared_ptr<AnimationEvents>& set) {
+    if (tweens_ != set) {
+        tweens_ = set;
+    }
 }
 
 std::string_view Component::filePath()
@@ -171,10 +171,9 @@ bool Component::update(float dt) {
 
         if (newTweens && newTweens->size() > 0) {
             animationType_ = animationRequestedType_;
-
-            // C++20: Copy the template into a temporary, then MOVE that temporary into the member.
-            // This invokes the move-assignment operator (pointer swap) instead of copy-assignment.
-            currentAnimation_ = Animation(*newTweens);
+            isIdleAnimationType_ = (animationType_ == "idle" || animationType_ == "menuIdle" || animationType_ == "attract");
+            isAttractIdleAnimationType_ = (animationType_ == "idle" || animationType_ == "menuIdle");
+            currentAnimation_ = newTweens;
 
             currentTweenIndex_ = 0;
             elapsedTweenTime_ = 0;
@@ -197,8 +196,10 @@ bool Component::update(float dt) {
         }
 
         if (idleTweens && idleTweens->size() > 0) {
-            // C++20: Move-assignment for efficient state transition
-            currentAnimation_ = Animation(*idleTweens);
+            animationType_ = "idle";
+            isIdleAnimationType_ = true;
+            isAttractIdleAnimationType_ = true;
+            currentAnimation_ = idleTweens;
             currentTweenIndex_ = 0;
             elapsedTweenTime_ = 0;
             storeViewInfo_ = baseViewInfo;
@@ -210,7 +211,7 @@ bool Component::update(float dt) {
     if (!currentTweenComplete_) {
         currentTweenComplete_ = animate();
         if (currentTweenComplete_) {
-            currentAnimation_.Clear(); // Free memory once finished
+            currentAnimation_ = nullptr; // Free memory once finished
             currentTweenIndex_ = 0;
         }
     }
@@ -239,14 +240,14 @@ void Component::draw()
 }
 
 bool Component::animate() {
-    if (currentAnimation_.size() == 0 || currentTweenIndex_ >= currentAnimation_.size()) {
+    if (!currentAnimation_ || currentAnimation_->size() == 0 || currentTweenIndex_ >= currentAnimation_->size()) {
         return true;
     }
 
     bool currentDone = true;
     double maxDurationInSet = 0.0;
 
-    TweenSet* tweens = currentAnimation_.tweenSet(currentTweenIndex_);
+    TweenSet* tweens = currentAnimation_->tweenSet(currentTweenIndex_);
     if (!tweens) return true;
 
     for (unsigned int i = 0; i < tweens->size(); i++) {
@@ -358,7 +359,7 @@ bool Component::animate() {
         storeViewInfo_ = baseViewInfo;
     }
 
-    return (currentTweenIndex_ >= currentAnimation_.size());
+    return (!currentAnimation_ || currentTweenIndex_ >= currentAnimation_->size());
 }
 
 bool Component::isPlaying()

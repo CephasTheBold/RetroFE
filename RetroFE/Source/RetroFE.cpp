@@ -3271,12 +3271,16 @@ RetroFE::RETROFE_STATE RetroFE::processUserInput(Page* page) {
 	bool infoExitOnScroll = false;
 	config_.getProperty(OPTION_INFOEXITONSCROLL, infoExitOnScroll);
 
-	std::map<unsigned int, bool> ssExitInputs = {
-		{SDL_MOUSEMOTION, true},          {SDL_KEYDOWN, true},
-		{SDL_MOUSEBUTTONDOWN, true},      {SDL_JOYBUTTONDOWN, true},
-		{SDL_JOYAXISMOTION, true},        {SDL_JOYHATMOTION, true},
-		{SDL_CONTROLLERBUTTONDOWN, true}, {SDL_CONTROLLERAXISMOTION, true},
-	};
+	auto isSsExitInput = [](Uint32 type) {
+		switch (type) {
+			case SDL_MOUSEMOTION: case SDL_KEYDOWN: case SDL_MOUSEBUTTONDOWN:
+			case SDL_JOYBUTTONDOWN: case SDL_JOYAXISMOTION: case SDL_JOYHATMOTION:
+			case SDL_CONTROLLERBUTTONDOWN: case SDL_CONTROLLERAXISMOTION:
+			return true;
+			default:
+			return false;
+		}
+		};
 
 	// Rename 'exit' to 'shouldQuit' to avoid conflicts with <cstdlib> exit()
 	bool shouldQuit = false;
@@ -3287,7 +3291,7 @@ RetroFE::RETROFE_STATE RetroFE::processUserInput(Page* page) {
 	while (SDL_PollEvent(&e))
 	{
 		input_.update(e);
-		if (e.type == SDL_POLLSENTINEL || (screensaver && ssExitInputs[e.type]))
+		if (e.type == SDL_POLLSENTINEL || (screensaver && isSsExitInput(e.type)))
 		{
 			break;
 		}
@@ -3315,7 +3319,7 @@ RetroFE::RETROFE_STATE RetroFE::processUserInput(Page* page) {
 
 	page->setUserScrollInputActive(userScrolling);
 
-	if (screensaver && ssExitInputs[e.type])
+	if (screensaver && isSsExitInput(e.type))
 	{
 #ifdef WIN32
 		Utils::postMessage("MediaplayerHiddenWindow", 0x8001, 51, 0);

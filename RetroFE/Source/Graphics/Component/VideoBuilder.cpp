@@ -16,32 +16,48 @@
 
 #include "VideoBuilder.h"
 #include "../../Utility/Utils.h"
-#include <fstream>
+#include <string_view> // Added for string_view
 
+ // 1. Optimized Extension Array (No heap allocations, evaluates at compile time)
+#ifdef WIN32
+static constexpr std::string_view kVidExts[] = {
+    "mp4", "avi", "mkv", "mp3", "wav", "flac"
+};
+#else
+static constexpr std::string_view kVidExts[] = {
+    "mp4", "MP4", "avi", "AVI", "mkv", "MKV",
+    "mp3", "MP3", "wav", "WAV", "flac", "FLAC"
+};
+#endif
+
+// 2. High-Performance string builder (Exactly 1 allocation)
+static inline std::string makePrefix(const std::string& path, const std::string& name) {
+    std::string s;
+    s.reserve(path.size() + name.size() + 2);
+    s.append(path);
+    if (!path.empty()) {
+        const char c = path.back();
+        if (c != '/' && c != '\\')
+#ifdef _WIN32
+            s.push_back('\\');
+#else
+            s.push_back('/');
+#endif
+    }
+    s.append(name);
+    return s;
+}
 
 VideoComponent* VideoBuilder::createVideo(const std::string& path, Page& page, const std::string& name,
     int monitor, int numLoops, bool softOverlay, int listId,
     const int* perspectiveCorners,
-    Component* recycleTarget)
-{
-    VideoComponent* component = nullptr;
+    Component* recycleTarget) {
+    // 3. Fast path building
+    const std::string prefix = makePrefix(path, name);
 
-    // Declare the extensions vector as static so it's only initialized once.
-#ifdef WIN32
-    static std::vector<std::string> extensions = {
-        "mp4", "avi", "mkv",
-        "mp3", "wav", "flac"
-    };
-#else
-    static std::vector<std::string> extensions = {
-    "mp4", "MP4", "avi", "AVI", "mkv", "MKV",
-    "mp3", "MP3", "wav", "WAV", "flac", "FLAC"
-    };
-#endif
-
-    std::string prefix = Utils::combinePath(path, name);
-
-    if (std::string file; Utils::findMatchingFile(prefix, extensions, file)) {
+    std::string file;
+    // 4. Use the iterator-based findMatchingFile to match ImageBuilder
+    if (Utils::findMatchingFile(std::string_view(prefix), std::begin(kVidExts), std::end(kVidExts), file)) {
         // Attempt recycling
         if (recycleTarget && recycleTarget->recycleAsVideo(file, name)) {
             return static_cast<VideoComponent*>(recycleTarget);

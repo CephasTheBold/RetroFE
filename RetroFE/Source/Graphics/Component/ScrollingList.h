@@ -134,14 +134,13 @@ public:
     void triggerBuildInfoExit(int menuIndex = -1);
     void triggerJukeboxJumpEvent(int menuIndex = -1);
     void triggerEventOnAll(const std::string& event, int menuIndex);;
-
     bool allocateTexture(size_t index, const Item* i);
     void buildPaths(std::string& imagePath, std::string& videoPath, const std::string& base, const std::string& subPath, const std::string& mediaType, const std::string& videoType);
     void deallocateTexture(size_t index);
     void setItems(std::vector<Item*>* items);
     void selectItemByName(std::string_view name);
     void restartByMonitor(int monitor) const;
-    std::string getSelectedItemName();
+    const std::string& getSelectedItemName();
     void destroyItems();
     void setPoints(std::vector<ViewInfo*>* points, std::shared_ptr<std::vector<std::shared_ptr<AnimationEvents>>> tweenPoints);
     size_t getSelectedIndex() const;
@@ -204,7 +203,8 @@ private:
     void clearPoints();
     void clearTweenPoints();
     
-    void resetTweens(Component* c, std::shared_ptr<AnimationEvents> sets, ViewInfo* currentViewInfo, ViewInfo* nextViewInfo, float scrollTime) const;
+    // Change to:
+    void resetTweens(Component* c, const std::shared_ptr<AnimationEvents>& sets, ViewInfo* currentViewInfo, ViewInfo* nextViewInfo, float scrollTime) const;
     inline size_t loopIncrement(size_t offset, size_t index, size_t size) const;
     inline size_t loopDecrement(size_t offset, size_t index, size_t size) const;
 
@@ -242,6 +242,10 @@ private:
     std::string    layoutKey_;
     std::string    imageType_;
     std::string    videoType_;
+    std::string layoutName_;
+    std::string imageTypeLC_;
+    std::string layoutCollectionsBase_;
+    std::string commonCollectionsBase_;
 
     std::vector<Item*>* items_{ nullptr };
     RotatableView<Component*> components_;

@@ -479,12 +479,13 @@ void Page::playlistChange() {
 }
 
 void Page::menuScroll() {
-	if (Item const* item = selectedItem_; !item)
-		return;
-
+	if (!selectedItem_) return;
 	for (auto& layer : LayerComponents_) {
 		for (Component* component : layer) {
-			component->triggerEvent("menuScroll", menuDepth_ - 1);
+			// Check if it's already scrolling before triggering!
+			if (component->getAnimationRequestedType() != "menuScroll") {
+				component->triggerEvent("menuScroll", menuDepth_ - 1);
+			}
 		}
 	}
 }
@@ -495,7 +496,9 @@ void Page::playlistScroll() {
 
 	for (auto& layer : LayerComponents_) {
 		for (Component* component : layer) {
-			component->triggerEvent("playlistScroll", menuDepth_ - 1);
+			if (component->getAnimationRequestedType() != "playlistScroll") {
+				component->triggerEvent("playlistScroll", menuDepth_ - 1);
+			}
 		}
 	}
 }
@@ -672,6 +675,7 @@ void Page::pageScroll(ScrollDirection direction) {
 	ScrollingList* amenu = getAnActiveMenu();
 	if (!amenu) return;
 
+	// 1. Master calculates jump
 	if (direction == ScrollDirectionForward) {
 		amenu->pageDown();
 	}
@@ -679,11 +683,19 @@ void Page::pageScroll(ScrollDirection direction) {
 		amenu->pageUp();
 	}
 
+	// 2. Broadcast to Followers (Safely ignoring Playlists)
 	size_t index = amenu->getScrollOffsetIndex();
 	for (auto it = activeMenu_.begin(); it != activeMenu_.end(); it++) {
 		ScrollingList* menu = *it;
-		if (menu)
+		if (menu && menu != amenu && !menu->isPlaylist()) {
 			menu->setScrollOffsetIndex(index);
+		}
+	}
+
+	// 3. Trigger UI updates
+	onNewScrollItemSelected();
+	if (highlightSoundChunk_) {
+		highlightSoundChunk_->play();
 	}
 	invalidateIdleCache();
 }
@@ -692,14 +704,24 @@ void Page::selectRandom() {
 	ScrollingList* amenu = getAnActiveMenu();
 	if (!amenu) return;
 
+	// 1. Master picks random index
 	amenu->random();
+
+	// 2. Broadcast to Followers
 	size_t index = amenu->getScrollOffsetIndex();
 	for (auto it = activeMenu_.begin(); it != activeMenu_.end(); it++) {
 		ScrollingList* menu = *it;
-		if (menu && !menu->isPlaylist())
+		if (menu && menu != amenu && !menu->isPlaylist()) {
 			menu->setScrollOffsetIndex(index);
+		}
 	}
+
+	// 3. Trigger UI updates
 	setSelectedItem();
+	onNewScrollItemSelected();
+	if (highlightSoundChunk_) {
+		highlightSoundChunk_->play();
+	}
 	invalidateIdleCache();
 }
 
@@ -733,62 +755,78 @@ void Page::selectRandomPlaylist(CollectionInfo* collection, std::vector<std::str
 }
 
 void Page::letterScroll(ScrollDirection direction) {
+	ScrollingList* amenu = getAnActiveMenu();
+	if (!amenu) return;
+
+	if (direction == ScrollDirectionForward) {
+		amenu->letterDown();
+	}
+	else if (direction == ScrollDirectionBack) {
+		amenu->letterUp();
+	}
+
+	size_t index = amenu->getScrollOffsetIndex();
 	for (auto it = activeMenu_.begin(); it != activeMenu_.end(); it++) {
 		ScrollingList* menu = *it;
-		if (menu && !menu->isPlaylist()) {
-			if (direction == ScrollDirectionForward) {
-				menu->letterDown();
-			}
-			else if (direction == ScrollDirectionBack) {
-				menu->letterUp();
-			}
+		if (menu && menu != amenu && !menu->isPlaylist()) {
+			menu->setScrollOffsetIndex(index);
 		}
 	}
-	onNewScrollItemSelected();  // Call once after the loop
+
+	onNewScrollItemSelected();
 	if (highlightSoundChunk_) {
 		highlightSoundChunk_->play();
 	}
 	invalidateIdleCache();
 }
 
-// if playlist is same name as metadata to sort upon, then jump by unique sorted metadata
 void Page::metaScroll(ScrollDirection direction, std::string attribute) {
 	std::transform(attribute.begin(), attribute.end(), attribute.begin(), ::tolower);
 
+	ScrollingList* amenu = getAnActiveMenu();
+	if (!amenu) return;
+
+	if (direction == ScrollDirectionForward) {
+		amenu->metaDown(attribute);
+	}
+	else if (direction == ScrollDirectionBack) {
+		amenu->metaUp(attribute);
+	}
+
+	size_t index = amenu->getScrollOffsetIndex();
 	for (auto it = activeMenu_.begin(); it != activeMenu_.end(); it++) {
 		ScrollingList* menu = *it;
-		if (menu && !menu->isPlaylist()) {
-			if (direction == ScrollDirectionForward) {
-				menu->metaDown(attribute);
-				onNewScrollItemSelected();
-			}
-			if (direction == ScrollDirectionBack) {
-				menu->metaUp(attribute);
-				onNewScrollItemSelected();
-			}
+		if (menu && menu != amenu && !menu->isPlaylist()) {
+			menu->setScrollOffsetIndex(index);
 		}
 	}
+
+	onNewScrollItemSelected();
 	invalidateIdleCache();
 }
-
 
 void Page::cfwLetterSubScroll(ScrollDirection direction) {
+	ScrollingList* amenu = getAnActiveMenu();
+	if (!amenu) return;
+
+	if (direction == ScrollDirectionForward) {
+		amenu->cfwLetterSubDown();
+	}
+	else if (direction == ScrollDirectionBack) {
+		amenu->cfwLetterSubUp();
+	}
+
+	size_t index = amenu->getScrollOffsetIndex();
 	for (auto it = activeMenu_.begin(); it != activeMenu_.end(); it++) {
 		ScrollingList* menu = *it;
-		if (menu && !menu->isPlaylist()) {
-			if (direction == ScrollDirectionForward) {
-				menu->cfwLetterSubDown();
-				onNewScrollItemSelected();
-			}
-			if (direction == ScrollDirectionBack) {
-				menu->cfwLetterSubUp();
-				onNewScrollItemSelected();
-			}
+		if (menu && menu != amenu && !menu->isPlaylist()) {
+			menu->setScrollOffsetIndex(index);
 		}
 	}
+
+	onNewScrollItemSelected();
 	invalidateIdleCache();
 }
-
 
 size_t Page::getCollectionSize() {
 	ScrollingList const* amenu = getAnActiveMenu();
@@ -1835,12 +1873,24 @@ bool Page::isMenuFastScrolling() const {
 
 
 void Page::scroll(bool forward, bool playlist) {
-
+	// 1. Let all lists scroll normally (preserves animation triggers)
 	for (auto& menu : activeMenu_) {
 		if (menu && ((playlist && menu->isPlaylist()) || (!playlist && !menu->isPlaylist()))) {
 			menu->scroll(forward);
 		}
 	}
+
+	// 2. Safety net against rapid-scroll thread drift
+	ScrollingList* masterMenu = playlist ? playlistMenu_ : getAnActiveMenu();
+	if (masterMenu) {
+		size_t trueIndex = masterMenu->getScrollOffsetIndex();
+		for (auto& menu : activeMenu_) {
+			if (menu && menu != masterMenu && ((playlist && menu->isPlaylist()) || (!playlist && !menu->isPlaylist()))) {
+				menu->setScrollOffsetIndex(trueIndex);
+			}
+		}
+	}
+
 	onNewScrollItemSelected();
 	if (highlightSoundChunk_) {
 		highlightSoundChunk_->play();

@@ -43,6 +43,7 @@ public:
 	bool isAttractIdle() const;
 	bool isMenuScrolling() const;
 	bool isPlaylistScrolling() const;
+	void setTweens(const std::shared_ptr<AnimationEvents>& set) const;
 	bool newItemSelected;
 	bool newScrollItemSelected;
 	void setId(int id);
@@ -50,7 +51,7 @@ public:
 	virtual std::string_view filePath();
 	virtual bool update(float dt);
 	virtual void draw();
-	void setTweens(std::shared_ptr<AnimationEvents> set);
+	void setTweens(const std::shared_ptr<AnimationEvents>& set);
 	virtual bool isPlaying();
 	virtual bool isJukeboxPlaying();
 	virtual void skipForward() {};
@@ -90,8 +91,9 @@ private:
 	bool animate();
 
     std::shared_ptr<AnimationEvents> tweens_;
-    Animation currentAnimation_;
-    SDL_Texture *backgroundTexture_;
+	Animation* currentAnimation_ = nullptr;
+	Animation  dynamicAnimation_;
+	SDL_Texture *backgroundTexture_;
     static std::map<int, SDL_Texture*> sharedBackgroundTextures_;
     bool         pauseOnScroll_;
     ViewInfo     storeViewInfo_;
@@ -101,6 +103,8 @@ private:
     std::string  animationRequestedType_;
     std::string  animationType_;
     bool         animationRequested_;
+	bool isIdleAnimationType_ = true;
+	bool isAttractIdleAnimationType_ = true;
     bool         menuScrollReload_;
     bool         animationDoneRemove_;
     int          menuIndex_;
