@@ -1459,23 +1459,15 @@ bool SDL::renderCopyF(SDL_Texture* texture,
 		}
 		};
 
-	auto draw_quad = [&](const SDL_FRect& d, const SDL_FRect& dPx, float angleDeg,
+	// FIXED: Signature changed back to taking the *source* rect 's'
+	auto draw_quad = [&](const SDL_Rect& s, const SDL_FRect& dPx, float angleDeg,
 		bool flipH, bool flipV, float alpha01) -> bool
 		{
-			float clipRatioX = (d.w > 0.f && dst0.w > 0.f) ? (d.x - dst0.x) / dst0.w : 0.f;
-			float clipRatioY = (d.h > 0.f && dst0.h > 0.f) ? (d.y - dst0.y) / dst0.h : 0.f;
-			float clipRatioW = (dst0.w > 0.f) ? d.w / dst0.w : 1.f;
-			float clipRatioH = (dst0.h > 0.f) ? d.h / dst0.h : 1.f;
-
-			float exact_sx = (float)src0.x + ((float)src0.w * clipRatioX);
-			float exact_sy = (float)src0.y + ((float)src0.h * clipRatioY);
-			float exact_sw = (float)src0.w * clipRatioW;
-			float exact_sh = (float)src0.h * clipRatioH;
-
-			float u0 = exact_sx / (float)texW;
-			float v0 = exact_sy / (float)texH;
-			float u1 = (exact_sx + exact_sw) / (float)texW;
-			float v1 = (exact_sy + exact_sh) / (float)texH;
+			// FIXED: Reverted to the direct UV calculation that relies strictly on the source rect bounds
+			float u0 = (float)s.x / (float)texW;
+			float v0 = (float)s.y / (float)texH;
+			float u1 = (float)(s.x + s.w) / (float)texW;
+			float v1 = (float)(s.y + s.h) / (float)texH;
 
 			if (flipH) std::swap(u0, u1);
 			if (flipV) std::swap(v0, v1);
@@ -1566,22 +1558,22 @@ bool SDL::renderCopyF(SDL_Texture* texture,
 		if (mir) {
 			if ((rotation_[m] & 1) == 0) {
 				SDL_FRect r = dPx; r.y += float(outH) * 0.5f;
-				ok &= draw_quad(d, r, angle, fH, fV, a);
+				ok &= draw_quad(s, r, angle, fH, fV, a);         // FIXED: Passed 's'
 				r.x = float(outW) - r.x - r.w; r.y = float(outH) - r.y - r.h;
-				ok &= draw_quad(d, r, angle + 180.0f, fH, fV, a);
+				ok &= draw_quad(s, r, angle + 180.0f, fH, fV, a); // FIXED: Passed 's'
 			}
 			else {
 				SDL_FRect r = dPx; float tmpx = r.x;
 				r.x = float(outW) * 0.5f - r.y - r.h * 0.5f - r.w * 0.5f;
 				r.y = tmpx - r.h * 0.5f + r.w * 0.5f;
-				ok &= draw_quad(d, r, angle + 90.0f, fH, fV, a);
+				ok &= draw_quad(s, r, angle + 90.0f, fH, fV, a);  // FIXED: Passed 's'
 				r.x = float(outW) - r.x - r.w; r.y = float(outH) - r.y - r.h;
-				ok &= draw_quad(d, r, angle + 270.0f, fH, fV, a);
+				ok &= draw_quad(s, r, angle + 270.0f, fH, fV, a); // FIXED: Passed 's'
 			}
 		}
 		else {
 			apply_output_rotation_rect(dPx);
-			ok &= draw_quad(d, dPx, angle, fH, fV, a);
+			ok &= draw_quad(s, dPx, angle, fH, fV, a);           // FIXED: Passed 's'
 		}
 		return ok;
 		};
