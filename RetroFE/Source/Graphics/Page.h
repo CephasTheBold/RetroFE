@@ -255,4 +255,11 @@ private:
     bool jukebox_;
     bool isLaunched_ = false;
 
+    bool cachedIsIdle_{ true };
+    bool cachedIsMenuIdle_{ true };
+    bool cachedIsGraphicsIdle_{ true };
+    bool cachedIsAttractIdle_{ true };
+
+    void invalidateIdleCache(); // Helper to flag state as active
+
 };

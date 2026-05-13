@@ -251,5 +251,8 @@ private:
     bool perspectiveCornersInitialized_{ false };
     int perspectiveCorners_[8]; // stores x,y coordinates for all 4 corners in order: topLeft, topRight, bottomLeft, bottomRight
 
+    bool cachedIdle_{ true };
+    bool cachedAttractIdle_{ true };
+
 
 };

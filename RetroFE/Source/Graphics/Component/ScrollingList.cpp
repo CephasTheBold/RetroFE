@@ -841,42 +841,53 @@ void ScrollingList::triggerJukeboxJumpEvent( int menuIndex )
     triggerEventOnAll("jukeboxJump", menuIndex);
 }
 
-void ScrollingList::triggerEventOnAll(const std::string& event, int menuIndex)
-{
+void ScrollingList::triggerEventOnAll(const std::string& event, int menuIndex) {
     size_t componentSize = components_.size();
     for (size_t i = 0; i < componentSize; ++i) {
         Component* c = components_[i];
         if (c) c->triggerEvent(event, menuIndex);
     }
+
+    // Animations triggered; we are no longer idle
+    cachedIdle_ = false;
+    cachedAttractIdle_ = false;
 }
 
-bool ScrollingList::update(float dt)
-{
+bool ScrollingList::update(float dt) {
     bool done = Component::update(dt);
 
-    if (components_.empty()) 
+    // Grab the base component state first
+    bool allIdle = Component::isIdle();
+    bool allAttractIdle = Component::isAttractIdle();
+
+    if (components_.empty() || !items_ || !scrollPoints_ || scrollPoints_->empty()) {
+        cachedIdle_ = allIdle;
+        cachedAttractIdle_ = allAttractIdle;
         return done;
-    if (!items_) 
-        return done;
-    if (!scrollPoints_ || scrollPoints_->empty())
-        return done;
+    }
 
     if (letterSkipTimer_ > 0.0f) {
         letterSkipTimer_ -= dt;
-
         if (letterSkipTimer_ <= 0.0f) {
             letterSkipTimer_ = 0.0f;
         }
     }
 
     size_t scrollPointsSize = scrollPoints_->size();
-    
+
+    // Evaluate children and aggregate state
     for (unsigned int i = 0; i < scrollPointsSize; i++) {
-        Component *c = components_[i];
+        Component* c = components_[i];
         if (c) {
             done &= c->update(dt);
+            if (!c->isIdle()) allIdle = false;
+            if (!c->isAttractIdle()) allAttractIdle = false;
         }
     }
+
+    // Cache the result for the rest of the frame
+    cachedIdle_ = allIdle;
+    cachedAttractIdle_ = allAttractIdle;
 
     return done;
 }
@@ -1159,30 +1170,12 @@ const std::vector<Component*>& ScrollingList::getComponents() const {
     return components_.raw();
 }
 
-bool ScrollingList::isScrollingListIdle()
-{
-    size_t componentSize = components_.size();
-    if ( !Component::isIdle(  ) ) return false;
-
-    for ( unsigned int i = 0; i < componentSize; ++i ) {
-        Component const *c = components_[i];
-        if ( c && !c->isIdle(  ) ) return false;
-    }
-
-    return true;
+bool ScrollingList::isScrollingListIdle() {
+    return cachedIdle_;
 }
 
-bool ScrollingList::isScrollingListAttractIdle()
-{
-    size_t componentSize = components_.size();
-    if ( !Component::isAttractIdle(  ) ) return false;
-
-    for ( unsigned int i = 0; i < componentSize; ++i ) {
-        Component const *c = components_[i];
-        if ( c && !c->isAttractIdle(  ) ) return false;
-    }
-
-    return true;
+bool ScrollingList::isScrollingListAttractIdle() {
+    return cachedAttractIdle_;
 }
 
 void ScrollingList::resetScrollPeriod(  )
@@ -1306,6 +1299,10 @@ void ScrollingList::scroll(bool forward) {
     }
 
     components_.rotate(forward);
+
+    // Scrolling breaks idleness
+    cachedIdle_ = false;
+    cachedAttractIdle_ = false;
 }
 
 bool ScrollingList::isPlaylist() const

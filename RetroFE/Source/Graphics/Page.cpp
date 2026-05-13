@@ -322,61 +322,17 @@ bool Page::addComponent(Component* c) {
 	}
 }
 
-
-bool Page::isMenuIdle() {
-	if (playlistMenu_ && !playlistMenu_->isScrollingListIdle())
-		return false;
-
-	for (auto it = menus_.begin(); it != menus_.end(); ++it) {
-		for (auto it2 = it->begin(); it2 != it->end(); ++it2) {
-			ScrollingList* menu = *it2;
-			if (menu && !menu->isScrollingListIdle()) {
-				return false;
-			}
-		}
-	}
-	return true;
+void Page::invalidateIdleCache() {
+	cachedIsIdle_ = false;
+	cachedIsMenuIdle_ = false;
+	cachedIsGraphicsIdle_ = false;
+	cachedIsAttractIdle_ = false;
 }
 
-
-bool Page::isIdle() {
-	if (!isMenuIdle()) return false;
-	for (int i = NUM_LAYERS - 1; i >= 0; --i) {
-		const auto& layer = LayerComponents_[i];
-		for (const Component* component : layer) {
-			if (!component->isIdle()) return false;
-		}
-	}
-	return true;
-}
-
-
-
-bool Page::isAttractIdle() {
-	for (const auto& menuVector : menus_) {
-		for (const ScrollingList* menu : menuVector) {
-			if (!menu->isAttractIdle()) return false;
-		}
-	}
-	for (int i = NUM_LAYERS - 1; i >= 0; --i) {
-		const auto& layer = LayerComponents_[i];
-		for (const Component* component : layer) {
-			if (!component->isAttractIdle()) return false;
-		}
-	}
-	return true;
-}
-
-
-bool Page::isGraphicsIdle() {
-	for (int i = NUM_LAYERS - 1; i >= 0; --i) {
-		const auto& layer = LayerComponents_[i];
-		for (const Component* component : layer) {
-			if (!component->isIdle()) return false;
-		}
-	}
-	return true;
-}
+bool Page::isMenuIdle() { return cachedIsMenuIdle_; }
+bool Page::isIdle() { return cachedIsIdle_; }
+bool Page::isAttractIdle() { return cachedIsAttractIdle_; }
+bool Page::isGraphicsIdle() { return cachedIsGraphicsIdle_; }
 
 
 void Page::start() {
@@ -398,6 +354,7 @@ void Page::start() {
 			component->triggerEvent("enter");
 		}
 	}
+	invalidateIdleCache();
 }
 
 
@@ -420,6 +377,7 @@ void Page::stop() {
 			component->triggerEvent("exit");
 		}
 	}
+	invalidateIdleCache();
 }
 
 
@@ -651,6 +609,7 @@ void Page::triggerEventOnAllMenus(const std::string& event) {
 				component->triggerEvent(event, index);
 		}
 	}
+	invalidateIdleCache();
 }
 
 
@@ -662,6 +621,7 @@ void Page::triggerEvent(const std::string& action) {
 				component->triggerEvent(action);
 		}
 	}
+	invalidateIdleCache();
 }
 
 
@@ -696,6 +656,7 @@ void Page::setScrolling(ScrollDirection direction) {
 		scrollActive_ = playlistScrollActive_ = gameScrollActive_ = false;
 		break;
 	}
+	invalidateIdleCache();
 }
 
 
@@ -724,6 +685,7 @@ void Page::pageScroll(ScrollDirection direction) {
 		if (menu)
 			menu->setScrollOffsetIndex(index);
 	}
+	invalidateIdleCache();
 }
 
 void Page::selectRandom() {
@@ -738,6 +700,7 @@ void Page::selectRandom() {
 			menu->setScrollOffsetIndex(index);
 	}
 	setSelectedItem();
+	invalidateIdleCache();
 }
 
 void Page::selectRandomPlaylist(CollectionInfo* collection, std::vector<std::string> cycleVector) {
@@ -785,6 +748,7 @@ void Page::letterScroll(ScrollDirection direction) {
 	if (highlightSoundChunk_) {
 		highlightSoundChunk_->play();
 	}
+	invalidateIdleCache();
 }
 
 // if playlist is same name as metadata to sort upon, then jump by unique sorted metadata
@@ -804,6 +768,7 @@ void Page::metaScroll(ScrollDirection direction, std::string attribute) {
 			}
 		}
 	}
+	invalidateIdleCache();
 }
 
 
@@ -821,6 +786,7 @@ void Page::cfwLetterSubScroll(ScrollDirection direction) {
 			}
 		}
 	}
+	invalidateIdleCache();
 }
 
 
@@ -1384,24 +1350,29 @@ bool Page::playlistExists(const std::string& playlist) {
 
 void Page::update(float dt) {
 	std::string playlistName = getPlaylistName();
-
-	// Check if the playlist name has changed since the last update
 	bool playlistNameChanged = false;
 	if (playlistName != lastPlaylistName_) {
 		lastPlaylistName_ = playlistName;
 		playlistNameChanged = true;
 	}
 
-	// Synchronous (non-threaded) version for OpenGL backend
+	bool menuIdle = true;
+	bool menuAttractIdle = true;
 
 	for (auto& menuList : menus_) {
 		for (auto* menu : menuList) {
 			if (playlistNameChanged) {
 				menu->playlistName = lastPlaylistName_;
 			}
-			menu->update(dt);
+			menu->update(dt); // This updates the menu's internal cache
+
+			if (!menu->isScrollingListIdle()) menuIdle = false;
+			if (!menu->isScrollingListAttractIdle()) menuAttractIdle = false;
 		}
 	}
+
+	bool graphicsIdle = true;
+	bool graphicsAttractIdle = true;
 
 	for (auto& layer : LayerComponents_) {
 		for (auto it = layer.begin(); it != layer.end();) {
@@ -1409,7 +1380,13 @@ void Page::update(float dt) {
 				if (playlistNameChanged) {
 					(*it)->playlistName = lastPlaylistName_;
 				}
-				if ((*it)->update(dt) && (*it)->getAnimationDoneRemove()) {
+
+				bool done = (*it)->update(dt);
+
+				if (!(*it)->isIdle()) graphicsIdle = false;
+				if (!(*it)->isAttractIdle()) graphicsAttractIdle = false;
+
+				if (done && (*it)->getAnimationDoneRemove()) {
 					(*it)->freeGraphicsMemory();
 					delete* it;
 					it = layer.erase(it);
@@ -1424,10 +1401,15 @@ void Page::update(float dt) {
 		}
 	}
 
+	// Save the evaluated state for the rest of the frame
+	cachedIsMenuIdle_ = menuIdle;
+	cachedIsGraphicsIdle_ = graphicsIdle;
+	cachedIsIdle_ = menuIdle && graphicsIdle;
+	cachedIsAttractIdle_ = menuAttractIdle && graphicsAttractIdle;
 
 	// Common update code for textStatusComponent_
 	if (textStatusComponent_) {
-		std::string status; // Populate 'status' as needed
+		std::string status;
 		config_.setProperty("status", status);
 		textStatusComponent_->setText(status);
 	}
@@ -1863,7 +1845,7 @@ void Page::scroll(bool forward, bool playlist) {
 	if (highlightSoundChunk_) {
 		highlightSoundChunk_->play();
 	}
-
+	invalidateIdleCache();
 }
 
 
