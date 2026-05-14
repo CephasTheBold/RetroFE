@@ -1009,8 +1009,9 @@ void Page::exitGame() {
 }
 
 
-std::string Page::getPlaylistName() const {
-	return !collections_.empty() ? playlist_->first : "";
+const std::string& Page::getPlaylistName() const {
+	static const std::string emptyString = "";
+	return !collections_.empty() ? playlist_->first : emptyString;
 }
 
 
@@ -1305,7 +1306,7 @@ void Page::updatePlaylistMenuPosition() {
 	}
 }
 
-void Page::nextCyclePlaylist(std::vector<std::string> list) {
+void Page::nextCyclePlaylist(const std::vector<std::string>& list) {
 	if (list.empty()) return;
 
 	std::string settingsPlaylist = "";
@@ -1338,7 +1339,7 @@ void Page::nextCyclePlaylist(std::vector<std::string> list) {
 	selectPlaylist(nextPlaylist);
 }
 
-void Page::prevCyclePlaylist(std::vector<std::string> list) {
+void Page::prevCyclePlaylist(const std::vector<std::string>& list) {
 	// Empty list
 	if (list.empty()) return;
 

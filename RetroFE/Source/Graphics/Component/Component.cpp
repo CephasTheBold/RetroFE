@@ -188,18 +188,27 @@ bool Component::update(float dt) {
         if (page.isMenuScrolling()) {
             return currentTweenComplete_;
         }
-        animationType_ = "idle";
-        Animation* idleTweens = tweens_->getAnimation("idle", menuIndex_);
 
-        if (idleTweens && idleTweens->size() == 0) {
-            idleTweens = tweens_->getAnimation("menuIdle", menuIndex_);
+        // --- CACHE RESOLUTION START ---
+        // Only query the maps if our tween set or menu index changed
+        if (tweens_ != lastTweensForCache_ || menuIndex_ != lastMenuIndexForCache_) {
+            cachedIdleAnimation_ = tweens_->getAnimation("idle", menuIndex_);
+
+            if (!cachedIdleAnimation_ || cachedIdleAnimation_->size() == 0) {
+                cachedIdleAnimation_ = tweens_->getAnimation("menuIdle", menuIndex_);
+            }
+
+            lastTweensForCache_ = tweens_;
+            lastMenuIndexForCache_ = menuIndex_;
         }
+        // --- CACHE RESOLUTION END ---
 
-        if (idleTweens && idleTweens->size() > 0) {
+        // Use the cached pointer instantly (O(1) memory read, zero tree traversal)
+        if (cachedIdleAnimation_ && cachedIdleAnimation_->size() > 0) {
             animationType_ = "idle";
             isIdleAnimationType_ = true;
             isAttractIdleAnimationType_ = true;
-            currentAnimation_ = idleTweens;
+            currentAnimation_ = cachedIdleAnimation_;
             currentTweenIndex_ = 0;
             elapsedTweenTime_ = 0;
             storeViewInfo_ = baseViewInfo;

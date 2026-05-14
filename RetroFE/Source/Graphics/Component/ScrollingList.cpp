@@ -1256,13 +1256,19 @@ void ScrollingList::scroll(bool forward) {
         itemIndex_ = loopDecrement(itemIndex_, 1, itemsSize);
     }
 
-    // Rebuild only the exiting slot (consider switching to recycle/retarget later)
-    //deallocateTexture(exitIndex);
+    // Rebuild only the exiting slot
     allocateTexture(exitIndex, itemToScroll);
 
+    // --- THE OPTIMIZATION ---
+    // Only allocate VRAM for the single newly cycled component.
+    // The other N-1 components are already allocated and just sliding over.
+    if (components_[exitIndex]) {
+        components_[exitIndex]->allocateGraphicsMemory();
+    }
 
     // --- Use precomputed tuples ---
     const auto& T = forward ? forwardTween_ : backwardTween_;
+
     // Guard (paranoia) in case N changed without setPoints being called:
     if (T.size() != N) {
         // fallback to maps if ever mismatched
@@ -1277,7 +1283,10 @@ void ScrollingList::scroll(bool forward) {
             auto* nextScrollPoint = (*scrollPoints_)[nextIndex];
 
             resetTweens(component, nextTweenPoint, currentScrollPoint, nextScrollPoint, scrollPeriod_);
-            component->baseViewInfo.font = nextScrollPoint->font;
+
+            if (component->baseViewInfo.font != nextScrollPoint->font)
+                component->baseViewInfo.font = nextScrollPoint->font;
+
             component->triggerEvent("menuScroll");
         }
     }
@@ -1288,10 +1297,12 @@ void ScrollingList::scroll(bool forward) {
 
             const TweenNeighbor& t = T[index];
 
-            component->allocateGraphicsMemory(); // consider removing per-scroll alloc later
+            // VRAM allocation removed from here!
             resetTweens(component, t.tween, t.cur, t.next, scrollPeriod_);
+
             if (component->baseViewInfo.font != t.next->font)
                 component->baseViewInfo.font = t.next->font;
+
             component->triggerEvent("menuScroll");
         }
     }

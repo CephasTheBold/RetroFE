@@ -61,13 +61,13 @@ public:
     void enterGame();
     void trackChange();
     void exitGame();
-    std::string getPlaylistName() const;
+    const std::string& getPlaylistName() const;
     void favPlaylist();
     void nextPlaylist();
     void prevPlaylist();
     void selectPlaylist(const std::string& playlist);
-    void nextCyclePlaylist(std::vector<std::string> list);
-    void prevCyclePlaylist(std::vector<std::string> list);
+    void nextCyclePlaylist(const std::vector<std::string>& list);
+    void prevCyclePlaylist(const std::vector<std::string>& list);
     void pushMenu(ScrollingList *s, int index = -1);
     void updatePlaylistMenuPosition();
     bool isMenusFull() const;

@@ -93,6 +93,9 @@ private:
     std::shared_ptr<AnimationEvents> tweens_;
 	Animation* currentAnimation_ = nullptr;
 	Animation  dynamicAnimation_;
+	Animation* cachedIdleAnimation_ = nullptr;
+	int lastMenuIndexForCache_ = -2; // Use -2 so index 0 or -1 triggers an initial fetch
+	std::shared_ptr<AnimationEvents> lastTweensForCache_ = nullptr;
 	SDL_Texture *backgroundTexture_;
     static std::map<int, SDL_Texture*> sharedBackgroundTextures_;
     bool         pauseOnScroll_;
