@@ -410,21 +410,42 @@ if(MSVC)
     set(CMAKE_DEBUG_POSTFIX "d")
     add_definitions(-D_CRT_SECURE_NO_DEPRECATE)
     add_definitions(-D_CRT_NONSTDC_NO_DEPRECATE)
-    # Change /MT to /MD for dynamic runtime linking
+    
+    # Enable C++20 Strict Conformance so the __cplusplus macro reports correctly
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /Zc:__cplusplus /permissive-")
+
+    # Base flags: Multi-core build, dynamic runtime
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /MP /WX- /MD")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /MP /WX- /MD")
+
+    # Aggressive Release Optimizations
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /O2 /Oi /GL /Gw /Gy")
+    set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} /O2 /Oi /GL /Gw /Gy")
+    
+    # Linker flags to support dead-code stripping and Link-Time Code Generation
+    set(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE} /LTCG /OPT:REF /OPT:ICF")
+
     set_target_properties(retrofe PROPERTIES LINK_FLAGS "/SUBSYSTEM:WINDOWS")
 else()
     set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -g -O0 -Wall -ggdb")
     set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -O0 -Wall -ggdb")
-
-    if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64")
-        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O2 -march=x86-64-v2 -msse4.2 -mavx -Wall -Wextra -Wno-deprecated-declarations -funroll-loops")
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O2 -march=x86-64-v2 -msse4.2 -mavx -Wall -Wextra -Wno-reorder -Wno-deprecated-declarations -funroll-loops")
-    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
-        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O2 -mcpu=native -funroll-loops -fstrict-aliasing -ffast-math -Wall -Wextra -Wno-deprecated-declarations")
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O2 -mcpu=native -funroll-loops -fstrict-aliasing -ffast-math -Wall -Wextra -Wno-reorder -Wno-deprecated-declarations")
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT ipo_supported)
+    if(ipo_supported)
+        set_target_properties(retrofe PROPERTIES INTERPROCEDURAL_OPTIMIZATION TRUE)
+    else()
+        message(WARNING "IPO / LTO is not supported by this compiler.")
     endif()
+        if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64")
+        # -O3 is generally safe and preferable for media frontends over -O2
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3 -march=x86-64-v2 -msse4.2 -mavx -Wall -Wextra -Wno-deprecated-declarations -funroll-loops")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -march=x86-64-v2 -msse4.2 -mavx -Wall -Wextra -Wno-reorder -Wno-deprecated-declarations -funroll-loops")
+    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
+        # Removed -ffast-math to protect Tween interpolation logic
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3 -mcpu=native -funroll-loops -fstrict-aliasing -Wall -Wextra -Wno-deprecated-declarations")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -mcpu=native -funroll-loops -fstrict-aliasing -Wall -Wextra -Wno-reorder -Wno-deprecated-declarations")
+    endif()
+    
     message(STATUS "Using C Flags: ${CMAKE_C_FLAGS}")
     message(STATUS "Using CXX Flags: ${CMAKE_CXX_FLAGS}")
 endif()
