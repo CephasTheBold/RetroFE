@@ -20,6 +20,7 @@
 #include <unordered_map>
 #include <optional>
 #include <vector>
+#include <algorithm>
 
 class ViewInfo;
 
@@ -37,7 +38,11 @@ public:
 
     static TweenAlgorithm getTweenType(const std::string& name);
     static std::optional<TweenProperty> getTweenProperty(const std::string& name);
-    bool matchesPlaylist(const std::string& currentPlaylist) const;
+    
+    inline bool matchesPlaylist(const std::string& currentPlaylist) const {
+        if (playlistFilterTokens.empty() || currentPlaylist.empty()) return true;
+        return std::find(playlistFilterTokens.begin(), playlistFilterTokens.end(), currentPlaylist) != playlistFilterTokens.end();
+    }
 
     TweenProperty property;
     float  duration;

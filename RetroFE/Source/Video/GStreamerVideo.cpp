@@ -849,8 +849,9 @@ VideoSnapshot GStreamerVideo::getSnapshot() const {
     snap.actualState = (actual == GST_STATE_PLAYING) ? VideoState::Playing :
         (actual == GST_STATE_PAUSED) ? VideoState::Paused : VideoState::None;
 
-    snap.pipelineReady = lifecycle_.load(std::memory_order_acquire) == PipelineLifecycle::Ready;
-    snap.hasError = lifecycle_.load(std::memory_order_acquire) == PipelineLifecycle::Failed;
+    auto currentLife = lifecycle_.load(std::memory_order_acquire);
+    snap.pipelineReady = (currentLife == PipelineLifecycle::Ready);
+    snap.hasError = (currentLife == PipelineLifecycle::Failed);
     snap.hasFinishedLoops = loopsFinished_.load(std::memory_order_acquire);
     snap.hasVideoStream = hasVideoStream_.load(std::memory_order_acquire);
 

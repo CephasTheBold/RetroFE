@@ -139,8 +139,116 @@ void ScrollingList::setItems(std::vector<Item*>* items) {
             it->precomputeNameCandidates(types);   // builds once; selection-agnostic
         }
     }
+    precalculateMediaPaths();
 }
 
+void ScrollingList::precalculateMediaPaths() {
+    if (!items_ || items_->empty()) return;
+
+    mediaCache_.clear();
+    mediaCache_.resize(items_->size());
+
+    const std::string& selectedItemName = getSelectedItemName();
+
+    for (size_t i = 0; i < items_->size(); ++i) {
+        Item* item = (*items_)[i];
+        ResolvedMedia media;
+
+        const bool isSelectedItem = (selectedImage_ && item->name == selectedItemName);
+        const std::vector<std::string_view>& cachedNames = item->baseNameCandidates(imageTypeLC_);
+
+        for (size_t iter = 0; iter <= cachedNames.size(); ++iter) {
+            std::string name = (iter < cachedNames.size()) ? std::string(cachedNames[iter]) : "default";
+            std::string imagePath, videoPath;
+
+            if (layoutMode_) {
+                std::string subPath = commonMode_ ? "_common" : collectionName;
+                buildPaths(imagePath, videoPath, layoutCollectionsBase_, subPath, imageType_, videoType_);
+            }
+            else {
+                if (commonMode_) {
+                    buildPaths(imagePath, videoPath, commonCollectionsBase_, "", imageType_, videoType_);
+                }
+                else {
+                    config_.getMediaPropertyAbsolutePath(collectionName, imageType_, false, imagePath);
+                    config_.getMediaPropertyAbsolutePath(collectionName, videoType_, false, videoPath);
+                }
+            }
+
+            // Try resolving primary paths
+            if (media.videoPath.empty() && videoType_ != "null") {
+                VideoBuilder::resolveVideoPath(videoPath, name, media.videoPath);
+            }
+            if (media.idleImagePath.empty() && !imageType_.empty()) {
+                ImageBuilder::resolveImagePath(imagePath, name, media.idleImagePath);
+                if (isSelectedItem) {
+                    ImageBuilder::resolveImagePath(imagePath, name + "-selected", media.selectedImagePath);
+                }
+            }
+
+            // If we found both, stop searching
+            if (!media.videoPath.empty() && !media.idleImagePath.empty()) break;
+
+            // Try Item-specific paths
+            std::string itemImagePath, itemVideoPath;
+            if (layoutMode_) {
+                buildPaths(itemImagePath, itemVideoPath, layoutCollectionsBase_, item->collectionInfo->name, imageType_, videoType_);
+            }
+            else {
+                config_.getMediaPropertyAbsolutePath(item->collectionInfo->name, imageType_, false, itemImagePath);
+                config_.getMediaPropertyAbsolutePath(item->collectionInfo->name, videoType_, false, itemVideoPath);
+            }
+
+            if (media.videoPath.empty() && videoType_ != "null") {
+                VideoBuilder::resolveVideoPath(itemVideoPath, name, media.videoPath);
+            }
+            if (media.idleImagePath.empty() && !imageType_.empty()) {
+                ImageBuilder::resolveImagePath(itemImagePath, name, media.idleImagePath);
+                if (isSelectedItem) {
+                    ImageBuilder::resolveImagePath(itemImagePath, name + "-selected", media.selectedImagePath);
+                }
+            }
+
+            if (!media.videoPath.empty() || !media.idleImagePath.empty()) break;
+        }
+
+        // Fallback: System Artwork
+        if (media.videoPath.empty() && media.idleImagePath.empty()) {
+            std::string sysImgPath, sysVidPath;
+            if (layoutMode_) {
+                sysImgPath = Utils::combinePath(layoutCollectionsBase_, commonMode_ ? "_common" : item->name, "system_artwork");
+                sysVidPath = sysImgPath;
+            }
+            else {
+                if (commonMode_) {
+                    sysImgPath = Utils::combinePath(commonCollectionsBase_, "system_artwork");
+                    sysVidPath = sysImgPath;
+                }
+                else {
+                    config_.getMediaPropertyAbsolutePath(item->name, imageType_, true, sysImgPath);
+                    config_.getMediaPropertyAbsolutePath(item->name, videoType_, true, sysVidPath);
+                }
+            }
+
+            if (videoType_ != "null") VideoBuilder::resolveVideoPath(sysVidPath, videoType_, media.videoPath);
+            if (!imageType_.empty()) {
+                ImageBuilder::resolveImagePath(sysImgPath, imageType_, media.idleImagePath);
+                if (isSelectedItem) ImageBuilder::resolveImagePath(sysImgPath, imageType_ + "-selected", media.selectedImagePath);
+            }
+        }
+
+        // Fallback: ROM Path
+        if (media.videoPath.empty() && media.idleImagePath.empty()) {
+            if (videoType_ != "null") VideoBuilder::resolveVideoPath(item->filepath, videoType_, media.videoPath);
+            if (!imageType_.empty()) {
+                ImageBuilder::resolveImagePath(item->filepath, imageType_, media.idleImagePath);
+                if (isSelectedItem) ImageBuilder::resolveImagePath(item->filepath, imageType_ + "-selected", media.selectedImagePath);
+            }
+        }
+
+        mediaCache_[i] = media;
+    }
+}
 
 void ScrollingList::selectItemByName(std::string_view name)
 {
@@ -208,11 +316,9 @@ void ScrollingList::deallocateSpritePoints() {
     // Extract videos first, before deleting components
     for (Component* comp : components_.raw()) {
         if (comp) {
-            if (auto* videoComp = dynamic_cast<VideoComponent*>(comp)) {
-                auto video = videoComp->extractVideo();
-                if (video)
-                    pooledVideos.push_back(std::move(video));
-            }
+            auto video = comp->extractVideo();   // nullptr for Image/Text, valid for VideoComponent
+            if (video)
+                pooledVideos.push_back(std::move(video));
         }
     }
 
@@ -223,7 +329,7 @@ void ScrollingList::deallocateSpritePoints() {
 
     // Batch release videos
     if (!pooledVideos.empty()) {
-        VideoPool::releaseVideoBatch(std::move(pooledVideos), monitor, listId_);
+        VideoPool::releaseVideoBatch(pooledVideos, monitor, listId_);
     }
 }
 
@@ -239,7 +345,7 @@ void ScrollingList::allocateSpritePoints() {
         const size_t index = loopIncrement(itemIndex_, i, itemsSize);
         const Item* item = (*items_)[index];
 
-        allocateTexture(i, item);
+        allocateTexture(i, index);
         if (Component* c = components_[i]) {
             c->allocateGraphicsMemory();
             ViewInfo* view = (*scrollPoints_)[i];
@@ -270,11 +376,9 @@ void ScrollingList::reallocateSpritePoints() {
         Component* comp = components_[i];
         if (!comp) continue;
 
-        if (auto* videoComp = dynamic_cast<VideoComponent*>(comp)) {
-            auto video = videoComp->extractVideo();
-            if (video)
-                pooledVideos.push_back(std::move(video));
-        }
+        auto video = comp->extractVideo();   // nullptr for Image/Text, valid for VideoComponent
+        if (video)
+            pooledVideos.push_back(std::move(video));
     }
 
     // --- Step 2: Batch release to pool ---
@@ -282,7 +386,7 @@ void ScrollingList::reallocateSpritePoints() {
         // Because we called reset() above, releaseVideo will now detect 
         // the generation mismatch and physically destroy these instances 
         // instead of caching them.
-        VideoPool::releaseVideoBatch(std::move(pooledVideos), monitor, listId_);
+        VideoPool::releaseVideoBatch(pooledVideos, monitor, listId_);
     }
 
     // --- Step 4: Reallocate components and assign tweens ---
@@ -292,7 +396,7 @@ void ScrollingList::reallocateSpritePoints() {
 
         // allocateTexture will now call VideoPool::acquireVideo, which 
         // will find an empty pool and create brand-new instances.
-        allocateTexture(i, item);
+        allocateTexture(i, index);
 
         Component* c = components_[i];
         if (c) {
@@ -373,8 +477,7 @@ void ScrollingList::setPoints(std::vector<ViewInfo*>* scrollPoints,
     }
 
     if (listId_ != -1 && N > 0) {
-        // N visible cells, plus buffer (you can use 1 or reuse POOL_BUFFER_INSTANCES)
-        const size_t desiredTotal = N + 1;  // or N + POOL_BUFFER_INSTANCES
+        const size_t desiredTotal = N + VideoPool::POOL_BUFFER_INSTANCES;  // or N + POOL_BUFFER_INSTANCES
         VideoPool::reserveCapacity(baseViewInfo.Monitor, listId_, desiredTotal);
     }
 
@@ -1001,143 +1104,51 @@ void ScrollingList::resetTweens(Component* c, const std::shared_ptr<AnimationEve
     }
 }
 
-bool ScrollingList::allocateTexture(size_t index, const Item* item) {
-    if (index >= components_.size()) return false;
+bool ScrollingList::allocateTexture(size_t componentIndex, size_t fullListIndex) {
+    if (componentIndex >= components_.size() || fullListIndex >= mediaCache_.size()) return false;
 
-    Component* existingComponent = components_[index];
-    components_[index] = nullptr;
+    Component* existingComponent = components_[componentIndex];
+    components_[componentIndex] = nullptr;
 
+    const ResolvedMedia& media = mediaCache_[fullListIndex];
+    const Item* item = (*items_)[fullListIndex];
     Component* t = nullptr;
-
-    // 1. Fetch by const reference (ZERO dynamic allocation)
-    const std::string& selectedItemName = getSelectedItemName();
-    const bool isSelectedItem = (selectedImage_ && item->name == selectedItemName);
 
     ImageBuilder imageBuild;
     VideoBuilder videoBuild;
 
-    auto tryVideo = [&](const std::string& videoPath, const std::string& logicalName) -> Component* {
-        if (videoType_ == "null") return nullptr;
-        return videoBuild.createVideo(
-            videoPath, page, logicalName, baseViewInfo.Monitor, -1, false, listId_,
-            perspectiveCornersInitialized_ ? perspectiveCorners_ : nullptr,
-            existingComponent);
-        };
+    const std::string& selectedItemName = getSelectedItemName();
+    const bool isSelectedItem = (selectedImage_ && item->name == selectedItemName);
 
-    auto tryImageWithName = [&](const std::string& imagePath, const std::string& baseName) -> Component* {
-        if (imageType_.empty()) return nullptr;
-        std::string imageName = isSelectedItem ? baseName + "-selected" : baseName;
-        return imageBuild.CreateImage(
-            imagePath, page, imageName,
-            baseViewInfo.Monitor, baseViewInfo.Additive,
-            useTextureCaching_, existingComponent);
-        };
-
-    auto tryImageWithFallbackType = [&](const std::string& imagePath) -> Component* {
-        if (imageType_.empty()) return nullptr;
-        const std::string fallbackName = imageType_;
-        if (isSelectedItem) {
-            if (Component* c = imageBuild.CreateImage(
-                imagePath, page, fallbackName + "-selected",
-                baseViewInfo.Monitor, baseViewInfo.Additive,
-                useTextureCaching_, existingComponent))
-                return c;
-        }
-        return imageBuild.CreateImage(
-            imagePath, page, fallbackName,
-            baseViewInfo.Monitor, baseViewInfo.Additive,
-            useTextureCaching_, existingComponent);
-        };
-
-    // 2. Pass the cached lowercase string (ZERO dynamic allocation)
-    const std::vector<std::string_view>& cachedNames = item->baseNameCandidates(imageTypeLC_);
-
-    for (size_t iter = 0; iter <= cachedNames.size(); ++iter) {
-        std::string name = (iter < cachedNames.size()) ? std::string(cachedNames[iter]) : "default";
-
-        std::string imagePath;
-        std::string videoPath;
-
-        if (layoutMode_) {
-            // 3. Pass the pre-computed base path (Saves multiple string creations)
-            std::string subPath = commonMode_ ? "_common" : collectionName;
-            buildPaths(imagePath, videoPath, layoutCollectionsBase_, subPath, imageType_, videoType_);
-        }
-        else {
-            if (commonMode_) {
-                // Use the cached common path
-                buildPaths(imagePath, videoPath, commonCollectionsBase_, "", imageType_, videoType_);
-            }
-            else {
-                config_.getMediaPropertyAbsolutePath(collectionName, imageType_, false, imagePath);
-                config_.getMediaPropertyAbsolutePath(collectionName, videoType_, false, videoPath);
-            }
-        }
-
-        if (!t) t = tryVideo(videoPath, name);
-        if (!t) t = tryImageWithName(imagePath, name);
-        if (t) break;
-
-        {
-            std::string itemImagePath;
-            std::string itemVideoPath;
-            if (layoutMode_) {
-                // 3. Pass the pre-computed base path again
-                buildPaths(itemImagePath, itemVideoPath, layoutCollectionsBase_, item->collectionInfo->name, imageType_, videoType_);
-            }
-            else {
-                config_.getMediaPropertyAbsolutePath(item->collectionInfo->name, imageType_, false, itemImagePath);
-                config_.getMediaPropertyAbsolutePath(item->collectionInfo->name, videoType_, false, itemVideoPath);
-            }
-            if (!t) t = tryVideo(itemVideoPath, name);
-            if (!t) t = tryImageWithName(itemImagePath, name);
-        }
-
-        if (t) break;
+    // 1. Instantly load Video from exact resolved path
+    if (!media.videoPath.empty()) {
+        std::string logicalName = item->name; // Basic fallback name
+        t = videoBuild.createVideoFromResolved(media.videoPath, logicalName, page, baseViewInfo.Monitor, -1, false, listId_, perspectiveCornersInitialized_ ? perspectiveCorners_ : nullptr, existingComponent);
     }
 
+    // 2. Instantly load Image from exact resolved path
     if (!t) {
-        std::string imagePath;
-        std::string videoPath;
-
-        if (layoutMode_) {
-            // 4. Use the cached base path to skip redundant string operations
-            imagePath = Utils::combinePath(layoutCollectionsBase_, commonMode_ ? "_common" : item->name);
-            imagePath = Utils::combinePath(imagePath, "system_artwork");
-            videoPath = imagePath;
+        std::string imageToLoad = (isSelectedItem && !media.selectedImagePath.empty()) ? media.selectedImagePath : media.idleImagePath;
+        if (!imageToLoad.empty()) {
+            t = imageBuild.CreateImageFromResolved(imageToLoad, page, baseViewInfo.Monitor, baseViewInfo.Additive, useTextureCaching_, existingComponent);
         }
-        else {
-            if (commonMode_) {
-                // Use cached base path
-                imagePath = Utils::combinePath(commonCollectionsBase_, "system_artwork");
-                videoPath = imagePath;
-            }
-            else {
-                config_.getMediaPropertyAbsolutePath(item->name, imageType_, true, imagePath);
-                config_.getMediaPropertyAbsolutePath(item->name, videoType_, true, videoPath);
-            }
-        }
-        if (!t) t = tryVideo(videoPath, videoType_);
-        if (!t) t = tryImageWithFallbackType(imagePath);
     }
 
-    if (!t) {
-        const std::string romPath = item->filepath;
-        if (!t) t = tryVideo(romPath, videoType_);
-        if (!t) t = tryImageWithFallbackType(romPath);
-    }
-
+    // 3. Fallback to Text
     if (!t && textFallback_) {
-        if (existingComponent && existingComponent->recycleAsText(item->title))
+        if (existingComponent && existingComponent->recycleAsText(item->title)) {
             t = existingComponent;
-        else
+        }
+        else {
             t = new Text(item->title, page, fontInst_, baseViewInfo.Monitor);
+        }
     }
 
+    // Finalize
     if (t) {
         t->playlistName = playlistName;
-        t->setHighPriority(index == selectedOffsetIndex_);
-        components_[index] = t;
+        t->setHighPriority(componentIndex == selectedOffsetIndex_);
+        components_[componentIndex] = t;
     }
 
     if (existingComponent != nullptr && existingComponent != t) {
@@ -1246,18 +1257,19 @@ void ScrollingList::scroll(bool forward) {
     const size_t exitIndex = (N <= 1) ? 0 : (N - 1) * (1 - f);
 
     // --- pick item & advance ---
-    const Item* itemToScroll = nullptr;
+// --- pick item & advance ---
+    size_t fullListIndex = 0; // We need this variable for the cache array
     if (forward) {
-        itemToScroll = (*items_)[loopIncrement(itemIndex_, N, itemsSize)];
+        fullListIndex = loopIncrement(itemIndex_, N, itemsSize);
         itemIndex_ = loopIncrement(itemIndex_, 1, itemsSize);
     }
     else {
-        itemToScroll = (*items_)[loopDecrement(itemIndex_, 1, itemsSize)];
+        fullListIndex = loopDecrement(itemIndex_, 1, itemsSize);
         itemIndex_ = loopDecrement(itemIndex_, 1, itemsSize);
     }
 
-    // Rebuild only the exiting slot
-    allocateTexture(exitIndex, itemToScroll);
+    // Pass the indices instead of the pointer
+    allocateTexture(exitIndex, fullListIndex);
 
     // --- THE OPTIMIZATION ---
     // Only allocate VRAM for the single newly cycled component.

@@ -24,6 +24,7 @@
 #include <unordered_set>
 #include <shared_mutex>
 #include <memory>
+#include <type_traits>
 
 #ifdef WIN32
 #define NOMINMAX
@@ -80,15 +81,72 @@ public:
     static std::string removeNullCharacters(const std::string& input);
 	static size_t getMemoryUsage();
 
+    struct PathPart {
+        std::string_view view;
+        std::string storage;
 
+        template <typename T>
+        PathPart(const T& val) {
+            if constexpr (std::is_same_v<std::decay_t<T>, std::filesystem::path>) {
+                storage = val.string();
+                view = storage;
+            }
+            else {
+                view = std::string_view(val);
+            }
+        }
+    };
+
+    // 2. The highly optimized combinePath function
     template <typename... Paths>
-    static std::string combinePath(Paths&&... paths) {
-        std::filesystem::path combinedPath;
-        // Use fold expression with perfect forwarding and direct construction
-        ((combinedPath /= std::filesystem::path(std::forward<Paths>(paths))), ...);
-        return combinedPath.make_preferred().string();
-    }
+    static std::string combinePath(const Paths&... paths) {
+        if constexpr (sizeof...(paths) == 0) {
+            return std::string();
+        }
+        else {
+            // Unpack all arguments into our helper structs (does the conversion exactly once per path object)
+            PathPart parts[] = { PathPart(paths)... };
 
+            // Calculate exact memory needed (sum of lengths + room for slashes)
+            size_t totalLen = sizeof...(paths);
+            for (const auto& part : parts) {
+                totalLen += part.view.size();
+            }
+
+            std::string result;
+            result.reserve(totalLen); // EXACTLY ONE ALLOCATION
+
+            // Append parts cleanly
+            for (const auto& part : parts) {
+                std::string_view v = part.view;
+                if (v.empty()) continue;
+
+                if (!result.empty()) {
+                    char last = result.back();
+                    // Add separator if missing
+                    if (last != '/' && last != '\\') {
+#ifdef _WIN32
+                        result.push_back('\\');
+#else
+                        result.push_back('/');
+#endif
+                    }
+                    // Skip leading slashes on the new part to avoid double-slashes
+                    size_t start = 0;
+                    while (start < v.size() && (v[start] == '/' || v[start] == '\\')) {
+                        start++;
+                    }
+                    result.append(v.substr(start));
+                }
+                else {
+                    // First element, keep leading slashes (e.g., root Unix directories)
+                    result.append(v);
+                }
+            }
+
+            return result;
+        }
+    }
 
 #ifdef WIN32
     static const char pathSeparator = '\\';

@@ -25,4 +25,6 @@ class ImageBuilder
 {
 public:
     Image * CreateImage(const std::string& path, Page &p, const std::string& name, int monitor, bool additive, bool useTextureCaching = false, Component* recycleTarget = nullptr);
+    static bool resolveImagePath(const std::string& path, const std::string& name, std::string& outFile);
+    Image* CreateImageFromResolved(const std::string& exactFile, Page& p, int monitor, bool additive, bool useTextureCaching, Component* recycleTarget);
 };

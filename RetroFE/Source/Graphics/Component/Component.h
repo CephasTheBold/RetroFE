@@ -26,6 +26,8 @@
 #include <memory>
 #include <map>
 
+class IVideo;
+
 class Component {
 public:
 	explicit Component(Page& p);
@@ -80,6 +82,7 @@ public:
 
 	static void clearSharedTextures();
 	virtual bool recycleAsVideo(const std::string& /*path*/, const std::string& /*name*/) { return false; }
+	virtual std::shared_ptr<IVideo> extractVideo() { return nullptr; }
 	virtual bool recycleAsImage(const std::string& /*newFilePath*/, const std::string & /*newAltPath*/ = "") { return false; }
 	virtual bool recycleAsText(const std::string& /*newText*/) { return false; }
 

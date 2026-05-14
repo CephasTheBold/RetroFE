@@ -134,7 +134,7 @@ public:
     void triggerBuildInfoExit(int menuIndex = -1);
     void triggerJukeboxJumpEvent(int menuIndex = -1);
     void triggerEventOnAll(const std::string& event, int menuIndex);;
-    bool allocateTexture(size_t index, const Item* i);
+    bool allocateTexture(size_t componentIndex, size_t fullListIndex);
     void buildPaths(std::string& imagePath, std::string& videoPath, const std::string& base, const std::string& subPath, const std::string& mediaType, const std::string& videoType);
     void deallocateTexture(size_t index);
     void setItems(std::vector<Item*>* items);
@@ -207,6 +207,15 @@ private:
     void resetTweens(Component* c, const std::shared_ptr<AnimationEvents>& sets, ViewInfo* currentViewInfo, ViewInfo* nextViewInfo, float scrollTime) const;
     inline size_t loopIncrement(size_t offset, size_t index, size_t size) const;
     inline size_t loopDecrement(size_t offset, size_t index, size_t size) const;
+
+    struct ResolvedMedia {
+        std::string videoPath;
+        std::string idleImagePath;
+        std::string selectedImagePath;
+    };
+
+    std::vector<ResolvedMedia> mediaCache_;
+    void precalculateMediaPaths();
 
     bool layoutMode_;
     bool commonMode_;

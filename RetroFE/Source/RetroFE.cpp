@@ -3327,80 +3327,73 @@ RetroFE::RETROFE_STATE RetroFE::processUserInput(Page* page) {
 		return RETROFE_QUIT;
 	}
 	if (currentTime_ - keyLastTime_ > keyDelayTime_) {
-	// 4. Directional Scroll Mapping (Horizontal vs. Vertical)
-	if (page->isHorizontalScroll())
-	{
-		// Playlist scroll
-		if (!kioskLock_ && input_.keystate(UserInput::KeyCodeDown)) {
-			if (page->isGamesScrolling()) return RETROFE_HIGHLIGHT_REQUEST;
-			attract_.reset();
-			if (infoExitOnScroll) {
-				if (RETROFE_STATE s = handleInfoExitOr(RETROFE_SCROLL_PLAYLIST_FORWARD); s != RETROFE_IDLE) return s;
+		// 4. Directional Scroll Mapping (Horizontal vs. Vertical)
+		RETROFE_STATE requestedScroll = RETROFE_IDLE;
+		bool crossAxisScrolling = false;
+
+		if (page->isHorizontalScroll()) {
+			// Playlist scroll (Restricted by Kiosk Lock)
+			if (!kioskLock_ && input_.keystate(UserInput::KeyCodeDown)) {
+				crossAxisScrolling = page->isGamesScrolling();
+				requestedScroll = RETROFE_SCROLL_PLAYLIST_FORWARD;
 			}
-			return RETROFE_SCROLL_PLAYLIST_FORWARD;
+			else if (!kioskLock_ && input_.keystate(UserInput::KeyCodeUp)) {
+				crossAxisScrolling = page->isGamesScrolling();
+				requestedScroll = RETROFE_SCROLL_PLAYLIST_BACK;
+			}
+			// Game scroll (Allowed in Kiosk Mode)
+			else if (input_.keystate(UserInput::KeyCodeRight)) {
+				crossAxisScrolling = page->isPlaylistScrolling();
+				requestedScroll = RETROFE_SCROLL_FORWARD;
+			}
+			else if (input_.keystate(UserInput::KeyCodeLeft)) {
+				crossAxisScrolling = page->isPlaylistScrolling();
+				requestedScroll = RETROFE_SCROLL_BACK;
+			}
 		}
-		else if (!kioskLock_ && input_.keystate(UserInput::KeyCodeUp)) {
-			if (page->isGamesScrolling()) return RETROFE_HIGHLIGHT_REQUEST;
-			attract_.reset();
-			if (infoExitOnScroll) {
-				if (RETROFE_STATE s = handleInfoExitOr(RETROFE_SCROLL_PLAYLIST_BACK); s != RETROFE_IDLE) return s;
+		else {
+			// Vertical Mapping
+			// Playlist scroll (Restricted by Kiosk Lock)
+			if (!kioskLock_ && input_.keystate(UserInput::KeyCodeRight)) {
+				crossAxisScrolling = page->isGamesScrolling();
+				requestedScroll = RETROFE_SCROLL_PLAYLIST_FORWARD;
 			}
-			return RETROFE_SCROLL_PLAYLIST_BACK;
+			else if (!kioskLock_ && input_.keystate(UserInput::KeyCodeLeft)) {
+				crossAxisScrolling = page->isGamesScrolling();
+				requestedScroll = RETROFE_SCROLL_PLAYLIST_BACK;
+			}
+			// Game scroll (Allowed in Kiosk Mode)
+			else if (input_.keystate(UserInput::KeyCodeDown)) {
+				crossAxisScrolling = page->isPlaylistScrolling();
+				requestedScroll = RETROFE_SCROLL_FORWARD;
+			}
+			else if (input_.keystate(UserInput::KeyCodeUp)) {
+				crossAxisScrolling = page->isPlaylistScrolling();
+				requestedScroll = RETROFE_SCROLL_BACK;
+			}
 		}
-		// Game scroll
-		if (input_.keystate(UserInput::KeyCodeRight)) {
-			if (page->isPlaylistScrolling()) return RETROFE_HIGHLIGHT_REQUEST;
-			attract_.reset();
-			if (infoExitOnScroll) {
-				if (RETROFE_STATE s = handleInfoExitOr(RETROFE_SCROLL_FORWARD); s != RETROFE_IDLE) return s;
+
+		// If a valid scroll input was detected
+		if (requestedScroll != RETROFE_IDLE) {
+
+			// If the user tries to scroll X while Y is still moving
+			if (crossAxisScrolling) {
+				return RETROFE_HIGHLIGHT_REQUEST;
 			}
-			return RETROFE_SCROLL_FORWARD;
-		}
-		else if (input_.keystate(UserInput::KeyCodeLeft)) {
-			if (page->isPlaylistScrolling()) return RETROFE_HIGHLIGHT_REQUEST;
+
 			attract_.reset();
+
+			// Handle info menu intercepts
 			if (infoExitOnScroll) {
-				if (RETROFE_STATE s = handleInfoExitOr(RETROFE_SCROLL_BACK); s != RETROFE_IDLE) return s;
+				if (RETROFE_STATE s = handleInfoExitOr(requestedScroll); s != RETROFE_IDLE) {
+					return s;
+				}
 			}
-			return RETROFE_SCROLL_BACK;
-		}
-	}
-	else {
-		// Vertical Mapping
-		if (!kioskLock_ && input_.keystate(UserInput::KeyCodeRight)) {
-			if (page->isGamesScrolling()) return RETROFE_HIGHLIGHT_REQUEST;
-			attract_.reset();
-			if (infoExitOnScroll) {
-				if (RETROFE_STATE s = handleInfoExitOr(RETROFE_SCROLL_PLAYLIST_FORWARD); s != RETROFE_IDLE) return s;
-			}
-			return RETROFE_SCROLL_PLAYLIST_FORWARD;
-		}
-		else if (!kioskLock_ && input_.keystate(UserInput::KeyCodeLeft)) {
-			if (page->isGamesScrolling()) return RETROFE_HIGHLIGHT_REQUEST;
-			attract_.reset();
-			if (infoExitOnScroll) {
-				if (RETROFE_STATE s = handleInfoExitOr(RETROFE_SCROLL_PLAYLIST_BACK); s != RETROFE_IDLE) return s;
-			}
-			return RETROFE_SCROLL_PLAYLIST_BACK;
-		}
-		if (input_.keystate(UserInput::KeyCodeDown)) {
-			if (page->isPlaylistScrolling()) return RETROFE_HIGHLIGHT_REQUEST;
-			attract_.reset();
-			if (infoExitOnScroll) {
-				if (RETROFE_STATE s = handleInfoExitOr(RETROFE_SCROLL_FORWARD); s != RETROFE_IDLE) return s;
-			}
-			return RETROFE_SCROLL_FORWARD;
-		}
-		else if (input_.keystate(UserInput::KeyCodeUp)) {
-			if (page->isPlaylistScrolling()) return RETROFE_HIGHLIGHT_REQUEST;
-			attract_.reset();
-			if (infoExitOnScroll) {
-				if (RETROFE_STATE s = handleInfoExitOr(RETROFE_SCROLL_BACK); s != RETROFE_IDLE) return s;
-			}
-			return RETROFE_SCROLL_BACK;
+
+			return requestedScroll;
 		}
 	}
-	}
+
 	// 5. Instant Feedback Inputs (Music Volume)
 	if (input_.keystate(UserInput::KeyCodeMusicVolumeUp)) {
 		keyLastTime_ = currentTime_;

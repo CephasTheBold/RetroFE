@@ -70,3 +70,17 @@ Image* ImageBuilder::CreateImage(const std::string& path, Page& p,
     }
     return image;
 }
+
+bool ImageBuilder::resolveImagePath(const std::string& path, const std::string& name, std::string& outFile) {
+    const std::string prefix = makePrefix(path, name);
+    return Utils::findMatchingFile(std::string_view(prefix), std::begin(kImgExts), std::end(kImgExts), outFile);
+}
+
+Image* ImageBuilder::CreateImageFromResolved(const std::string& exactFile, Page& p, int monitor,
+    bool additive, bool useTextureCaching, Component* recycleTarget) {
+    if (recycleTarget && recycleTarget->recycleAsImage(exactFile)) {
+        return static_cast<Image*>(recycleTarget);
+    }
+    // Note: your existing CreateImage passes "" for the name parameter to the Image constructor
+    return new Image(exactFile, "", p, monitor, additive, useTextureCaching);
+}

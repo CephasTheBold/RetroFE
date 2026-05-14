@@ -29,13 +29,15 @@ class IVideo;
 // listId == -1 => non-pooled ("one-shot") videos.
 class VideoPool {
 public:
+    static constexpr size_t POOL_BUFFER_INSTANCES = 2;
+
     // C++20: Switched to shared_ptr to support atomic callback safety 
     // and enable_shared_from_this in the GStreamer implementation.
     using VideoPtr = std::shared_ptr<IVideo>;
 
     static VideoPtr acquireVideo(int monitor, int listId, bool softOverlay);
     static void releaseVideo(VideoPtr vid, int monitor, int listId);
-    static void releaseVideoBatch(std::vector<VideoPtr> videos, int monitor, int listId);
+    static void releaseVideoBatch(std::vector<VideoPtr>& videos, int monitor, int listId);
 
     // Marks a pool for cleanup. If there are no active instances, the pool is erased immediately.
     static void cleanup(int monitor, int listId);

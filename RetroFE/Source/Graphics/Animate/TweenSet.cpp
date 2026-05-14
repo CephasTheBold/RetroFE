@@ -15,7 +15,9 @@
  */
 #include "TweenSet.h"
 
-TweenSet::TweenSet() = default;
+TweenSet::TweenSet() {
+    set_.reserve(23); // Pre-allocates enough contiguous space for all scroll properties
+}
 
 void TweenSet::push(const Tween& tween) {
     set_.push_back(tween); // Copies/moves the tween into contiguous memory

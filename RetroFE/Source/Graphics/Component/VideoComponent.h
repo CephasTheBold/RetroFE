@@ -18,6 +18,7 @@
 #include "Component.h"
 #include <string>
 #include <memory>
+#include "../../Video/IVideo.h"
 
 class IVideo;
 class Page;
@@ -70,6 +71,8 @@ private:
     std::string videoFile_;
     std::shared_ptr<IVideo> videoInst_;
     Page* currentPage_;
+
+    VideoSnapshot currentSnapshot_;
 
     int monitor_;
     int listId_;

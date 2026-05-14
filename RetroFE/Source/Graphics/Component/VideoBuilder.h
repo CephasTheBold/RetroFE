@@ -23,13 +23,15 @@
 class Page;
 class VideoComponent;
 
-//todo: this is more of a factory than a builder
 class VideoBuilder
 {
 public:
-    // Update the signature
     static VideoComponent* createVideo(const std::string& path, Page& page, const std::string& name,
         int monitor, int numLoops = -1, bool softOverlay = false,
         int listId = -1, const int* perspectiveCorners = nullptr,
         Component* recycleTarget = nullptr);
+    static bool resolveVideoPath(const std::string& path, const std::string& name, std::string& outFile);
+    VideoComponent* createVideoFromResolved(const std::string& exactFile, const std::string& name, Page& page,
+        int monitor, int numLoops, bool softOverlay, int listId,
+        const int* perspectiveCorners, Component* recycleTarget);
 };

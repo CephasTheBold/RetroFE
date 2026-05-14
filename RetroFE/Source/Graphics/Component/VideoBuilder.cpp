@@ -67,3 +67,17 @@ VideoComponent* VideoBuilder::createVideo(const std::string& path, Page& page, c
     }
     return nullptr;
 }
+
+bool VideoBuilder::resolveVideoPath(const std::string& path, const std::string& name, std::string& outFile) {
+    const std::string prefix = makePrefix(path, name);
+    return Utils::findMatchingFile(std::string_view(prefix), std::begin(kVidExts), std::end(kVidExts), outFile);
+}
+
+VideoComponent* VideoBuilder::createVideoFromResolved(const std::string& exactFile, const std::string& name, Page& page,
+    int monitor, int numLoops, bool softOverlay, int listId,
+    const int* perspectiveCorners, Component* recycleTarget) {
+    if (recycleTarget && recycleTarget->recycleAsVideo(exactFile, name)) {
+        return static_cast<VideoComponent*>(recycleTarget);
+    }
+    return new VideoComponent(page, exactFile, monitor, numLoops, softOverlay, listId, perspectiveCorners);
+}

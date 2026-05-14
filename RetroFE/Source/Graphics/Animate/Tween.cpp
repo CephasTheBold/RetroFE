@@ -104,15 +104,6 @@ Tween::Tween(TweenProperty property, TweenAlgorithm type, float start, float end
     }
 }
 
-bool Tween::matchesPlaylist(const std::string& currentPlaylist) const {
-    if (playlistFilterTokens.empty() || currentPlaylist.empty()) {
-        return true;
-    }
-
-    return std::find(playlistFilterTokens.begin(), playlistFilterTokens.end(), currentPlaylist) != playlistFilterTokens.end();
-
-}
-
 std::optional<TweenProperty> Tween::getTweenProperty(const std::string& name) {
     std::string key = name;
     std::transform(key.begin(), key.end(), key.begin(), ::tolower);

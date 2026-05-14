@@ -25,9 +25,6 @@
 VideoPool::PoolMap VideoPool::pools_{};
 bool VideoPool::shuttingDown_ = false;
 
-namespace {
-    constexpr size_t POOL_BUFFER_INSTANCES = 2;
-}
 
 VideoPool::VideoPtr VideoPool::createNewVideo(int monitor, bool softOverlay) {
     auto vid = std::make_shared<GStreamerVideo>(monitor);
@@ -38,17 +35,17 @@ VideoPool::VideoPtr VideoPool::createNewVideo(int monitor, bool softOverlay) {
 }
 
 void VideoPool::pumpDrainingToReady(PoolInfo& pool) {
-    auto it = pool.draining.begin();
-    while (it != pool.draining.end()) {
-        if (auto* gsv = dynamic_cast<GStreamerVideo*>(it->get())) {
-            // Passive observation of readiness
+    for (size_t i = 0; i < pool.draining.size(); ) {
+        if (auto* gsv = static_cast<GStreamerVideo*>(pool.draining[i].get())) {
             if (gsv->isReadyForReuse()) {
-                pool.ready.push_back(std::move(*it));
-                it = pool.draining.erase(it);
-                continue;
+                pool.ready.push_back(std::move(pool.draining[i]));
+                // Fast O(1) removal: swap with the back and pop
+                pool.draining[i] = std::move(pool.draining.back());
+                pool.draining.pop_back();
+                continue; // Do NOT increment 'i', re-evaluate the swapped element
             }
         }
-        ++it;
+        ++i;
     }
 }
 
@@ -123,7 +120,7 @@ void VideoPool::releaseVideo(VideoPtr vid, int monitor, int listId) {
     }
 
     // Only unload videos that are actually being returned to the pool
-    if (auto* gsv = dynamic_cast<GStreamerVideo*>(vid.get())) {
+    if (auto* gsv = static_cast<GStreamerVideo*>(vid.get())) {
         gsv->unload();
     }
 
@@ -156,11 +153,12 @@ void VideoPool::erasePoolIfIdle(int monitor, int listId) {
     if (mit->second.empty()) pools_.erase(mit);
 }
 
-void VideoPool::releaseVideoBatch(std::vector<VideoPtr> videos, int monitor, int listId) {
+void VideoPool::releaseVideoBatch(std::vector<VideoPtr>& videos, int monitor, int listId) {
     if (shuttingDown_ || listId == -1) return;
     for (auto& vid : videos) {
         releaseVideo(std::move(vid), monitor, listId);
     }
+    videos.clear(); // Clear the caller's vector since we moved the contents
 }
 
 void VideoPool::cleanup(int monitor, int listId) {

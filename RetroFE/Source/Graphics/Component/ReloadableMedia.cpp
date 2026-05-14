@@ -498,7 +498,7 @@ Component* ReloadableMedia::findComponent(
         // 2. THE HOT-SWAP (The Heap Churn Fix)
         // If we found a new Image file, and our current component is an Image, DO NOT create a new one.
         if (!isVideo && loadedComponent_ != nullptr) {
-            if (auto* imgComp = dynamic_cast<Image*>(loadedComponent_)) {
+            if (auto* imgComp = static_cast<Image*>(loadedComponent_)) {
                 // Recycle the existing C++ object to load the new file asynchronously
                 imgComp->recycleAsImage(foundFilePath, "");
 

@@ -1388,7 +1388,7 @@ bool Page::playlistExists(const std::string& playlist) {
 
 
 void Page::update(float dt) {
-	std::string playlistName = getPlaylistName();
+	const std::string& playlistName = getPlaylistName();
 	bool playlistNameChanged = false;
 	if (playlistName != lastPlaylistName_) {
 		lastPlaylistName_ = playlistName;
@@ -1915,15 +1915,14 @@ int Page::getCurrentLayout() const {
 
 
 int Page::getLayoutWidthByMonitor(int monitor) {
-	if (monitor < SDL::getScreenCount())
+	if (monitor >= 0 && monitor < layoutWidthByMonitor_.size())
 		return layoutWidthByMonitor_[monitor];
-	else
-		return 0;
+	return 0;
 }
 
 
 int Page::getLayoutHeightByMonitor(int monitor) {
-	if (monitor < SDL::getScreenCount())
+	if (monitor >= 0 && monitor < layoutHeightByMonitor_.size())
 		return layoutHeightByMonitor_[monitor];
 	else
 		return 0;

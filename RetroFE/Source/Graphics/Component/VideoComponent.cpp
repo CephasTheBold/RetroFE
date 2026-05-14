@@ -75,13 +75,21 @@ bool VideoComponent::recycleAsVideo(const std::string& path, const std::string& 
     nextRetryTime_ = 0;
     lastVolume_ = -1.0f;
 
+    // --- THE FIX ---
     if (videoInst_) {
-        videoInst_->unload();
+        // Do not manually unload. Route it through the pool's safety queues.
+        if (listId_ != -1) {
+            auto video = std::move(videoInst_);
+            VideoPool::releaseVideo(std::move(video), monitor_, listId_);
+        }
+        else {
+            // Standalone videos bypass the pool, so we safely destroy the pipeline
+            videoInst_.reset();
+        }
     }
-    else {
-        // No existing instance — acquire from pool normally
-        allocateGraphicsMemory();
-    }
+
+    // Acquire a fresh, fully-drained pipeline
+    allocateGraphicsMemory();
 
     return true;
 }
@@ -208,23 +216,6 @@ bool VideoComponent::update(float dt) {
     // 4. Retry / Initiate playback orchestrator
     if (!instanceReady_ && !videoInst_->hasError()) {
 
-        // --- EXPLICIT VIP PRIORITIZATION ---
-        // If the layout engine hasn't flagged this as the selected/main item,
-        // voluntarily yield the CPU for 32ms (2 frames). This guarantees the 
-        // high-priority asset gets the first available decoder slots.
-        if (retryAttempts_ == 0) {
-            if (isHighPriority_) {
-                LOG_DEBUG("VideoComponent", "VIP Priority granted for: " + videoFile_);
-            }
-            else {
-                LOG_DEBUG("VideoComponent", "Standard priority yield (32ms) for: " + videoFile_);
-                pendingVideoRetry_ = true;
-                retryAttempts_ = 1; // Mark that we did our initial yield
-                nextRetryTime_ = SDL_GetTicks64() + 32;
-                return Component::update(dt);
-            }
-        }
-
         instanceReady_ = videoInst_->open(videoFile_);
 
         if (!instanceReady_) {
@@ -244,6 +235,7 @@ bool VideoComponent::update(float dt) {
 
     // --- ATOMIC SNAPSHOT PULL ---
     const auto snap = videoInst_->getSnapshot();
+	currentSnapshot_ = snap; // Store it for draw() and future logic
 
     // Wait for the pipeline to spin up
     if (!instanceReady_ || !snap.pipelineReady || snap.hasError) {
@@ -313,11 +305,9 @@ void VideoComponent::draw() {
         return;
     }
 
-    const auto snap = videoInst_->getSnapshot();
-
     // Hardware Safety: Only update the frame if the hardware has actually 
     // reached at least the PAUSED state.
-    if (snap.pipelineReady && snap.actualState != VideoState::None) {
+    if (currentSnapshot_.pipelineReady && currentSnapshot_.actualState != VideoState::None) {
         videoInst_->updateFrame();
     }
 
