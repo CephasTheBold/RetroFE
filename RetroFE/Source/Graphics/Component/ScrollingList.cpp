@@ -343,7 +343,6 @@ void ScrollingList::allocateSpritePoints() {
 
     for (size_t i = 0; i < scrollPointsSize; ++i) {
         const size_t index = loopIncrement(itemIndex_, i, itemsSize);
-        const Item* item = (*items_)[index];
 
         allocateTexture(i, index);
         if (Component* c = components_[i]) {
@@ -392,7 +391,6 @@ void ScrollingList::reallocateSpritePoints() {
     // --- Step 4: Reallocate components and assign tweens ---
     for (size_t i = 0; i < scrollPointsSize; ++i) {
         size_t index = loopIncrement(itemIndex_, i, itemsSize);
-        Item const* item = (*items_)[index];
 
         // allocateTexture will now call VideoPool::acquireVideo, which 
         // will find an empty pool and create brand-new instances.

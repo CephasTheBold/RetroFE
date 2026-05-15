@@ -64,7 +64,7 @@ public:
     bool hasVideoStream();
 
     // Pooling / Recycling
-    bool recycleAsVideo(const std::string& path, const std::string& name);
+    bool recycleAsVideo(const std::string& path, const std::string& /*name*/);
     std::shared_ptr<IVideo> extractVideo();
 
 private:
