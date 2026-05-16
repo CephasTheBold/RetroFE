@@ -683,6 +683,16 @@ bool RetroFE::deInitialize() {
 	return retVal;
 }
 
+void RetroFE::waitForAsyncAssets() {
+	// 1. Halt the main thread until all background image decodes are finished
+	ThreadPool::getInstance().wait();
+
+	// 2. THE DELTA TIME CURE
+	// Reset the engine's internal stopwatch to "now" so the animation engine 
+	// doesn't fast-forward to compensate for the time spent waiting for images.
+	lastFrameTimePointMs_ = SDL_GetPerformanceCounter() * 1000.0 / freq_;
+}
+
 // Run RetroFE
 bool RetroFE::run() {
 #ifdef WIN32	
@@ -1551,12 +1561,10 @@ bool RetroFE::run() {
 			case RETROFE_PLAYLIST_LOAD_ART:
 			if (currentPage_ && currentPage_->isIdle())
 			{
-
-
-
-
 				currentPage_->reallocateMenuSpritePoints(); // update playlist menu
+				waitForAsyncAssets();
 				currentPage_->playlistEnter();
+				currentPage_->update(0.0f); // Force 0.0s frame
 				setState(RETROFE_PLAYLIST_ENTER);
 			}
 			break;
@@ -1603,8 +1611,9 @@ bool RetroFE::run() {
 			{
 				currentPage_->onNewItemSelected();
 				currentPage_->reallocateMenuSpritePoints(false); // skip updating playlist menu
+				waitForAsyncAssets();
 				currentPage_->menuJumpEnter();
-				setState(RETROFE_MENUJUMP_ENTER);
+				currentPage_->update(0.0f);				setState(RETROFE_MENUJUMP_ENTER);
 			}
 			break;
 
@@ -1940,7 +1949,7 @@ bool RetroFE::run() {
 				}
 
 				currentPage_->onNewItemSelected();
-				currentPage_->reallocateMenuSpritePoints(); // update playlist menu
+				currentPage_->allocateGraphicsMemory(); // update playlist menu
 
 				if (currentPage_->getCollectionSize() == 0)
 				{
@@ -1954,15 +1963,21 @@ bool RetroFE::run() {
 
 
 			// Start onMenuEnter animation
-			case RETROFE_NEXT_PAGE_MENU_LOAD_ART:
-			if (currentPage_ && currentPage_->getMenuDepth() != 1)
-			{
+            case RETROFE_NEXT_PAGE_MENU_LOAD_ART:
+
+			// --- THE LOADING GATE ---
+			waitForAsyncAssets();
+
+			if (currentPage_ && currentPage_->getMenuDepth() != 1) {
 				currentPage_->enterMenu();
 			}
-			else
-			{
+			else {
 				currentPage_->start();
 			}
+
+			// Force the 0.0s frame!
+			if (currentPage_) currentPage_->update(0.0f);
+
 			if (currentPage_ && currentPage_->getSelectedItem())
 				l.LEDBlinky(9, currentPage_->getSelectedItem()->collectionInfo->name, currentPage_->getSelectedItem());
 			setState(RETROFE_NEXT_PAGE_MENU_ENTER);
@@ -2097,6 +2112,9 @@ bool RetroFE::run() {
 
 				setState(RETROFE_COLLECTION_DOWN_MENU_ENTER);
 				currentPage_->onNewItemSelected();
+				currentPage_->reallocateMenuSpritePoints();
+				waitForAsyncAssets();
+				currentPage_->update(0.0f);
 
 				// Check playlist change in attract mode
 				if (attractMode_)
@@ -2323,6 +2341,9 @@ bool RetroFE::run() {
 				}
 
 				currentPage_->onNewItemSelected();
+				currentPage_->reallocateMenuSpritePoints();
+				waitForAsyncAssets();
+				currentPage_->update(0.0f);
 				setState(RETROFE_COLLECTION_UP_MENU_ENTER);
 			}
 			break;
@@ -2403,6 +2424,7 @@ bool RetroFE::run() {
 				currentPage_->setSelectedItem();
 				currentPage_->onNewItemSelected();
 				currentPage_->enterGame();  // Start onGameEnter animation
+				currentPage_->update(0.0f);
 				currentPage_->playSelect(); // Play launch sound
 				setState(RETROFE_ATTRACT_LAUNCH_REQUEST);
 			}
@@ -2432,9 +2454,10 @@ bool RetroFE::run() {
 				else
 				{
 					launchExit(false); // <-- not user-initiated
+					waitForAsyncAssets();
 					l.LEDBlinky(4);
 					currentPage_->exitGame();
-
+					currentPage_->update(0.0f);
 					setState(RETROFE_LAUNCH_EXIT);
 				}
 			}
@@ -2449,6 +2472,7 @@ bool RetroFE::run() {
 			else
 			{
 				currentPage_->enterGame();  // Start onGameEnter animation
+				currentPage_->update(0.0f);
 				currentPage_->playSelect(); // Play launch sound
 				setState(RETROFE_LAUNCH_REQUEST);
 			}
@@ -2525,10 +2549,10 @@ bool RetroFE::run() {
 
 					// Do all SDL / graphics / menu re-init first
 					launchExit(true);
-
+					waitForAsyncAssets();
 					// NOW fire onGameExit so the animation lives on the final, post-launch menu state
 					currentPage_->exitGame();
-
+					currentPage_->update(0.0f);
 					setState(RETROFE_LAUNCH_EXIT);
 				}
 			}
@@ -2601,7 +2625,7 @@ bool RetroFE::run() {
 
 					currentPage_->allocateGraphicsMemory();
 					currentPage_->setLocked(kioskLock_);
-					currentPage_->resume();  //  This was missing
+					currentPage_->resume();  // Wakes up the dormant page
 				}
 				else {
 					// Same layout case - just pop collection
@@ -2657,7 +2681,7 @@ bool RetroFE::run() {
 
 				// Update display
 				currentPage_->onNewItemSelected();
-				currentPage_->reallocateMenuSpritePoints(); // update playlist menu
+				currentPage_->reallocateMenuSpritePoints(); // Forces UI nodes to rebuild
 
 				setState(RETROFE_BACK_MENU_LOAD_ART);
 			}
@@ -2665,10 +2689,11 @@ bool RetroFE::run() {
 
 			// Start onMenuEnter animation
 			case RETROFE_BACK_MENU_LOAD_ART:
+			waitForAsyncAssets();
 			currentPage_->enterMenu();
+			currentPage_->update(0.0f);
 			setState(RETROFE_BACK_MENU_ENTER);
 			break;
-
 			// Wait for onMenuEnter animation to finish
 			case RETROFE_BACK_MENU_ENTER:
 			if (currentPage_ && currentPage_->isIdle())
@@ -2726,8 +2751,9 @@ bool RetroFE::run() {
 				currentPage_->pushCollection(getMenuCollection("menu"));
 
 				currentPage_->onNewItemSelected();
-				currentPage_->reallocateMenuSpritePoints(); // update playlist menu
-
+				currentPage_->allocateGraphicsMemory();
+				waitForAsyncAssets();
+				currentPage_->update(0.0f);
 				setState(RETROFE_MENUMODE_START_LOAD_ART);
 			}
 			break;
@@ -3532,34 +3558,67 @@ RetroFE::RETROFE_STATE RetroFE::processUserInput(Page* page) {
 		}
 	}
 
-	// 7. Letter & Meta Jumps
-	if (page->isIdle() && currentTime_ - keyLastTime_ > keyLetterSkipDelayTime_) {
-		if (input_.keystate(UserInput::KeyCodeLetterUp)) {
-			attract_.reset();
-			if (currentPage_->getPlaylistName() != "lastplayed") {
-				if (Item::validSortType(page->getPlaylistName())) page->metaScroll(Page::ScrollDirectionBack, page->getPlaylistName());
-				else {
-					bool cfwLetterSub;
-					config_.getProperty(OPTION_CFWLETTERSUB, cfwLetterSub);
-					if (cfwLetterSub && page->hasSubs()) page->cfwLetterSubScroll(Page::ScrollDirectionBack);
-					else page->letterScroll(Page::ScrollDirectionBack);
+	if (page->isIdle()) {
+		static bool wasLetterSkipping = false;
+		static float letterHoldStartTime = 0.0f;
+
+		bool isLetterUp = input_.keystate(UserInput::KeyCodeLetterUp);
+		bool isLetterDown = input_.keystate(UserInput::KeyCodeLetterDown);
+		bool isLetterSkipping = isLetterUp || isLetterDown;
+
+		bool shouldExecuteSkip = false;
+
+		if (isLetterSkipping) {
+			if (!wasLetterSkipping) {
+				// 1. Fresh tap: Trigger instantly (respecting a tiny 50ms global debounce)
+				if (currentTime_ - keyLastTime_ > 0.05f) {
+					shouldExecuteSkip = true;
+					letterHoldStartTime = currentTime_;
 				}
-				if (RETROFE_STATE s = handleInfoExitOr(RETROFE_MENUJUMP_REQUEST); s != RETROFE_IDLE) return s;
-				state = RETROFE_MENUJUMP_REQUEST;
+			}
+			else {
+				// 2. Held down: Wait for a 400ms initial delay before repeating
+				if (currentTime_ - letterHoldStartTime > 0.4f) {
+					// 3. Resume skipping at the designated rapid repeat rate
+					if (currentTime_ - keyLastTime_ > keyLetterSkipDelayTime_) {
+						shouldExecuteSkip = true;
+					}
+				}
 			}
 		}
-		else if (input_.keystate(UserInput::KeyCodeLetterDown)) {
-			attract_.reset();
-			if (currentPage_->getPlaylistName() != "lastplayed") {
-				if (Item::validSortType(page->getPlaylistName())) page->metaScroll(Page::ScrollDirectionForward, page->getPlaylistName());
-				else {
-					bool cfwLetterSub;
-					config_.getProperty(OPTION_CFWLETTERSUB, cfwLetterSub);
-					if (cfwLetterSub && page->hasSubs()) page->cfwLetterSubScroll(Page::ScrollDirectionForward);
-					else page->letterScroll(Page::ScrollDirectionForward);
+
+		// Track the hardware state for the next frame
+		wasLetterSkipping = isLetterSkipping;
+
+		// If the debounce logic gave us the green light, execute the jump
+		if (shouldExecuteSkip) {
+			if (isLetterUp) {
+				attract_.reset();
+				if (currentPage_->getPlaylistName() != "lastplayed") {
+					if (Item::validSortType(page->getPlaylistName())) page->metaScroll(Page::ScrollDirectionBack, page->getPlaylistName());
+					else {
+						bool cfwLetterSub;
+						config_.getProperty(OPTION_CFWLETTERSUB, cfwLetterSub);
+						if (cfwLetterSub && page->hasSubs()) page->cfwLetterSubScroll(Page::ScrollDirectionBack);
+						else page->letterScroll(Page::ScrollDirectionBack);
+					}
+					if (RETROFE_STATE s = handleInfoExitOr(RETROFE_MENUJUMP_REQUEST); s != RETROFE_IDLE) return s;
+					state = RETROFE_MENUJUMP_REQUEST;
 				}
-				if (RETROFE_STATE s = handleInfoExitOr(RETROFE_MENUJUMP_REQUEST); s != RETROFE_IDLE) return s;
-				state = RETROFE_MENUJUMP_REQUEST;
+			}
+			else if (isLetterDown) {
+				attract_.reset();
+				if (currentPage_->getPlaylistName() != "lastplayed") {
+					if (Item::validSortType(page->getPlaylistName())) page->metaScroll(Page::ScrollDirectionForward, page->getPlaylistName());
+					else {
+						bool cfwLetterSub;
+						config_.getProperty(OPTION_CFWLETTERSUB, cfwLetterSub);
+						if (cfwLetterSub && page->hasSubs()) page->cfwLetterSubScroll(Page::ScrollDirectionForward);
+						else page->letterScroll(Page::ScrollDirectionForward);
+					}
+					if (RETROFE_STATE s = handleInfoExitOr(RETROFE_MENUJUMP_REQUEST); s != RETROFE_IDLE) return s;
+					state = RETROFE_MENUJUMP_REQUEST;
+				}
 			}
 		}
 	}

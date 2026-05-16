@@ -59,6 +59,7 @@ public:
     explicit RetroFE( Configuration &c );
     virtual ~RetroFE( );
     bool     deInitialize( );
+    void waitForAsyncAssets();
     bool     run( );
     void     freeGraphicsMemory( );
     void     allocateGraphicsMemory( );
