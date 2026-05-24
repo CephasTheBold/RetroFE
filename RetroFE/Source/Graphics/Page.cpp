@@ -2031,22 +2031,51 @@ bool Page::isMenuFastScrolling() const {
 	return false;
 }
 
+ScrollingList* Page::getMasterMenuForScroll(bool playlist) const {
+	if (playlist) {
+		return playlistMenu_;
+	}
 
-void Page::scroll(bool forward, bool playlist) {
-	for (auto& menu : activeMenu_) {
-		if (menu && ((playlist && menu->isPlaylist()) || (!playlist && !menu->isPlaylist()))) {
-			menu->scroll(forward);
+	for (ScrollingList* menu : activeMenu_) {
+		if (menu && !menu->isPlaylist()) {
+			return menu;
 		}
 	}
 
-	ScrollingList* masterMenu = playlist ? playlistMenu_ : getAnActiveMenu();
-	if (masterMenu) {
-		size_t trueIndex = masterMenu->getScrollOffsetIndex();
-		for (auto& menu : activeMenu_) {
-			if (menu && menu != masterMenu && ((playlist && menu->isPlaylist()) || (!playlist && !menu->isPlaylist()))) {
-				menu->setScrollOffsetIndex(trueIndex);
-			}
+	return nullptr;
+}
+
+void Page::scroll(bool forward, bool playlist) {
+	ScrollingList* masterMenu = getMasterMenuForScroll(playlist);
+	if (!masterMenu) {
+		return;
+	}
+
+	const float masterPeriod = masterMenu->getScrollPeriod();
+
+	// Master advances selection.
+	masterMenu->setScrollPeriod(masterPeriod);
+	masterMenu->scroll(forward);
+
+	const size_t masterSelectedIndex = masterMenu->getSelectedIndex();
+
+	// Followers animate using the same period, then sync to master's selected item.
+	for (ScrollingList* menu : activeMenu_) {
+		if (!menu || menu == masterMenu) {
+			continue;
 		}
+
+		const bool correctType =
+			(playlist && menu->isPlaylist()) ||
+			(!playlist && !menu->isPlaylist());
+
+		if (!correctType) {
+			continue;
+		}
+
+		menu->setScrollPeriod(masterPeriod);
+		menu->scroll(forward);
+		menu->syncToSelectedIndex(masterSelectedIndex);
 	}
 
 	pendingScrollSelect_ = true;
@@ -2057,7 +2086,6 @@ void Page::scroll(bool forward, bool playlist) {
 
 	invalidateIdleCache();
 }
-
 
 
 bool Page::hasSubs() {

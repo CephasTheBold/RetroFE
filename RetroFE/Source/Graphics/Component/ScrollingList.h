@@ -110,6 +110,11 @@ public:
     
     int getListId() const;
 
+    void syncToSelectedIndex(size_t selectedIndex);
+
+    float getScrollPeriod() const;
+    void setScrollPeriod(float value);
+
     void triggerEnterEvent();
     void triggerExitEvent();
     void triggerMenuEnterEvent(int menuIndex = -1);

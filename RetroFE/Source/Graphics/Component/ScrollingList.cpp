@@ -123,6 +123,8 @@ void ScrollingList::setItems(std::vector<Item*>* items) {
     const size_t size = items_->size();
     itemIndex_ = loopDecrement(size, selectedOffsetIndex_, size);
 
+    resetScrollPeriod();
+
     // ---- warm name-candidate caches for the types this list actually uses ----
     const std::string imageTypeLC = Utils::toLower(imageType_);
     const std::string videoTypeLC = Utils::toLower(videoType_);
@@ -828,10 +830,11 @@ void ScrollingList::allocateGraphicsMemory( )
 
 void ScrollingList::freeGraphicsMemory() {
     Component::freeGraphicsMemory();
-    scrollPeriod_ = 0;
-    deallocateSpritePoints();  // extracts all videos, releases to pool
 
-    // Now currentActive is 0 — safe to mark for cleanup
+    resetScrollPeriod();
+
+    deallocateSpritePoints();
+
     if (listId_ != -1) {
         VideoPool::cleanup(baseViewInfo.Monitor, listId_);
     }
@@ -1288,21 +1291,44 @@ bool ScrollingList::isFastScrolling() const {
     return scrollPeriod_ <= minScrollTime_ + EPSILON;
 }
 
+void ScrollingList::syncToSelectedIndex(size_t selectedIndex) {
+    if (!items_ || items_->empty()) {
+        return;
+    }
+
+    itemIndex_ = loopDecrement(selectedIndex, selectedOffsetIndex_, items_->size());
+}
+
+float ScrollingList::getScrollPeriod() const {
+    return scrollPeriod_ > 0.0f ? scrollPeriod_ : startScrollTime_;
+}
+
+void ScrollingList::setScrollPeriod(float value) {
+    scrollPeriod_ = value > 0.0f ? value : startScrollTime_;
+}
+
 void ScrollingList::scroll(bool forward) {
     if (!items_ || items_->empty() || !scrollPoints_ || scrollPoints_->empty())
+        return;
+
+    if (components_.empty())
         return;
 
     if (scrollPeriod_ <= 0.0f) {
         scrollPeriod_ = startScrollTime_;
     }
 
-    // We no longer clamp period here. The update loop handles the clamp.
     const size_t itemsSize = items_->size();
     const size_t N = scrollPoints_->size();
-    const size_t f = static_cast<size_t>(forward);
-    const size_t exitIndex = (N <= 1) ? 0 : (N - 1) * (1 - f);
+
+    if (N == 0 || components_.size() < N)
+        return;
+
+    const size_t exitIndex =
+        (N <= 1) ? 0 : (N - 1) * (1 - static_cast<size_t>(forward));
 
     size_t fullListIndex = 0;
+
     if (forward) {
         fullListIndex = loopIncrement(itemIndex_, N, itemsSize);
         itemIndex_ = loopIncrement(itemIndex_, 1, itemsSize);
@@ -1318,29 +1344,35 @@ void ScrollingList::scroll(bool forward) {
         components_[exitIndex]->allocateGraphicsMemory();
     }
 
-    // Execute the visual jump
     const auto& T = forward ? forwardTween_ : backwardTween_;
+
     if (T.size() == N) {
         for (size_t index = 0; index < N; ++index) {
             Component* component = components_[index];
-            if (!component) continue;
+            if (!component)
+                continue;
 
             const TweenNeighbor& t = T[index];
+
             resetTweens(component, t.tween, t.cur, t.next, scrollPeriod_);
 
-            if (component->baseViewInfo.font != t.next->font)
+            if (component->baseViewInfo.font != t.next->font) {
                 component->baseViewInfo.font = t.next->font;
+            }
 
             component->triggerEvent("menuScroll");
         }
     }
 
     components_.rotate(forward);
+
     cachedIdle_ = false;
     cachedAttractIdle_ = false;
+
     LOG_DEBUG("ScrollingList",
         "scroll() after itemIndex=" + std::to_string(itemIndex_) +
-        " selected=" + std::to_string(getSelectedIndex()));
+        " selected=" + std::to_string(getSelectedIndex()) +
+        " period=" + std::to_string(scrollPeriod_));
 }
 
 bool ScrollingList::isPlaylist() const

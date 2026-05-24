@@ -228,6 +228,7 @@ private:
     std::vector<ScrollingList *> activeMenu_;
     ScrollingList* anActiveMenu_;
     ScrollingList* playlistMenu_;
+    ScrollingList* getMasterMenuForScroll(bool playlist) const;
     unsigned int menuDepth_;
     MenuVector_T menus_;
     CollectionVector_T collections_;
