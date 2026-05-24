@@ -22,10 +22,12 @@ public:
     Image(const std::string& file, const std::string& altFile, Page& p,
         int monitor = 0, bool additive = false, bool useTextureCaching = true);
     ~Image() override;
-
+    bool update(float dt) override;
     void draw() override;
     void allocateGraphicsMemory() override;
     void freeGraphicsMemory() override;
+    void pumpGraphicsPreparation() override;
+    bool isGraphicsReadyForFirstRender() const override;
     std::string_view filePath();
 
     static void cleanupTextureCache();

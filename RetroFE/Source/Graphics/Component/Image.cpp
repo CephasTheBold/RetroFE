@@ -51,6 +51,27 @@ void Image::allocateGraphicsMemory() {
 	status_ = LoadStatus::Error;
 }
 
+void Image::pumpGraphicsPreparation() {
+	if (status_ == LoadStatus::Loading) {
+		if (loadTask_.valid() &&
+			loadTask_.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
+			finalizeLoad();
+		}
+	}
+}
+
+bool Image::isGraphicsReadyForFirstRender() const {
+	if (status_ == LoadStatus::Error) {
+		return true;
+	}
+
+	if (status_ == LoadStatus::Ready) {
+		return texture_ || animatedTexture_ || isUsingCachedStaticTexture_ || isUsingCachedSurfaces_;
+	}
+
+	return false;
+}
+
 bool Image::startAsyncLoad(const std::string& path) {
 	std::lock_guard<std::mutex> lock(g_ImageCacheMutex);
 
@@ -74,8 +95,17 @@ bool Image::startAsyncLoad(const std::string& path) {
 	status_ = LoadStatus::Loading;
 	loadTask_ = ThreadPool::getInstance().enqueue([path]() -> AsyncLoadResult {
 		AsyncLoadResult res;
+
+		auto cleanup = [&]() {
+			std::lock_guard<std::mutex> lock(g_ImageCacheMutex);
+			loadingTasks_.erase(path);
+			};
+
 		SDL_RWops* rw = SDL_RWFromFile(path.c_str(), "rb");
-		if (!rw) return res;
+		if (!rw) {
+			cleanup();
+			return res;
+		}
 
 		if (IMG_isGIF(rw) || IMG_isWEBP(rw)) {
 			IMG_Animation* anim = IMG_LoadAnimation_RW(rw, 1);
@@ -98,10 +128,8 @@ bool Image::startAsyncLoad(const std::string& path) {
 				res.success = true;
 			}
 		}
-		{
-			std::lock_guard<std::mutex> lock(g_ImageCacheMutex);
-			loadingTasks_.erase(path);
-		}
+
+		cleanup();
 		return res;
 		}).share();
 
@@ -219,14 +247,21 @@ bool Image::loadFromCache(const std::string& filePath) {
 	return false;
 }
 
-void Image::draw() {
-	Component::draw();
+bool Image::update(float dt) {
+	bool done = Component::update(dt);
 
+	// Check background asset status in the logic pass, BEFORE drawing starts
 	if (status_ == LoadStatus::Loading) {
 		if (loadTask_.valid() && loadTask_.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
 			finalizeLoad();
 		}
 	}
+
+	return done;
+}
+
+void Image::draw() {
+	Component::draw();
 
 	if (status_ == LoadStatus::Error || (status_ == LoadStatus::Unloaded && !texture_ && !animatedTexture_)) {
 		return;
@@ -408,10 +443,9 @@ bool Image::recycleAsImage(const std::string& newFilePath, const std::string& ne
 	file_ = newFilePath;
 	altFile_ = newAltPath;
 
-	// We set status to Loading so draw() knows to check for completion,
-	// but we do NOT clear the current texture_ pointer yet!
-	status_ = LoadStatus::Loading;
-	startAsyncLoad(file_);
+	if (!startAsyncLoad(file_)) {
+		status_ = LoadStatus::Error;
+	}
 
 	return true;
 }

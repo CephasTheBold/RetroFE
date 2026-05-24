@@ -84,31 +84,12 @@ bool ReloadableMedia::update(float dt) {
         }
     }
 
-    if (newItemSelected ||
-        (newScrollItemSelected && getMenuScrollReload())) {
+    const bool hadPendingReload =
+        newItemSelected || (newScrollItemSelected && getMenuScrollReload());
 
-        newItemSelected = false;
-        newScrollItemSelected = false;
+    realizePendingMedia(false, dt, true);
 
-        Component* foundComponent = reloadTexture();
-        if (foundComponent) {
-            foundComponent->playlistName = page.getPlaylistName();
-            foundComponent->allocateGraphicsMemory();
-            baseViewInfo.ImageWidth = foundComponent->baseViewInfo.ImageWidth;
-            baseViewInfo.ImageHeight = foundComponent->baseViewInfo.ImageHeight;
-            foundComponent->update(dt);
-
-            if (foundComponent != loadedComponent_) {
-                delete loadedComponent_;
-                loadedComponent_ = foundComponent;
-            }
-        }
-        else {
-            delete loadedComponent_;
-            loadedComponent_ = nullptr;
-        }
-    }
-    else if (loadedComponent_) {
+    if (!hadPendingReload && loadedComponent_) {
         // Keep this in sync even when no reload happens.
         if (isPlaylistDrivenType_()) {
             loadedComponent_->playlistName = page.getPlaylistName();
@@ -119,6 +100,40 @@ bool ReloadableMedia::update(float dt) {
     return Component::update(dt);
 }
 
+void ReloadableMedia::pumpGraphicsPreparation() {
+    // Mirror playlist-driven invalidation here too, because prep may run
+    // before the normal update loop advances.
+    if (isPlaylistDriven_) {
+        const std::string curPlaylist = page.getPlaylistName();
+
+        if (!lastPlaylistNameInit_) {
+            lastPlaylistName_ = curPlaylist;
+            lastPlaylistNameInit_ = true;
+        }
+        else if (curPlaylist != lastPlaylistName_) {
+            lastPlaylistName_ = curPlaylist;
+            newItemSelected = true;
+            newScrollItemSelected = true;
+        }
+    }
+
+    realizePendingMedia(true, 0.0f, false);
+
+    if (loadedComponent_) {
+        if (isPlaylistDrivenType_()) {
+            loadedComponent_->playlistName = page.getPlaylistName();
+        }
+        loadedComponent_->pumpGraphicsPreparation();
+    }
+}
+
+bool ReloadableMedia::isGraphicsReadyForFirstRender() const {
+    if (!loadedComponent_) {
+        return true;
+    }
+
+    return loadedComponent_->isGraphicsReadyForFirstRender();
+}
 
 void ReloadableMedia::allocateGraphicsMemory() {
     if (loadedComponent_) {
@@ -429,6 +444,39 @@ Component* ReloadableMedia::reloadTexture() {
     return foundComponent;
 }
 
+void ReloadableMedia::realizePendingMedia(bool allowChildPump, float dt, bool allowChildUpdate) {
+    if (newItemSelected || (newScrollItemSelected && getMenuScrollReload())) {
+
+        newItemSelected = false;
+        newScrollItemSelected = false;
+
+        Component* foundComponent = reloadTexture();
+        if (foundComponent) {
+            foundComponent->playlistName = page.getPlaylistName();
+            foundComponent->allocateGraphicsMemory();
+
+            if (allowChildPump) {
+                foundComponent->pumpGraphicsPreparation();
+            }
+
+            baseViewInfo.ImageWidth = foundComponent->baseViewInfo.ImageWidth;
+            baseViewInfo.ImageHeight = foundComponent->baseViewInfo.ImageHeight;
+
+            if (allowChildUpdate) {
+                foundComponent->update(dt);
+            }
+
+            if (foundComponent != loadedComponent_) {
+                delete loadedComponent_;
+                loadedComponent_ = foundComponent;
+            }
+        }
+        else {
+            delete loadedComponent_;
+            loadedComponent_ = nullptr;
+        }
+    }
+}
 
 Component* ReloadableMedia::findComponent(
     const std::string& collection,
@@ -498,11 +546,8 @@ Component* ReloadableMedia::findComponent(
         // 2. THE HOT-SWAP (The Heap Churn Fix)
         // If we found a new Image file, and our current component is an Image, DO NOT create a new one.
         if (!isVideo && loadedComponent_ != nullptr) {
-            if (auto* imgComp = static_cast<Image*>(loadedComponent_)) {
-                // Recycle the existing C++ object to load the new file asynchronously
+            if (auto* imgComp = dynamic_cast<Image*>(loadedComponent_)) {
                 imgComp->recycleAsImage(foundFilePath, "");
-
-                // Return the existing pointer. This prevents update() from deleting it!
                 return imgComp;
             }
         }

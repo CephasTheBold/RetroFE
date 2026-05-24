@@ -60,6 +60,7 @@ public:
     virtual ~RetroFE( );
     bool     deInitialize( );
     void waitForAsyncAssets();
+    void preparePageForFirstRender(Page* page, int maxPasses = 5);
     bool     run( );
     void     freeGraphicsMemory( );
     void     allocateGraphicsMemory( );
@@ -161,14 +162,10 @@ private:
         RETROFE_COLLECIONINFO_EXIT,
         RETROFE_BUILDINFO_ENTER,
         RETROFE_BUILDINFO_EXIT,
-        RETROFE_SCROLL_FORWARD,
-        RETROFE_SCROLL_BACK,
-        RETROFE_SCROLL_COAST,
         RETROFE_NEW,
         RETROFE_QUIT_REQUEST,
         RETROFE_QUIT,
-        RETROFE_SCROLL_PLAYLIST_FORWARD,
-        RETROFE_SCROLL_PLAYLIST_BACK,
+        RETROFE_SCROLLING,
         RETROFE_RELOAD_REQUEST,
         RETROFE_RELOAD_EXECUTE,
     };
@@ -203,7 +200,6 @@ private:
     CollectionInfo *getCollection( const std::string& collectionName );
     void updatePageControls(const std::string& type);
     CollectionInfo *getMenuCollection( const std::string& collectionName );
-    bool isUserActive(double now, double threshold = 3.0) const;
 	void            saveRetroFEState( ) const;
     std::string getLayoutFileName();
 
@@ -219,9 +215,6 @@ private:
     float              keyInputDisable_;
     float              currentTime_;
     float              lastLaunchReturnTime_;
-    float              keyLastTime_;
-    float              keyDelayTime_;
-	float              keyLetterSkipDelayTime_;
     Item              *nextPageItem_;
     FontCache          fontcache_;
     AttractMode        attract_;

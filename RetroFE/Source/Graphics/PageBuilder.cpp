@@ -567,7 +567,7 @@ bool PageBuilder::buildComponents(xml_node<>* layout, Page* page, const std::str
 				LOG_ERROR("Layout", "Failed to find image at: " + imagePath + " or " + altImagePath);
 				continue;
 			}
-			auto* c = new Image(imagePath, altImagePath, *page, imageMonitor, additive);
+			auto* c = new Image(imagePath, altImagePath, *page, imageMonitor, additive, true);
 			if (c)
 			{
 				c->allocateGraphicsMemory();
@@ -1019,8 +1019,20 @@ void PageBuilder::loadTweens(Component* c, xml_node<>* componentXml) {
 	c->setTweens(createTweenInstance(componentXml));
 }
 
-std::shared_ptr<AnimationEvents> PageBuilder::createTweenInstance(rapidxml::xml_node<>* componentXml) {
+std::shared_ptr<AnimationEvents> PageBuilder::createTweenInstance(rapidxml::xml_node<>* componentXml, rapidxml::xml_node<>* defaultXml) {
 	auto tweens = std::make_shared<AnimationEvents>();
+
+	
+    if (defaultXml) {
+        buildTweenSet(tweens.get(), defaultXml, "onEnter", "enter");
+        buildTweenSet(tweens.get(), defaultXml, "onExit", "exit");
+        buildTweenSet(tweens.get(), defaultXml, "onIdle", "idle");
+        buildTweenSet(tweens.get(), defaultXml, "onMenuIdle", "menuIdle");
+        buildTweenSet(tweens.get(), defaultXml, "onMenuEnter", "menuEnter");
+        buildTweenSet(tweens.get(), defaultXml, "onMenuExit", "menuExit");
+        buildTweenSet(tweens.get(), defaultXml, "onHighlightEnter", "highlightEnter");
+        buildTweenSet(tweens.get(), defaultXml, "onHighlightExit", "highlightExit");
+    }
 
 	buildTweenSet(tweens.get(), componentXml, "onEnter", "enter");
 	buildTweenSet(tweens.get(), componentXml, "onExit", "exit");
@@ -1305,7 +1317,7 @@ void PageBuilder::buildCustomMenu(ScrollingList* menu, const rapidxml::xml_node<
 		viewInfo->Additive = menu->baseViewInfo.Additive;
 
 		points->push_back(viewInfo);
-		tweenPoints->push_back(createTweenInstance(componentXml));
+		tweenPoints->push_back(createTweenInstance(componentXml, itemDefaults));
 
 		if (componentXml->first_attribute("selected")) {
 			menu->setSelectedIndex(i);
@@ -1589,20 +1601,29 @@ void PageBuilder::buildViewInfo(xml_node<>* componentXml, ViewInfo& info, xml_no
 	}
 
 	if (backgroundColor) {
-		std::stringstream ss(backgroundColor->value());
-		int num;
+		std::string bgStr = backgroundColor->value();
+		// Strip a '#' if it accidentally gets included
+		if (!bgStr.empty() && bgStr[0] == '#') {
+			bgStr = bgStr.substr(1);
+		}
+
+		std::stringstream ss(bgStr);
+		int num = 0; // FIX 1: Initialize to 0 so a parsing failure defaults to Black, not White garbage memory!
 		ss >> std::hex >> num;
+
 		int red = num / 0x10000;
 		int green = (num / 0x100) % 0x100;
 		int blue = num % 0x100;
 
-		info.BackgroundRed = static_cast<float>(red / 255);
-		info.BackgroundGreen = static_cast<float>(green / 255);
-		info.BackgroundBlue = static_cast<float>(blue / 255);
-	}
+		// FIX 2: Add .0f to force floating-point math instead of integer division
+		info.BackgroundRed = static_cast<float>(red) / 255.0f;
+		info.BackgroundGreen = static_cast<float>(green) / 255.0f;
+		info.BackgroundBlue = static_cast<float>(blue) / 255.0f;
 
-	if (backgroundAlpha) {
-		info.BackgroundAlpha = backgroundAlpha ? Utils::convertFloat(backgroundAlpha->value()) : 1.f;
+		// FIX 3: Automatically make the container visible if a color is defined
+		if (!backgroundAlpha) {
+			info.BackgroundAlpha = 1.0f;
+		}
 	}
 }
 

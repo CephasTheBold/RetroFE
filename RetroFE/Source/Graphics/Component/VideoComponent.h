@@ -97,6 +97,9 @@ private:
     bool hasBeenOnScreen_ = false;
     bool wasPlayingBeforeFastScroll_ = false;
 
+    bool lastLaunchedState_ = false;
+    bool lastLaunchedStateInit_ = false;
+
     PlaybackTarget desiredState_{ PlaybackTarget::Paused };
     PlaybackCommand pendingCommand_{ PlaybackCommand::None };
 

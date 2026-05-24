@@ -91,7 +91,7 @@ void RetroFE::handleSighup(int) {
 RetroFE::RetroFE(Configuration& c)
 	: initialized(false), initializeError(false), initializeThread(NULL), config_(c), db_(NULL), metadb_(NULL),
 	input_(config_), currentPage_(NULL), keyInputDisable_(0), currentTime_(0), lastLaunchReturnTime_(0),
-	keyLastTime_(0), keyDelayTime_(.3f), keyLetterSkipDelayTime_(.2f), reboot_(false), kioskLock_(false), paused_(false), buildInfo_(false),
+    reboot_(false), kioskLock_(false), paused_(false), buildInfo_(false),
 	collectionInfo_(false), gameInfo_(false), musicPlayer_(nullptr) {
 	menuMode_ = false;
 	attractMode_ = false;
@@ -522,6 +522,7 @@ void RetroFE::launchExit(bool userInitiated) {
 	else
 	{
 		currentPage_->reallocateMenuSpritePoints(false);
+		preparePageForFirstRender(currentPage_);
 	}
 
 #ifdef WIN32
@@ -554,7 +555,6 @@ void RetroFE::launchExit(bool userInitiated) {
 	}
 	currentTime_ = static_cast<float>((SDL_GetPerformanceCounter() * 1.0 / freq_)); // currentTime_ in seconds
 	lastFrameTimePointMs_ = SDL_GetPerformanceCounter() * 1000.0 / freq_;
-	keyLastTime_ = currentTime_;
 	lastLaunchReturnTime_ = currentTime_;
 	//currentPage_->updateReloadables(0);
 	currentPage_->onNewItemSelected();
@@ -691,6 +691,23 @@ void RetroFE::waitForAsyncAssets() {
 	// Reset the engine's internal stopwatch to "now" so the animation engine 
 	// doesn't fast-forward to compensate for the time spent waiting for images.
 	lastFrameTimePointMs_ = SDL_GetPerformanceCounter() * 1000.0 / freq_;
+}
+
+void RetroFE::preparePageForFirstRender(Page* page, int maxPasses) {
+	if (!page) {
+		return;
+	}
+
+	for (int i = 0; i < maxPasses; ++i) {
+		waitForAsyncAssets();
+		page->pumpGraphicsPreparation();
+
+		if (page->isGraphicsReadyForFirstRender()) {
+			return;
+		}
+	}
+
+	LOG_WARNING("RetroFE", "Page did not fully settle for first render after " + std::to_string(maxPasses) + " preparation passes");
 }
 
 // Run RetroFE
@@ -982,8 +999,7 @@ bool RetroFE::run() {
 
 		if (mp) mp->pump();
 
-		bool activelyAnimating = isUserActive(currentTime_)
-			|| (currentPage_ && (
+		bool activelyAnimating = (currentPage_ && (
 				currentPage_->isMenuScrolling()
 				|| !currentPage_->isIdle()
 				|| !currentPage_->isGraphicsIdle()
@@ -1226,6 +1242,7 @@ bool RetroFE::run() {
 				// Initialize display
 				currentPage_->onNewItemSelected();
 				currentPage_->allocateMenuSpritePoints(true);  // Update playlist menu
+				preparePageForFirstRender(currentPage_);
 
 				splashMode = false;
 
@@ -1250,7 +1267,6 @@ bool RetroFE::run() {
 				}
 
 				currentTime_ = static_cast<float>(SDL_GetPerformanceCounter() * 1.0 / freq_);
-				keyLastTime_ = currentTime_;
 				lastLaunchReturnTime_ = currentTime_;
 
 				setState(RETROFE_LOAD_ART);
@@ -1306,59 +1322,19 @@ bool RetroFE::run() {
 			currentPage_->prevPlaylist();
 			setState(RETROFE_PLAYLIST_REQUEST);
 			break;
-			case RETROFE_SCROLL_FORWARD:
-			if (currentPage_ && currentPage_->isMenuIdle())
+			case RETROFE_SCROLLING:
+			// Page::update() handles the acceleration, movement, and coasting.
+			// We just wait here until Page completely finishes and clears the flag.
+			if (currentPage_->getScrolling() == Page::ScrollDirectionIdle && currentPage_->isMenuIdle())
 			{
-				currentPage_->setScrolling(Page::ScrollDirectionForward);
-				currentPage_->scroll(true, false);
-				currentPage_->updateScrollPeriod();
+				nextPageItem_ = currentPage_->getSelectedItem();
+				bool enterOnCollection = true;
+				config_.getProperty(OPTION_ENTERONCOLLECTION, enterOnCollection);
+				if (nextPageItem_->leaf || (!attractMode_ && !enterOnCollection))
+					setState(RETROFE_HIGHLIGHT_REQUEST);
+				else
+					setState(RETROFE_COLLECTION_HIGHLIGHT_REQUEST);
 			}
-			setState(RETROFE_IDLE);
-			break;
-			case RETROFE_SCROLL_BACK:
-			if (currentPage_ && currentPage_->isMenuIdle())
-			{
-				currentPage_->setScrolling(Page::ScrollDirectionBack);
-				currentPage_->scroll(false, false);
-				currentPage_->updateScrollPeriod();
-			}
-			setState(RETROFE_IDLE);
-			break;
-
-			case RETROFE_SCROLL_COAST:
-			if (currentPage_ && currentPage_->isMenuIdle())
-			{
-				// Now getScrolling() returns the valid enum you added
-				const Page::ScrollDirection dir = currentPage_->getScrolling();
-
-				bool forward = (dir == Page::ScrollDirectionForward ||
-					dir == Page::ScrollDirectionPlaylistForward);
-				bool playlist = (dir == Page::ScrollDirectionPlaylistForward ||
-					dir == Page::ScrollDirectionPlaylistBack);
-
-				currentPage_->scroll(forward, playlist);
-				currentPage_->decelerateScrollPeriod();
-			}
-			break;
-
-
-			case RETROFE_SCROLL_PLAYLIST_FORWARD:
-			if (currentPage_ && currentPage_->isMenuIdle())
-			{
-				currentPage_->setScrolling(Page::ScrollDirectionPlaylistForward);
-				currentPage_->scroll(true, true);
-				currentPage_->updateScrollPeriod();
-			}
-			setState(RETROFE_IDLE);
-			break;
-			case RETROFE_SCROLL_PLAYLIST_BACK:
-			if (currentPage_ && currentPage_->isIdle())
-			{
-				currentPage_->setScrolling(Page::ScrollDirectionPlaylistBack);
-				currentPage_->scroll(false, true);
-				currentPage_->updateScrollPeriod();
-			}
-			setState(RETROFE_IDLE);
 			break;
 			case RETROFE_QUICKLIST_REQUEST:
 			currentPage_->playlistExit();
@@ -1562,9 +1538,8 @@ bool RetroFE::run() {
 			if (currentPage_ && currentPage_->isIdle())
 			{
 				currentPage_->reallocateMenuSpritePoints(); // update playlist menu
-				waitForAsyncAssets();
+				preparePageForFirstRender(currentPage_);
 				currentPage_->playlistEnter();
-				currentPage_->update(0.0f); // Force 0.0s frame
 				setState(RETROFE_PLAYLIST_ENTER);
 			}
 			break;
@@ -1611,9 +1586,9 @@ bool RetroFE::run() {
 			{
 				currentPage_->onNewItemSelected();
 				currentPage_->reallocateMenuSpritePoints(false); // skip updating playlist menu
-				waitForAsyncAssets();
+				preparePageForFirstRender(currentPage_);
 				currentPage_->menuJumpEnter();
-				currentPage_->update(0.0f);				setState(RETROFE_MENUJUMP_ENTER);
+				setState(RETROFE_MENUJUMP_ENTER);
 			}
 			break;
 
@@ -1662,15 +1637,7 @@ bool RetroFE::run() {
 					break;
 				}
 			}
-			if (RETROFE_STATE state_tmp = processUserInput(currentPage_);
-				currentPage_->isMenuIdle() &&
-				(state_tmp == RETROFE_HIGHLIGHT_REQUEST || state_tmp == RETROFE_MENUJUMP_REQUEST ||
-					state_tmp == RETROFE_PLAYLIST_REQUEST))
-			{
-				state_ = state_tmp;
-				break;
-			}
-			else if (currentPage_ && currentPage_->isIdle())
+			if (currentPage_ && currentPage_->isIdle())
 			{
 				setState(RETROFE_IDLE);
 			}
@@ -1759,7 +1726,8 @@ bool RetroFE::run() {
 				// refresh menu if in different collection
 				if (quickListCollection != "" && quickListCollection != collectionName)
 				{
-					currentPage_->reallocateMenuSpritePoints();
+					currentPage_->allocateGraphicsMemory(); // Changed from reallocateMenuSpritePoints
+					preparePageForFirstRender(currentPage_);
 				}
 			}
 			break;
@@ -1846,7 +1814,8 @@ bool RetroFE::run() {
 				// refresh menu if in different collection
 				if (settingsCollection != "" && settingsCollection != collectionName)
 				{
-					currentPage_->reallocateMenuSpritePoints();
+					currentPage_->allocateGraphicsMemory(); // Changed from reallocateMenuSpritePoints
+					preparePageForFirstRender(currentPage_);
 				}
 			}
 			break;
@@ -1860,8 +1829,6 @@ bool RetroFE::run() {
 			case RETROFE_NEXT_PAGE_MENU_EXIT:
 			if (currentPage_ && currentPage_->isIdle())
 			{
-				setState(RETROFE_NEXT_PAGE_MENU_LOAD_ART);
-
 				const std::string nextPageName = nextPageItem_ ? nextPageItem_->name : "";
 				const std::string collectionName = currentPage_->getCollectionName();
 
@@ -1950,7 +1917,7 @@ bool RetroFE::run() {
 
 				currentPage_->onNewItemSelected();
 				currentPage_->allocateGraphicsMemory(); // update playlist menu
-
+				preparePageForFirstRender(currentPage_);
 				if (currentPage_->getCollectionSize() == 0)
 				{
 					bool backOnEmpty = false;
@@ -1958,28 +1925,22 @@ bool RetroFE::run() {
 					if (backOnEmpty)
 						setState(RETROFE_BACK_MENU_EXIT);
 				}
+
+				if (currentPage_ && currentPage_->getMenuDepth() != 1) {
+					currentPage_->enterMenu();
+				}
+				else {
+					currentPage_->start();
+				}
+				if (currentPage_ && currentPage_->getSelectedItem())
+					l.LEDBlinky(9, currentPage_->getSelectedItem()->collectionInfo->name, currentPage_->getSelectedItem());
+
+				setState(RETROFE_NEXT_PAGE_MENU_ENTER);
 			}
 			break;
 
-
-			// Start onMenuEnter animation
-            case RETROFE_NEXT_PAGE_MENU_LOAD_ART:
-
-			// --- THE LOADING GATE ---
-			waitForAsyncAssets();
-
-			if (currentPage_ && currentPage_->getMenuDepth() != 1) {
-				currentPage_->enterMenu();
-			}
-			else {
-				currentPage_->start();
-			}
-
-			// Force the 0.0s frame!
-			if (currentPage_) currentPage_->update(0.0f);
-
-			if (currentPage_ && currentPage_->getSelectedItem())
-				l.LEDBlinky(9, currentPage_->getSelectedItem()->collectionInfo->name, currentPage_->getSelectedItem());
+			// Retained for compilation structure compatibility
+			case RETROFE_NEXT_PAGE_MENU_LOAD_ART:
 			setState(RETROFE_NEXT_PAGE_MENU_ENTER);
 			break;
 
@@ -2110,11 +2071,9 @@ bool RetroFE::run() {
 					}
 				}
 
-				setState(RETROFE_COLLECTION_DOWN_MENU_ENTER);
 				currentPage_->onNewItemSelected();
 				currentPage_->reallocateMenuSpritePoints();
-				waitForAsyncAssets();
-				currentPage_->update(0.0f);
+				preparePageForFirstRender(currentPage_);
 
 				// Check playlist change in attract mode
 				if (attractMode_)
@@ -2134,6 +2093,7 @@ bool RetroFE::run() {
 						setState(RETROFE_PLAYLIST_REQUEST);
 					}
 				}
+				setState(RETROFE_COLLECTION_DOWN_MENU_ENTER);
 			}
 			break;
 
@@ -2175,32 +2135,20 @@ bool RetroFE::run() {
 				}
 				else
 				{
-					RETROFE_STATE state_tmp = processUserInput(currentPage_);
-					if (state_tmp == RETROFE_COLLECTION_DOWN_REQUEST)
-					{
-						setState(RETROFE_COLLECTION_DOWN_REQUEST);
-					}
-					else if (state_tmp == RETROFE_COLLECTION_UP_REQUEST)
-					{
-						setState(RETROFE_COLLECTION_UP_REQUEST);
-					}
-					else
-					{
-						currentPage_->setScrolling(Page::ScrollDirectionIdle); // Stop scrolling
-						nextPageItem_ = currentPage_->getSelectedItem();
+					currentPage_->setScrolling(Page::ScrollDirectionIdle); // Stop scrolling
+					nextPageItem_ = currentPage_->getSelectedItem();
 
-						bool enterOnCollection = true;
-						config_.getProperty(OPTION_ENTERONCOLLECTION, enterOnCollection);
-						if (nextPageItem_->leaf ||
-							(!attractMode_ &&
-								!enterOnCollection)) // Current selection is a game or enterOnCollection is not set
-						{
-							setState(RETROFE_HIGHLIGHT_REQUEST);
-						}
-						else // Current selection is a menu
-						{
-							setState(RETROFE_COLLECTION_HIGHLIGHT_REQUEST);
-						}
+					bool enterOnCollection = true;
+					config_.getProperty(OPTION_ENTERONCOLLECTION, enterOnCollection);
+					if (nextPageItem_->leaf ||
+						(!attractMode_ &&
+							!enterOnCollection)) // Current selection is a game or enterOnCollection is not set
+					{
+						setState(RETROFE_HIGHLIGHT_REQUEST);
+					}
+					else // Current selection is a menu
+					{
+						setState(RETROFE_COLLECTION_HIGHLIGHT_REQUEST);
 					}
 				}
 			}
@@ -2235,21 +2183,10 @@ bool RetroFE::run() {
 			case RETROFE_COLLECTION_HIGHLIGHT_ENTER:
 			if (currentPage_ && currentPage_->isIdle())
 			{
+				// The animation finished, and the global input loop didn't 
+				// interrupt us with a scroll command. Proceed to enter!
 				nextPageItem_ = currentPage_->getSelectedItem();
-
-				RETROFE_STATE state_tmp = processUserInput(currentPage_);
-				if (state_tmp == RETROFE_COLLECTION_DOWN_REQUEST)
-				{
-					setState(RETROFE_COLLECTION_DOWN_REQUEST);
-				}
-				else if (state_tmp == RETROFE_COLLECTION_UP_REQUEST)
-				{
-					setState(RETROFE_COLLECTION_UP_REQUEST);
-				}
-				else
-				{
-					setState(RETROFE_NEXT_PAGE_REQUEST);
-				}
+				setState(RETROFE_NEXT_PAGE_REQUEST);
 			}
 			break;
 
@@ -2342,8 +2279,7 @@ bool RetroFE::run() {
 
 				currentPage_->onNewItemSelected();
 				currentPage_->reallocateMenuSpritePoints();
-				waitForAsyncAssets();
-				currentPage_->update(0.0f);
+				preparePageForFirstRender(currentPage_);
 				setState(RETROFE_COLLECTION_UP_MENU_ENTER);
 			}
 			break;
@@ -2369,32 +2305,20 @@ bool RetroFE::run() {
 			case RETROFE_COLLECTION_UP_SCROLL:
 			if (currentPage_->isMenuIdle())
 			{
-				RETROFE_STATE state_tmp;
-				state_tmp = processUserInput(currentPage_);
-				if (state_tmp == RETROFE_COLLECTION_DOWN_REQUEST)
+				currentPage_->setScrolling(Page::ScrollDirectionIdle); // Stop scrolling
+				nextPageItem_ = currentPage_->getSelectedItem();
+				bool enterOnCollection = true;
+				config_.getProperty(OPTION_ENTERONCOLLECTION, enterOnCollection);
+
+				// Current selection is a game or enterOnCollection is not set
+				if (currentPage_->getSelectedItem()->leaf || !enterOnCollection)
 				{
-					setState(RETROFE_COLLECTION_DOWN_REQUEST);
+					setState(RETROFE_HIGHLIGHT_REQUEST);
 				}
-				else if (state_tmp == RETROFE_COLLECTION_UP_REQUEST)
-				{
-					setState(RETROFE_COLLECTION_UP_REQUEST);
-				}
+				// Current selection is a menu
 				else
 				{
-					currentPage_->setScrolling(Page::ScrollDirectionIdle); // Stop scrolling
-					nextPageItem_ = currentPage_->getSelectedItem();
-					bool enterOnCollection = true;
-					config_.getProperty(OPTION_ENTERONCOLLECTION, enterOnCollection);
-					// Current selection is a game or enterOnCollection is not set
-					if (currentPage_->getSelectedItem()->leaf || !enterOnCollection)
-					{
-						setState(RETROFE_HIGHLIGHT_REQUEST);
-					}
-					// Current selection is a menu
-					else
-					{
-						setState(RETROFE_COLLECTION_HIGHLIGHT_EXIT);
-					}
+					setState(RETROFE_COLLECTION_HIGHLIGHT_EXIT);
 				}
 			}
 			break;
@@ -2681,17 +2605,15 @@ bool RetroFE::run() {
 
 				// Update display
 				currentPage_->onNewItemSelected();
-				currentPage_->reallocateMenuSpritePoints(); // Forces UI nodes to rebuild
-
-				setState(RETROFE_BACK_MENU_LOAD_ART);
+				currentPage_->reallocateMenuSpritePoints();
+				preparePageForFirstRender(currentPage_);
+				currentPage_->enterMenu();
+				setState(RETROFE_BACK_MENU_ENTER);
 			}
 			break;
 
-			// Start onMenuEnter animation
+			// Retained for compilation structure compatibility
 			case RETROFE_BACK_MENU_LOAD_ART:
-			waitForAsyncAssets();
-			currentPage_->enterMenu();
-			currentPage_->update(0.0f);
 			setState(RETROFE_BACK_MENU_ENTER);
 			break;
 			// Wait for onMenuEnter animation to finish
@@ -2749,11 +2671,9 @@ bool RetroFE::run() {
 				cycleVector_.clear();
 				config_.setProperty("currentCollection", "menu");
 				currentPage_->pushCollection(getMenuCollection("menu"));
-
 				currentPage_->onNewItemSelected();
 				currentPage_->allocateGraphicsMemory();
-				waitForAsyncAssets();
-				currentPage_->update(0.0f);
+				preparePageForFirstRender(currentPage_);
 				setState(RETROFE_MENUMODE_START_LOAD_ART);
 			}
 			break;
@@ -2836,6 +2756,7 @@ bool RetroFE::run() {
 					currentPage_->setLastPlaylistOffsets(offsets);
 					currentPage_->setLocked(kioskLock_);
 					currentPage_->allocateGraphicsMemory();
+					preparePageForFirstRender(currentPage_);
 					currentPage_->start();
 					LOG_INFO("RetroFE", "Layout hot-reload complete");
 				}
@@ -3059,14 +2980,9 @@ std::string RetroFE::stateToString(RETROFE_STATE s) const {
 		case RETROFE_COLLECIONINFO_EXIT: return "RETROFE_COLLECIONINFO_EXIT";
 		case RETROFE_BUILDINFO_ENTER: return "RETROFE_BUILDINFO_ENTER";
 		case RETROFE_BUILDINFO_EXIT: return "RETROFE_BUILDINFO_EXIT";
-		case RETROFE_SCROLL_FORWARD: return "RETROFE_SCROLL_FORWARD";
-		case RETROFE_SCROLL_BACK: return "RETROFE_SCROLL_BACK";
-		case RETROFE_SCROLL_COAST: return "RETROFE_SCROLL_COAST";
 		case RETROFE_NEW: return "RETROFE_NEW";
 		case RETROFE_QUIT_REQUEST: return "RETROFE_QUIT_REQUEST";
 		case RETROFE_QUIT: return "RETROFE_QUIT";
-		case RETROFE_SCROLL_PLAYLIST_FORWARD: return "RETROFE_SCROLL_PLAYLIST_FORWARD";
-		case RETROFE_SCROLL_PLAYLIST_BACK: return "RETROFE_SCROLL_PLAYLIST_BACK";
 		case RETROFE_RELOAD_REQUEST: return "RETROFE_RELOAD_REQUEST";
 		case RETROFE_RELOAD_EXECUTE: return "RETROFE_RELOAD_EXECUTE";
 		default: return "UNKNOWN_STATE_" + std::to_string(s);
@@ -3308,27 +3224,10 @@ RetroFE::RETROFE_STATE RetroFE::processUserInput(Page* page) {
 		}
 		};
 
-	// Rename 'exit' to 'shouldQuit' to avoid conflicts with <cstdlib> exit()
 	bool shouldQuit = false;
 	RETROFE_STATE state = RETROFE_IDLE;
 
-	// 1. Input Polling & Screensaver Management
-	SDL_Event e;
-	while (SDL_PollEvent(&e))
-	{
-		input_.update(e);
-		if (e.type == SDL_POLLSENTINEL || (screensaver && isSsExitInput(e.type)))
-		{
-			break;
-		}
-	}
-
-	// 2. MOMENTUM CAPTURE: 
-	// Check if the user was actively holding the button and at max speed 
-	// BEFORE we update the activity flag for this frame.
-	bool wasFastScrolling = page->isUserScrollInputActive() && page->isMenuFastScrolling();
-
-	// 3. Activity Tracking
+	// 1. Activity Tracking (Uses held state, so .keystate() is correct)
 	const bool userScrolling =
 		input_.keystate(UserInput::KeyCodePageUp) ||
 		input_.keystate(UserInput::KeyCodePageDown) ||
@@ -3343,221 +3242,88 @@ RetroFE::RETROFE_STATE RetroFE::processUserInput(Page* page) {
 		input_.keystate(UserInput::KeyCodeLeft) ||
 		input_.keystate(UserInput::KeyCodeRight);
 
+	// Update the flag for the ScrollingList::update() physics loop
 	page->setUserScrollInputActive(userScrolling);
 
-	if (screensaver && isSsExitInput(e.type))
+	// 2. Screensaver Exit
+	if (screensaver && userScrolling)
 	{
 #ifdef WIN32
 		Utils::postMessage("MediaplayerHiddenWindow", 0x8001, 51, 0);
 #endif
 		return RETROFE_QUIT;
 	}
-	if (currentTime_ - keyLastTime_ > keyDelayTime_) {
-		// 4. Directional Scroll Mapping (Horizontal vs. Vertical)
-		RETROFE_STATE requestedScroll = RETROFE_IDLE;
-		bool crossAxisScrolling = false;
+
+	// 3. Directional Scroll Mapping (The Physics Bridge)
+	bool crossAxisScrolling = false;
+
+	if (!kioskLock_) {
+		Page::ScrollDirection dir = Page::ScrollDirectionIdle;
 
 		if (page->isHorizontalScroll()) {
-			// Playlist scroll (Restricted by Kiosk Lock)
-			if (!kioskLock_ && input_.keystate(UserInput::KeyCodeDown)) {
-				crossAxisScrolling = page->isGamesScrolling();
-				requestedScroll = RETROFE_SCROLL_PLAYLIST_FORWARD;
-			}
-			else if (!kioskLock_ && input_.keystate(UserInput::KeyCodeUp)) {
-				crossAxisScrolling = page->isGamesScrolling();
-				requestedScroll = RETROFE_SCROLL_PLAYLIST_BACK;
-			}
-			// Game scroll (Allowed in Kiosk Mode)
-			else if (input_.keystate(UserInput::KeyCodeRight)) {
-				crossAxisScrolling = page->isPlaylistScrolling();
-				requestedScroll = RETROFE_SCROLL_FORWARD;
-			}
-			else if (input_.keystate(UserInput::KeyCodeLeft)) {
-				crossAxisScrolling = page->isPlaylistScrolling();
-				requestedScroll = RETROFE_SCROLL_BACK;
-			}
+			if (input_.keystate(UserInput::KeyCodeDown)) { crossAxisScrolling = page->isGamesScrolling(); dir = Page::ScrollDirectionPlaylistForward; }
+			else if (input_.keystate(UserInput::KeyCodeUp)) { crossAxisScrolling = page->isGamesScrolling(); dir = Page::ScrollDirectionPlaylistBack; }
+			else if (input_.keystate(UserInput::KeyCodeRight)) { crossAxisScrolling = page->isPlaylistScrolling(); dir = Page::ScrollDirectionForward; }
+			else if (input_.keystate(UserInput::KeyCodeLeft)) { crossAxisScrolling = page->isPlaylistScrolling(); dir = Page::ScrollDirectionBack; }
 		}
 		else {
-			// Vertical Mapping
-			// Playlist scroll (Restricted by Kiosk Lock)
-			if (!kioskLock_ && input_.keystate(UserInput::KeyCodeRight)) {
-				crossAxisScrolling = page->isGamesScrolling();
-				requestedScroll = RETROFE_SCROLL_PLAYLIST_FORWARD;
-			}
-			else if (!kioskLock_ && input_.keystate(UserInput::KeyCodeLeft)) {
-				crossAxisScrolling = page->isGamesScrolling();
-				requestedScroll = RETROFE_SCROLL_PLAYLIST_BACK;
-			}
-			// Game scroll (Allowed in Kiosk Mode)
-			else if (input_.keystate(UserInput::KeyCodeDown)) {
-				crossAxisScrolling = page->isPlaylistScrolling();
-				requestedScroll = RETROFE_SCROLL_FORWARD;
-			}
-			else if (input_.keystate(UserInput::KeyCodeUp)) {
-				crossAxisScrolling = page->isPlaylistScrolling();
-				requestedScroll = RETROFE_SCROLL_BACK;
-			}
+			if (input_.keystate(UserInput::KeyCodeRight)) { crossAxisScrolling = page->isGamesScrolling(); dir = Page::ScrollDirectionPlaylistForward; }
+			else if (input_.keystate(UserInput::KeyCodeLeft)) { crossAxisScrolling = page->isGamesScrolling(); dir = Page::ScrollDirectionPlaylistBack; }
+			else if (input_.keystate(UserInput::KeyCodeDown)) { crossAxisScrolling = page->isPlaylistScrolling(); dir = Page::ScrollDirectionForward; }
+			else if (input_.keystate(UserInput::KeyCodeUp)) { crossAxisScrolling = page->isPlaylistScrolling(); dir = Page::ScrollDirectionBack; }
 		}
 
-		// If a valid scroll input was detected
-		if (requestedScroll != RETROFE_IDLE) {
-
-			// If the user tries to scroll X while Y is still moving
+		if (dir != Page::ScrollDirectionIdle) {
 			if (crossAxisScrolling) {
 				return RETROFE_HIGHLIGHT_REQUEST;
 			}
-
 			attract_.reset();
 
-			// Handle info menu intercepts
+			// ARM the physics engine with the direction
+			page->setScrolling(dir);
+
 			if (infoExitOnScroll) {
-				if (RETROFE_STATE s = handleInfoExitOr(requestedScroll); s != RETROFE_IDLE) {
-					return s;
-				}
+				if (RETROFE_STATE s = handleInfoExitOr(RETROFE_SCROLLING); s != RETROFE_IDLE) return s;
 			}
 
-			return requestedScroll;
+			// Send the state machine to the unified observer state
+			return RETROFE_SCROLLING;
 		}
 	}
 
-	// 5. Instant Feedback Inputs (Music Volume)
+	// 4. Instant Feedback Inputs (Music Volume)
 	if (input_.keystate(UserInput::KeyCodeMusicVolumeUp)) {
-		keyLastTime_ = currentTime_;
 		handleMusicControls(UserInput::KeyCodeMusicVolumeUp);
 		return state;
 	}
 	else if (input_.keystate(UserInput::KeyCodeMusicVolumeDown)) {
-		keyLastTime_ = currentTime_;
 		handleMusicControls(UserInput::KeyCodeMusicVolumeDown);
 		return state;
 	}
 
-	// 6. Delayed Key Logic (Navigation & Toggles)
-	if (currentTime_ - keyLastTime_ > keyDelayTime_)
-	{
-		if (input_.keystate(UserInput::KeyCodeMusicPlayPause)) {
-			keyLastTime_ = currentTime_;
-			handleMusicControls(UserInput::KeyCodeMusicPlayPause);
-			return state;
-		}
-		else if (input_.keystate(UserInput::KeyCodeMusicNext)) {
-			keyLastTime_ = currentTime_;
-			handleMusicControls(UserInput::KeyCodeMusicNext);
-			return state;
-		}
-		else if (input_.keystate(UserInput::KeyCodeMusicPrev)) {
-			keyLastTime_ = currentTime_;
-			handleMusicControls(UserInput::KeyCodeMusicPrev);
-			return state;
-		}
-		else if (input_.keystate(UserInput::KeyCodeMusicToggleShuffle)) {
-			keyLastTime_ = currentTime_;
-			handleMusicControls(UserInput::KeyCodeMusicToggleShuffle);
-			return state;
-		}
-		else if (input_.keystate(UserInput::KeyCodeMusicToggleLoop)) {
-			keyLastTime_ = currentTime_;
-			handleMusicControls(UserInput::KeyCodeMusicToggleLoop);
-			return state;
-		}
-
-		if (page->isIdle() && input_.keystate(UserInput::KeyCodeKisok)) {
-			attract_.reset();
-			kioskLock_ = !kioskLock_;
-			page->setLocked(kioskLock_);
-			page->onNewItemSelected();
-			keyLastTime_ = currentTime_;
-			return RETROFE_IDLE;
-		}
-		else if (input_.keystate(UserInput::KeyCodeShowFps)) {
-			keyLastTime_ = currentTime_;
-			if (!debugFont_) {
-				std::string fontPath = Configuration::absolutePath + "/font.ttf";
-				debugFont_ = TTF_OpenFont(fontPath.c_str(), 24);
-				if (!debugFont_) {
-					LOG_ERROR("RetroFE", "Could not load font: " + fontPath);
-					return state;
-				}
-			}
-			showFps_ = !showFps_;
-		}
-		else if (input_.keystate(UserInput::KeyCodeMenu) && !menuMode_) {
-			keyLastTime_ = currentTime_;
-			return RETROFE_MENUMODE_START_REQUEST;
-		}
-		else if (input_.keystate(UserInput::KeyCodeSettingsCombo1) && input_.keystate(UserInput::KeyCodeSettingsCombo2)) {
-			attract_.reset();
-			bool controllerComboSettings = false;
-			config_.getProperty(OPTION_CONTROLLERCOMBOSETTINGS, controllerComboSettings);
-			if (controllerComboSettings) return RETROFE_SETTINGS_REQUEST;
-		}
-		else if (input_.keystate(UserInput::KeyCodeQuitCombo1) && input_.keystate(UserInput::KeyCodeQuitCombo2)) {
-			attract_.reset();
-			bool controllerComboExit = false;
-			config_.getProperty(OPTION_CONTROLLERCOMBOEXIT, controllerComboExit);
-			if (controllerComboExit) {
-#ifdef WIN32
-				Utils::postMessage("MediaplayerHiddenWindow", 0x8001, 51, 0);
-#endif
-				return RETROFE_QUIT_REQUEST;
-			}
-		}
-		else if (!kioskLock_ && input_.lastKeyPressed(UserInput::KeyCodeCycleCollection)) {
-			if (!(currentTime_ - keyLastTime_ > keyDelayTime_ + 1.0)) return RETROFE_IDLE;
-			input_.resetStates();
-			keyLastTime_ = currentTime_;
-			attract_.reset();
-			if (collectionCycle_.size()) {
-				collectionCycleIt_++;
-				if (collectionCycleIt_ == collectionCycle_.end()) collectionCycleIt_ = collectionCycle_.begin();
-				if (!pages_.empty() && pages_.size() > 1) pages_.pop();
-				nextPageItem_ = new Item();
-				nextPageItem_->name = *collectionCycleIt_;
-				menuMode_ = false;
-				return RETROFE_NEXT_PAGE_REQUEST;
-			}
-			return RETROFE_IDLE;
-		}
-		else if (!kioskLock_ && input_.keystate(UserInput::KeyCodePrevCycleCollection)) {
-			if (!(currentTime_ - keyLastTime_ > keyDelayTime_ + 1.0)) return RETROFE_IDLE;
-			input_.resetStates();
-			keyLastTime_ = currentTime_;
-			attract_.reset();
-			if (collectionCycle_.size()) {
-				if (collectionCycleIt_ == collectionCycle_.begin()) collectionCycleIt_ = collectionCycle_.end();
-				collectionCycleIt_--;
-				if (!pages_.empty() && pages_.size() > 1) pages_.pop();
-				nextPageItem_ = new Item();
-				nextPageItem_->name = *collectionCycleIt_;
-				menuMode_ = false;
-				return RETROFE_NEXT_PAGE_REQUEST;
-			}
-			return RETROFE_IDLE;
-		}
-		else if (!kioskLock_ && input_.keystate(UserInput::KeyCodeQuickList)) {
-			attract_.reset();
-			state = RETROFE_QUICKLIST_REQUEST;
-		}
-		else if (!kioskLock_ && (input_.keystate(UserInput::KeyCodeCyclePlaylist) || input_.keystate(UserInput::KeyCodeNextCyclePlaylist))) {
-			attract_.reset();
-			keyLastTime_ = currentTime_;
-			return RETROFE_PLAYLIST_NEXT_CYCLE;
-		}
-		else if (!kioskLock_ && input_.keystate(UserInput::KeyCodePrevCyclePlaylist)) {
-			attract_.reset();
-			keyLastTime_ = currentTime_;
-			return RETROFE_PLAYLIST_PREV_CYCLE;
-		}
-		else if (!kioskLock_ && input_.keystate(UserInput::KeyCodeBack)) {
-			attract_.reset();
-			if (back(shouldQuit) || shouldQuit) {
-				if (collectionCycle_.size() && collectionCycleIt_ != collectionCycle_.begin()) collectionCycleIt_--;
-				keyLastTime_ = currentTime_;
-				return shouldQuit ? RETROFE_QUIT_REQUEST : RETROFE_BACK_REQUEST;
-			}
-		}
+	// 5. Discrete Key Logic (Toggles & Menus)
+	if (input_.newKeyPressed(UserInput::KeyCodeMusicPlayPause)) {
+		handleMusicControls(UserInput::KeyCodeMusicPlayPause);
+		return state;
+	}
+	else if (input_.newKeyPressed(UserInput::KeyCodeMusicNext)) {
+		handleMusicControls(UserInput::KeyCodeMusicNext);
+		return state;
+	}
+	else if (input_.newKeyPressed(UserInput::KeyCodeMusicPrev)) {
+		handleMusicControls(UserInput::KeyCodeMusicPrev);
+		return state;
+	}
+	else if (input_.newKeyPressed(UserInput::KeyCodeMusicToggleShuffle)) {
+		handleMusicControls(UserInput::KeyCodeMusicToggleShuffle);
+		return state;
+	}
+	else if (input_.newKeyPressed(UserInput::KeyCodeMusicToggleLoop)) {
+		handleMusicControls(UserInput::KeyCodeMusicToggleLoop);
+		return state;
 	}
 
+	// 6. Letter Skipping (Starts as press, becomes hold)
 	if (page->isIdle()) {
 		static bool wasLetterSkipping = false;
 		static float letterHoldStartTime = 0.0f;
@@ -3570,27 +3336,17 @@ RetroFE::RETROFE_STATE RetroFE::processUserInput(Page* page) {
 
 		if (isLetterSkipping) {
 			if (!wasLetterSkipping) {
-				// 1. Fresh tap: Trigger instantly (respecting a tiny 50ms global debounce)
-				if (currentTime_ - keyLastTime_ > 0.05f) {
-					shouldExecuteSkip = true;
-					letterHoldStartTime = currentTime_;
-				}
+				shouldExecuteSkip = true;
+				letterHoldStartTime = currentTime_;
 			}
 			else {
-				// 2. Held down: Wait for a 400ms initial delay before repeating
 				if (currentTime_ - letterHoldStartTime > 0.4f) {
-					// 3. Resume skipping at the designated rapid repeat rate
-					if (currentTime_ - keyLastTime_ > keyLetterSkipDelayTime_) {
-						shouldExecuteSkip = true;
-					}
+					shouldExecuteSkip = true;
 				}
 			}
 		}
-
-		// Track the hardware state for the next frame
 		wasLetterSkipping = isLetterSkipping;
 
-		// If the debounce logic gave us the green light, execute the jump
 		if (shouldExecuteSkip) {
 			if (isLetterUp) {
 				attract_.reset();
@@ -3603,7 +3359,7 @@ RetroFE::RETROFE_STATE RetroFE::processUserInput(Page* page) {
 						else page->letterScroll(Page::ScrollDirectionBack);
 					}
 					if (RETROFE_STATE s = handleInfoExitOr(RETROFE_MENUJUMP_REQUEST); s != RETROFE_IDLE) return s;
-					state = RETROFE_MENUJUMP_REQUEST;
+					return RETROFE_MENUJUMP_REQUEST;
 				}
 			}
 			else if (isLetterDown) {
@@ -3617,125 +3373,123 @@ RetroFE::RETROFE_STATE RetroFE::processUserInput(Page* page) {
 						else page->letterScroll(Page::ScrollDirectionForward);
 					}
 					if (RETROFE_STATE s = handleInfoExitOr(RETROFE_MENUJUMP_REQUEST); s != RETROFE_IDLE) return s;
-					state = RETROFE_MENUJUMP_REQUEST;
+					return RETROFE_MENUJUMP_REQUEST;
 				}
 			}
 		}
 	}
 
-	// 8. Context-Sensitive Navigation (Collection Jumps & Selection)
-	if (page->isIdle() && currentTime_ - keyLastTime_ > keyDelayTime_)
-	{
-		if (!kioskLock_ && ((input_.keystate(UserInput::KeyCodeCollectionUp) && (page->isHorizontalScroll() || !input_.keystate(UserInput::KeyCodeUp))) ||
-			(input_.keystate(UserInput::KeyCodeCollectionLeft) && (!page->isHorizontalScroll() || !input_.keystate(UserInput::KeyCodeLeft))))) {
+	// 7. Context-Sensitive Navigation
+	if (page->isIdle()) {
+		if (!kioskLock_ && ((input_.newKeyPressed(UserInput::KeyCodeCollectionUp) && (page->isHorizontalScroll() || !input_.keystate(UserInput::KeyCodeUp))) ||
+			(input_.newKeyPressed(UserInput::KeyCodeCollectionLeft) && (!page->isHorizontalScroll() || !input_.keystate(UserInput::KeyCodeLeft))))) {
 			attract_.reset();
 			bool backOnCollection = false;
 			config_.getProperty(OPTION_BACKONCOLLECTION, backOnCollection);
-			state = (page->getMenuDepth() == 1 || !backOnCollection) ? RETROFE_COLLECTION_UP_REQUEST : RETROFE_BACK_REQUEST;
+			return (page->getMenuDepth() == 1 || !backOnCollection) ? RETROFE_COLLECTION_UP_REQUEST : RETROFE_BACK_REQUEST;
 		}
-		else if (!kioskLock_ && ((input_.keystate(UserInput::KeyCodeCollectionDown) && (page->isHorizontalScroll() || !input_.keystate(UserInput::KeyCodeDown))) ||
-			(input_.keystate(UserInput::KeyCodeCollectionRight) && (!page->isHorizontalScroll() || !input_.keystate(UserInput::KeyCodeRight))))) {
+		else if (!kioskLock_ && ((input_.newKeyPressed(UserInput::KeyCodeCollectionDown) && (page->isHorizontalScroll() || !input_.keystate(UserInput::KeyCodeDown))) ||
+			(input_.newKeyPressed(UserInput::KeyCodeCollectionRight) && (!page->isHorizontalScroll() || !input_.keystate(UserInput::KeyCodeRight))))) {
 			attract_.reset();
 			bool backOnCollection = false;
 			config_.getProperty(OPTION_BACKONCOLLECTION, backOnCollection);
-			state = (page->getMenuDepth() == 1 || !backOnCollection) ? RETROFE_COLLECTION_DOWN_REQUEST : RETROFE_BACK_REQUEST;
+			return (page->getMenuDepth() == 1 || !backOnCollection) ? RETROFE_COLLECTION_DOWN_REQUEST : RETROFE_BACK_REQUEST;
 		}
-		else if (!kioskLock_ && input_.keystate(UserInput::KeyCodePageUp)) {
+		else if (!kioskLock_ && input_.newKeyPressed(UserInput::KeyCodePageUp)) {
 			attract_.reset();
 			page->pageScroll(Page::ScrollDirectionBack);
-			state = RETROFE_MENUJUMP_REQUEST;
+			return RETROFE_MENUJUMP_REQUEST;
 		}
-		else if (!kioskLock_ && input_.keystate(UserInput::KeyCodePageDown)) {
+		else if (!kioskLock_ && input_.newKeyPressed(UserInput::KeyCodePageDown)) {
 			attract_.reset();
 			page->pageScroll(Page::ScrollDirectionForward);
-			state = RETROFE_MENUJUMP_REQUEST;
+			return RETROFE_MENUJUMP_REQUEST;
 		}
-		else if (!kioskLock_ && input_.keystate(UserInput::KeyCodeFavPlaylist)) {
+		else if (!kioskLock_ && input_.newKeyPressed(UserInput::KeyCodeFavPlaylist)) {
 			attract_.reset();
 			page->favPlaylist();
-			state = RETROFE_PLAYLIST_REQUEST;
+			return RETROFE_PLAYLIST_REQUEST;
 		}
-		else if (!kioskLock_ && input_.keystate(UserInput::KeyCodeSettings)) {
+		else if (!kioskLock_ && input_.newKeyPressed(UserInput::KeyCodeSettings)) {
 			attract_.reset();
-			state = RETROFE_SETTINGS_REQUEST;
+			return RETROFE_SETTINGS_REQUEST;
 		}
-		else if (!kioskLock_ && (input_.keystate(UserInput::KeyCodeNextPlaylist) || (input_.keystate(UserInput::KeyCodePlaylistDown) && page->isHorizontalScroll()) || (input_.keystate(UserInput::KeyCodePlaylistRight) && !page->isHorizontalScroll()))) {
+		else if (!kioskLock_ && (input_.newKeyPressed(UserInput::KeyCodeNextPlaylist) || (input_.newKeyPressed(UserInput::KeyCodePlaylistDown) && page->isHorizontalScroll()) || (input_.newKeyPressed(UserInput::KeyCodePlaylistRight) && !page->isHorizontalScroll()))) {
 			attract_.reset();
-			state = RETROFE_PLAYLIST_NEXT;
+			return RETROFE_PLAYLIST_NEXT;
 		}
-		else if (!kioskLock_ && (input_.keystate(UserInput::KeyCodePrevPlaylist) || (input_.keystate(UserInput::KeyCodePlaylistUp) && page->isHorizontalScroll()) || (input_.keystate(UserInput::KeyCodePlaylistLeft) && !page->isHorizontalScroll()))) {
+		else if (!kioskLock_ && (input_.newKeyPressed(UserInput::KeyCodePrevPlaylist) || (input_.newKeyPressed(UserInput::KeyCodePlaylistUp) && page->isHorizontalScroll()) || (input_.newKeyPressed(UserInput::KeyCodePlaylistLeft) && !page->isHorizontalScroll()))) {
 			attract_.reset();
-			state = RETROFE_PLAYLIST_PREV;
+			return RETROFE_PLAYLIST_PREV;
 		}
-		else if (!kioskLock_ && input_.keystate(UserInput::KeyCodeRemovePlaylist)) {
+		else if (!kioskLock_ && input_.newKeyPressed(UserInput::KeyCodeRemovePlaylist)) {
 			attract_.reset();
 			page->rememberSelectedItem();
 			page->removePlaylist();
 			currentPage_->reallocateMenuSpritePoints();
-			state = RETROFE_PLAYLIST_ENTER;
+			return RETROFE_PLAYLIST_ENTER;
 		}
-		else if (!kioskLock_ && input_.keystate(UserInput::KeyCodeAddPlaylist)) {
+		else if (!kioskLock_ && input_.newKeyPressed(UserInput::KeyCodeAddPlaylist)) {
 			attract_.reset();
 			page->rememberSelectedItem();
 			page->addPlaylist();
 			currentPage_->onNewItemSelected();
-			state = RETROFE_PLAYLIST_ENTER;
+			return RETROFE_PLAYLIST_ENTER;
 		}
-		else if (!kioskLock_ && input_.keystate(UserInput::KeyCodeTogglePlaylist)) {
+		else if (!kioskLock_ && input_.newKeyPressed(UserInput::KeyCodeTogglePlaylist)) {
 			if (currentPage_->getPlaylistName() != "favorites" && currentPage_->getPlaylistName() != "settings" && currentPage_->getPlaylistName() != "quicklist") {
 				attract_.reset();
 				page->rememberSelectedItem();
 				page->togglePlaylist();
 				currentPage_->onNewItemSelected();
-				state = RETROFE_PLAYLIST_ENTER;
+				return RETROFE_PLAYLIST_ENTER;
 			}
 		}
-		else if (input_.keystate(UserInput::KeyCodeToggleGameInfo) || (input_.keystate(UserInput::KeyCodeGameInfoCombo1) && input_.keystate(UserInput::KeyCodeGameInfoCombo2))) {
+		else if (input_.newKeyPressed(UserInput::KeyCodeToggleGameInfo) || (input_.keystate(UserInput::KeyCodeGameInfoCombo1) && input_.newKeyPressed(UserInput::KeyCodeGameInfoCombo2))) {
 			attract_.reset();
 			input_.resetStates();
-			keyLastTime_ = currentTime_;
 			if (gameInfo_) return RETROFE_GAMEINFO_EXIT;
 			if (collectionInfo_) { resumeAfterInfoExit_ = RETROFE_GAMEINFO_ENTER; return RETROFE_COLLECIONINFO_EXIT; }
 			if (buildInfo_) { resumeAfterInfoExit_ = RETROFE_GAMEINFO_ENTER; return RETROFE_BUILDINFO_EXIT; }
 			return RETROFE_GAMEINFO_ENTER;
 		}
-		else if (input_.keystate(UserInput::KeyCodeToggleCollectionInfo) || (input_.keystate(UserInput::KeyCodeCollectionInfoCombo1) && input_.keystate(UserInput::KeyCodeCollectionInfoCombo2))) {
+		else if (input_.newKeyPressed(UserInput::KeyCodeToggleCollectionInfo) || (input_.keystate(UserInput::KeyCodeCollectionInfoCombo1) && input_.newKeyPressed(UserInput::KeyCodeCollectionInfoCombo2))) {
 			attract_.reset();
 			input_.resetStates();
-			keyLastTime_ = currentTime_;
 			if (gameInfo_) { currentPage_->gameInfoExit(); gameInfo_ = false; }
 			else if (buildInfo_) { currentPage_->buildInfoExit(); buildInfo_ = false; }
 			state = collectionInfo_ ? RETROFE_COLLECIONINFO_EXIT : RETROFE_COLLECTIONINFO_ENTER;
 			collectionInfo_ = !collectionInfo_;
+			return state;
 		}
-		else if (input_.keystate(UserInput::KeyCodeToggleBuildInfo) || (input_.keystate(UserInput::KeyCodeBuildInfoCombo1) && input_.keystate(UserInput::KeyCodeBuildInfoCombo2))) {
+		else if (input_.newKeyPressed(UserInput::KeyCodeToggleBuildInfo) || (input_.keystate(UserInput::KeyCodeBuildInfoCombo1) && input_.newKeyPressed(UserInput::KeyCodeBuildInfoCombo2))) {
 			attract_.reset();
 			input_.resetStates();
-			keyLastTime_ = currentTime_;
 			if (gameInfo_) { currentPage_->gameInfoExit(); gameInfo_ = false; }
 			else if (collectionInfo_) { currentPage_->collectionInfoExit(); collectionInfo_ = false; }
 			state = buildInfo_ ? RETROFE_BUILDINFO_EXIT : RETROFE_BUILDINFO_ENTER;
 			buildInfo_ = !buildInfo_;
+			return state;
 		}
-		else if (input_.keystate(UserInput::KeyCodeSkipForward)) { attract_.reset(); page->skipForward(); page->jukeboxJump(); keyLastTime_ = currentTime_; }
-		else if (input_.keystate(UserInput::KeyCodeSkipBackward)) { attract_.reset(); page->skipBackward(); page->jukeboxJump(); keyLastTime_ = currentTime_; }
-		else if (input_.keystate(UserInput::KeyCodeSkipForwardp)) { attract_.reset(); page->skipForwardp(); page->jukeboxJump(); keyLastTime_ = currentTime_; }
-		else if (input_.keystate(UserInput::KeyCodeSkipBackwardp)) { attract_.reset(); page->skipBackwardp(); page->jukeboxJump(); keyLastTime_ = currentTime_; }
-		else if (input_.keystate(UserInput::KeyCodePause)) { page->pause(); page->jukeboxJump(); keyLastTime_ = currentTime_; paused_ = !paused_; if (!paused_) attract_.activate(); }
-		else if (input_.keystate(UserInput::KeyCodeRestart)) { attract_.reset(); page->restart(); keyLastTime_ = currentTime_; }
-		else if (input_.keystate(UserInput::KeyCodeRandom)) { attract_.reset(); page->selectRandom(); state = RETROFE_MENUJUMP_REQUEST; }
-		else if (input_.keystate(UserInput::KeyCodeSelect) && !currentPage_->isMenuScrolling()) {
+		else if (input_.newKeyPressed(UserInput::KeyCodeSkipForward)) { attract_.reset(); page->skipForward(); page->jukeboxJump(); }
+		else if (input_.newKeyPressed(UserInput::KeyCodeSkipBackward)) { attract_.reset(); page->skipBackward(); page->jukeboxJump(); }
+		else if (input_.newKeyPressed(UserInput::KeyCodeSkipForwardp)) { attract_.reset(); page->skipForwardp(); page->jukeboxJump(); }
+		else if (input_.newKeyPressed(UserInput::KeyCodeSkipBackwardp)) { attract_.reset(); page->skipBackwardp(); page->jukeboxJump(); }
+		else if (input_.newKeyPressed(UserInput::KeyCodePause)) { page->pause(); page->jukeboxJump(); paused_ = !paused_; if (!paused_) attract_.activate(); }
+		else if (input_.newKeyPressed(UserInput::KeyCodeRestart)) { attract_.reset(); page->restart(); }
+		else if (input_.newKeyPressed(UserInput::KeyCodeRandom)) { attract_.reset(); page->selectRandom(); return RETROFE_MENUJUMP_REQUEST; }
+		else if (input_.newKeyPressed(UserInput::KeyCodeSelect) && !currentPage_->isMenuScrolling()) {
 			attract_.reset();
 			nextPageItem_ = page->getSelectedItem();
 			if (nextPageItem_) {
 				if (nextPageItem_->leaf) {
 					if (menuMode_) {
 						if (RETROFE_STATE s = handleInfoExitOr(RETROFE_HANDLE_MENUENTRY); s != RETROFE_IDLE) return s;
-						state = RETROFE_HANDLE_MENUENTRY;
+						return RETROFE_HANDLE_MENUENTRY;
 					}
 					else {
 						if (RETROFE_STATE s = handleInfoExitOr(RETROFE_LAUNCH_ENTER); s != RETROFE_IDLE) return s;
-						state = RETROFE_LAUNCH_ENTER;
+						return RETROFE_LAUNCH_ENTER;
 					}
 				}
 				else {
@@ -3748,55 +3502,106 @@ RetroFE::RETROFE_STATE RetroFE::processUserInput(Page* page) {
 						cib.updateLastPlayedPlaylist(currentPage_->getCollection(), nextPageItem_, size);
 						currentPage_->updateReloadables(0);
 					}
-					state = RETROFE_NEXT_PAGE_REQUEST;
+					return RETROFE_NEXT_PAGE_REQUEST;
 				}
 			}
 		}
-		else if (input_.keystate(UserInput::KeyCodeQuit)) {
+		else if (input_.newKeyPressed(UserInput::KeyCodeQuit)) {
 			attract_.reset();
 #ifdef WIN32
 			Utils::postMessage("MediaplayerHiddenWindow", 0x8001, 51, 0);
 #endif
-			state = RETROFE_QUIT_REQUEST;
+			return RETROFE_QUIT_REQUEST;
 		}
-		else if (input_.keystate(UserInput::KeyCodeReboot)) { attract_.reset(); reboot_ = true; state = RETROFE_QUIT_REQUEST; }
-		else if (!kioskLock_ && input_.keystate(UserInput::KeyCodeSaveFirstPlaylist)) {
+		else if (input_.newKeyPressed(UserInput::KeyCodeReboot)) { attract_.reset(); reboot_ = true; return RETROFE_QUIT_REQUEST; }
+		else if (!kioskLock_ && input_.newKeyPressed(UserInput::KeyCodeSaveFirstPlaylist)) {
 			attract_.reset();
 			if (page->getMenuDepth() == 1) { firstPlaylist_ = page->getPlaylistName(); saveRetroFEState(); }
 		}
-	}
-
-	// 9. FINAL DECISION GATE: Input Priority vs. Momentum Coasting
-	if (state != RETROFE_IDLE)
-	{
-		keyLastTime_ = currentTime_;
-		return state;
-	}
-
-	if (!userScrolling && !attract_.isActive())
-	{
-		// COAST LOGIC:
-		// If we are currently coasting, keep coasting as long as we have friction left.
-		// If we just released, only start coasting if we were actively fast-scrolling (the hold check).
-		bool shouldCoast = (state_ == RETROFE_SCROLL_COAST) ? page->canMenuCoast() : wasFastScrolling;
-
-		if (page->isMenuScrolling() && shouldCoast)
-		{
-			state = RETROFE_SCROLL_COAST;
+		else if (input_.newKeyPressed(UserInput::KeyCodeKisok)) {
+			attract_.reset();
+			kioskLock_ = !kioskLock_;
+			page->setLocked(kioskLock_);
+			page->onNewItemSelected();
 		}
-		else
-		{
-			// HARD STOP: Reset only when we are slow enough or finishing a coast.
-			page->resetScrollPeriod();
-			if (page->isMenuScrolling())
-			{
-				attract_.reset(attract_.isSet());
-				state = RETROFE_HIGHLIGHT_REQUEST;
+		else if (input_.newKeyPressed(UserInput::KeyCodeShowFps)) {
+			if (!debugFont_) {
+				std::string fontPath = Configuration::absolutePath + "/font.ttf";
+				debugFont_ = TTF_OpenFont(fontPath.c_str(), 24);
+				if (!debugFont_) {
+					LOG_ERROR("RetroFE", "Could not load font: " + fontPath);
+				}
+			}
+			showFps_ = !showFps_;
+		}
+		else if (input_.newKeyPressed(UserInput::KeyCodeMenu) && !menuMode_) {
+			return RETROFE_MENUMODE_START_REQUEST;
+		}
+		else if (input_.keystate(UserInput::KeyCodeSettingsCombo1) && input_.newKeyPressed(UserInput::KeyCodeSettingsCombo2)) {
+			attract_.reset();
+			bool controllerComboSettings = false;
+			config_.getProperty(OPTION_CONTROLLERCOMBOSETTINGS, controllerComboSettings);
+			if (controllerComboSettings) return RETROFE_SETTINGS_REQUEST;
+		}
+		else if (input_.keystate(UserInput::KeyCodeQuitCombo1) && input_.newKeyPressed(UserInput::KeyCodeQuitCombo2)) {
+			attract_.reset();
+			bool controllerComboExit = false;
+			config_.getProperty(OPTION_CONTROLLERCOMBOEXIT, controllerComboExit);
+			if (controllerComboExit) {
+#ifdef WIN32
+				Utils::postMessage("MediaplayerHiddenWindow", 0x8001, 51, 0);
+#endif
+				return RETROFE_QUIT_REQUEST;
+			}
+		}
+		else if (!kioskLock_ && input_.newKeyPressed(UserInput::KeyCodeCycleCollection)) {
+			input_.resetStates();
+			attract_.reset();
+			if (collectionCycle_.size()) {
+				collectionCycleIt_++;
+				if (collectionCycleIt_ == collectionCycle_.end()) collectionCycleIt_ = collectionCycle_.begin();
+				if (!pages_.empty() && pages_.size() > 1) pages_.pop();
+				nextPageItem_ = new Item();
+				nextPageItem_->name = *collectionCycleIt_;
+				menuMode_ = false;
+				return RETROFE_NEXT_PAGE_REQUEST;
+			}
+		}
+		else if (!kioskLock_ && input_.newKeyPressed(UserInput::KeyCodePrevCycleCollection)) {
+			input_.resetStates();
+			attract_.reset();
+			if (collectionCycle_.size()) {
+				if (collectionCycleIt_ == collectionCycle_.begin()) collectionCycleIt_ = collectionCycle_.end();
+				collectionCycleIt_--;
+				if (!pages_.empty() && pages_.size() > 1) pages_.pop();
+				nextPageItem_ = new Item();
+				nextPageItem_->name = *collectionCycleIt_;
+				menuMode_ = false;
+				return RETROFE_NEXT_PAGE_REQUEST;
+			}
+		}
+		else if (!kioskLock_ && input_.newKeyPressed(UserInput::KeyCodeQuickList)) {
+			attract_.reset();
+			return RETROFE_QUICKLIST_REQUEST;
+		}
+		else if (!kioskLock_ && (input_.newKeyPressed(UserInput::KeyCodeCyclePlaylist) || input_.newKeyPressed(UserInput::KeyCodeNextCyclePlaylist))) {
+			attract_.reset();
+			return RETROFE_PLAYLIST_NEXT_CYCLE;
+		}
+		else if (!kioskLock_ && input_.newKeyPressed(UserInput::KeyCodePrevCyclePlaylist)) {
+			attract_.reset();
+			return RETROFE_PLAYLIST_PREV_CYCLE;
+		}
+		else if (!kioskLock_ && input_.newKeyPressed(UserInput::KeyCodeBack)) {
+			attract_.reset();
+			if (back(shouldQuit) || shouldQuit) {
+				if (collectionCycle_.size() && collectionCycleIt_ != collectionCycle_.begin()) collectionCycleIt_--;
+				return shouldQuit ? RETROFE_QUIT_REQUEST : RETROFE_BACK_REQUEST;
 			}
 		}
 	}
 
-	return state;
+	return RETROFE_IDLE;
 }
 
 void RetroFE::handleMusicControls(UserInput::KeyCode_E input) {
@@ -4088,10 +3893,6 @@ CollectionInfo* RetroFE::getMenuCollection(const std::string& collectionName) {
 	}
 	collection->playlists["all"] = &collection->items;
 	return collection;
-}
-
-bool RetroFE::isUserActive(double now, double threshold) const {
-	return (now - keyLastTime_) < threshold;
 }
 
 void RetroFE::saveRetroFEState() const {

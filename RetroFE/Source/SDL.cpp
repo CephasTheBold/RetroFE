@@ -1514,7 +1514,10 @@ bool SDL::renderCopyF(SDL_Texture* texture,
 				pts[i].y = (tx * sinA + ty * cosA) + cy;
 			}
 
-			SDL_Color col = { 255, 255, 255, clamp_u8(alpha01) };
+			Uint8 texR = 255, texG = 255, texB = 255;
+			SDL_GetTextureColorMod(texture, &texR, &texG, &texB);
+
+			SDL_Color col = { texR, texG, texB, clamp_u8(alpha01) };
 			SDL_Vertex v[4];
 
 			v[0] = { pts[0], col, {u0, v0} };

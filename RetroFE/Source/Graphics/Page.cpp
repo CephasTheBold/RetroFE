@@ -639,7 +639,10 @@ void Page::setText(const std::string& text, int id) {
 
 
 void Page::setScrolling(ScrollDirection direction) {
-	scrolling_ = direction; // Store the direction for getScrolling()
+	const bool wasScrolling = scrolling_ != ScrollDirectionIdle;
+	const bool becomingIdle = direction == ScrollDirectionIdle && wasScrolling;
+
+	scrolling_ = direction;
 
 	switch (direction) {
 		case ScrollDirectionForward:
@@ -648,20 +651,27 @@ void Page::setScrolling(ScrollDirection direction) {
 		scrollActive_ = gameScrollActive_ = true;
 		playlistScrollActive_ = false;
 		break;
+
 		case ScrollDirectionPlaylistForward:
 		case ScrollDirectionPlaylistBack:
 		if (!scrollActive_) playlistScroll();
 		scrollActive_ = playlistScrollActive_ = true;
 		gameScrollActive_ = false;
 		break;
+
 		case ScrollDirectionIdle:
 		default:
 		scrollActive_ = playlistScrollActive_ = gameScrollActive_ = false;
+
+		if (becomingIdle) {
+			resetScrollPeriod();
+		}
+
 		break;
 	}
+
 	invalidateIdleCache();
 }
-
 
 bool Page::isHorizontalScroll() {
 	ScrollingList const* amenu = getAnActiveMenu();
@@ -1390,6 +1400,7 @@ bool Page::playlistExists(const std::string& playlist) {
 void Page::update(float dt) {
 	const std::string& playlistName = getPlaylistName();
 	bool playlistNameChanged = false;
+
 	if (playlistName != lastPlaylistName_) {
 		lastPlaylistName_ = playlistName;
 		playlistNameChanged = true;
@@ -1403,10 +1414,16 @@ void Page::update(float dt) {
 			if (playlistNameChanged) {
 				menu->playlistName = lastPlaylistName_;
 			}
-			menu->update(dt); // This updates the menu's internal cache
 
-			if (!menu->isScrollingListIdle()) menuIdle = false;
-			if (!menu->isScrollingListAttractIdle()) menuAttractIdle = false;
+			menu->update(dt);
+
+			if (!menu->isScrollingListIdle()) {
+				menuIdle = false;
+			}
+
+			if (!menu->isScrollingListAttractIdle()) {
+				menuAttractIdle = false;
+			}
 		}
 	}
 
@@ -1422,8 +1439,13 @@ void Page::update(float dt) {
 
 				bool done = (*it)->update(dt);
 
-				if (!(*it)->isIdle()) graphicsIdle = false;
-				if (!(*it)->isAttractIdle()) graphicsAttractIdle = false;
+				if (!(*it)->isIdle()) {
+					graphicsIdle = false;
+				}
+
+				if (!(*it)->isAttractIdle()) {
+					graphicsAttractIdle = false;
+				}
 
 				if (done && (*it)->getAnimationDoneRemove()) {
 					(*it)->freeGraphicsMemory();
@@ -1440,13 +1462,62 @@ void Page::update(float dt) {
 		}
 	}
 
-	// Save the evaluated state for the rest of the frame
 	cachedIsMenuIdle_ = menuIdle;
 	cachedIsGraphicsIdle_ = graphicsIdle;
 	cachedIsIdle_ = menuIdle && graphicsIdle;
 	cachedIsAttractIdle_ = menuAttractIdle && graphicsAttractIdle;
 
-	// Common update code for textStatusComponent_
+	if (pendingScrollSelect_ && cachedIsMenuIdle_) {
+		pendingScrollSelect_ = false;
+		onNewScrollItemSelected();
+	}
+
+	// Detect the transition from held scroll input to released scroll input.
+	const bool releasedScrollInput =
+		wasUserScrollInputActive_ && !userScrollInputActive_;
+
+	if (releasedScrollInput && scrolling_ != ScrollDirectionIdle) {
+		if (canBeginMenuCoast()) {
+			beginMenuCoast();
+		}
+		else {
+			setScrolling(ScrollDirectionIdle);
+		}
+	}
+
+	wasUserScrollInputActive_ = userScrollInputActive_;
+
+	// Centralized scroll physics.
+	// Runs once per completed visual jump, not every frame of the tween.
+	if (scrolling_ != ScrollDirectionIdle && cachedIsMenuIdle_) {
+		const bool forward =
+			scrolling_ == ScrollDirectionForward ||
+			scrolling_ == ScrollDirectionPlaylistForward;
+
+		const bool playlist =
+			scrolling_ == ScrollDirectionPlaylistForward ||
+			scrolling_ == ScrollDirectionPlaylistBack;
+
+		if (userScrollInputActive_) {
+			// Move first using the current period.
+			scroll(forward, playlist);
+
+			// Accelerate only for the next jump.
+			updateScrollPeriod();
+		}
+		else {
+			decelerateScrollPeriod(dt);
+
+			if (!canMenuCoast()) {
+				setScrolling(ScrollDirectionIdle);
+			}
+
+			if (scrolling_ != ScrollDirectionIdle) {
+				scroll(forward, playlist);
+			}
+		}
+	}
+
 	if (textStatusComponent_) {
 		std::string status;
 		config_.setProperty("status", status);
@@ -1509,6 +1580,51 @@ void Page::draw(int monitor) {
 	}
 }
 
+void Page::pumpGraphicsPreparation() {
+	for (const auto& layerComponents : LayerComponents_) {
+		for (Component* component : layerComponents) {
+			if (component) {
+				component->pumpGraphicsPreparation();
+			}
+		}
+	}
+
+	int currentDepth = 0;
+	for (auto const& menuList : menus_) {
+		if (currentDepth < static_cast<int>(menuDepth_)) {
+			for (auto& menu : menuList) {
+				if (menu) {
+					menu->pumpGraphicsPreparation();
+				}
+			}
+		}
+		++currentDepth;
+	}
+}
+
+bool Page::isGraphicsReadyForFirstRender() const {
+	for (const auto& layerComponents : LayerComponents_) {
+		for (Component* component : layerComponents) {
+			if (component && !component->isGraphicsReadyForFirstRender()) {
+				return false;
+			}
+		}
+	}
+
+	int currentDepth = 0;
+	for (auto const& menuList : menus_) {
+		if (currentDepth < static_cast<int>(menuDepth_)) {
+			for (auto& menu : menuList) {
+				if (menu && !menu->isGraphicsReadyForFirstRender()) {
+					return false;
+				}
+			}
+		}
+		++currentDepth;
+	}
+
+	return true;
+}
 
 void Page::removePlaylist() {
 	if (!selectedItem_) { LOG_WARNING("Page::removePlaylist", "No selectedItem_"); return; }
@@ -1702,6 +1818,14 @@ void Page::freeGraphicsMemory() {
 void Page::allocateGraphicsMemory() {
 	LOG_DEBUG("Page", "Allocating graphics memory");
 
+	for (const auto& layerComponents : LayerComponents_) {
+		for (Component* component : layerComponents) {
+			if (component) {
+				component->allocateGraphicsMemory();
+			}
+		}
+	}
+
 	int currentDepth = 0;
 	for (auto const& menuList : menus_) {
 		if (currentDepth < static_cast<int>(menuDepth_)) {
@@ -1719,13 +1843,6 @@ void Page::allocateGraphicsMemory() {
 	if (highlightSoundChunk_) highlightSoundChunk_->allocate();
 	if (selectSoundChunk_) selectSoundChunk_->allocate();
 
-	for (const auto& layerComponents : LayerComponents_) {
-		for (Component* component : layerComponents) {
-			if (component) {
-				component->allocateGraphicsMemory();
-			}
-		}
-	}
 	LOG_DEBUG("Page", "Allocate graphics memory complete");
 }
 
@@ -1840,10 +1957,10 @@ void Page::resetScrollPeriod() const {
 	}
 }
 
-void Page::decelerateScrollPeriod() {
+void Page::decelerateScrollPeriod(float dt) {
 	for (ScrollingList* menu : activeMenu_) {
 		if (menu) {
-			menu->decelerateScrollPeriod();
+			menu->decelerateScrollPeriod(dt);
 		}
 	}
 }
@@ -1855,6 +1972,25 @@ bool Page::canMenuCoast() const {
 	return false;
 }
 
+bool Page::canBeginMenuCoast() const {
+	const bool playlistScroll =
+		scrolling_ == ScrollDirectionPlaylistForward ||
+		scrolling_ == ScrollDirectionPlaylistBack;
+
+	for (ScrollingList* menu : activeMenu_) {
+		if (!menu)
+			continue;
+
+		if (playlistScroll != menu->isPlaylist())
+			continue;
+
+		if (menu->canBeginCoast())
+			return true;
+	}
+
+	return false;
+}
+
 void Page::updateScrollPeriod() const {
 	for (auto& menu : activeMenu_) {
 		if (menu) {
@@ -1863,25 +1999,46 @@ void Page::updateScrollPeriod() const {
 	}
 }
 
+void Page::beginMenuCoast() {
+	const bool playlistScroll =
+		scrolling_ == ScrollDirectionPlaylistForward ||
+		scrolling_ == ScrollDirectionPlaylistBack;
+
+	for (ScrollingList* menu : activeMenu_) {
+		if (!menu)
+			continue;
+
+		if (playlistScroll != menu->isPlaylist())
+			continue;
+
+		menu->beginCoast();
+	}
+}
+
 bool Page::isMenuFastScrolling() const {
+	if (scrolling_ == ScrollDirectionIdle)
+		return false;
+
+	if (!gameScrollActive_)
+		return false;
+
 	for (const auto& menu : activeMenu_) {
-		if (menu && menu->isFastScrolling()) {
+		if (menu && !menu->isPlaylist() && menu->isFastScrolling()) {
 			return true;
 		}
 	}
+
 	return false;
 }
 
 
 void Page::scroll(bool forward, bool playlist) {
-	// 1. Let all lists scroll normally (preserves animation triggers)
 	for (auto& menu : activeMenu_) {
 		if (menu && ((playlist && menu->isPlaylist()) || (!playlist && !menu->isPlaylist()))) {
 			menu->scroll(forward);
 		}
 	}
 
-	// 2. Safety net against rapid-scroll thread drift
 	ScrollingList* masterMenu = playlist ? playlistMenu_ : getAnActiveMenu();
 	if (masterMenu) {
 		size_t trueIndex = masterMenu->getScrollOffsetIndex();
@@ -1892,10 +2049,12 @@ void Page::scroll(bool forward, bool playlist) {
 		}
 	}
 
-	onNewScrollItemSelected();
+	pendingScrollSelect_ = true;
+
 	if (highlightSoundChunk_) {
 		highlightSoundChunk_->play();
 	}
+
 	invalidateIdleCache();
 }
 

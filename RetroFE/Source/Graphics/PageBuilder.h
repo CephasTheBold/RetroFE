@@ -68,7 +68,7 @@ private:
     void buildViewInfo(rapidxml::xml_node<> *componentXml, ViewInfo &info, rapidxml::xml_node<> *defaultXml = nullptr);
     bool buildComponents(rapidxml::xml_node<> *layout, Page *page, const std::string&);
     void loadTweens(Component *c, rapidxml::xml_node<> *componentXml);
-    std::shared_ptr<AnimationEvents> createTweenInstance(rapidxml::xml_node<>* componentXml);
+    std::shared_ptr<AnimationEvents> createTweenInstance(rapidxml::xml_node<>* componentXml, rapidxml::xml_node<>* defaultXml = nullptr);
     void buildTweenSet(AnimationEvents *tweens, rapidxml::xml_node<> *componentXml, const std::string& tagName, const std::string& tweenName);
     ScrollingList * buildMenu(rapidxml::xml_node<> *menuXml, Page &p, int monitor);
     void buildCustomMenu(ScrollingList *menu, const rapidxml::xml_node<> *menuXml, rapidxml::xml_node<> *itemDefaults);

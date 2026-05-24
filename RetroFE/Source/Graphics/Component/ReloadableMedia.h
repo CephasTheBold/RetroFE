@@ -27,7 +27,8 @@ public:
     void draw() override;
     void freeGraphicsMemory() override;
     void allocateGraphicsMemory() override;
-
+    void pumpGraphicsPreparation() override;
+    bool isGraphicsReadyForFirstRender() const override;
     Component* findComponent(const std::string& collection, const std::string& type,
         const std::string& basename, std::string_view filepath, bool systemMode, bool isVideo);
 
@@ -45,7 +46,7 @@ public:
 
 private:
     Component* reloadTexture();
-
+    void realizePendingMedia(bool allowChildPump, float dt, bool allowChildUpdate);
     // NEW: playlist change detection for playlist-driven media
     bool isPlaylistDriven_;
     bool isPlaylistDrivenType_() const;

@@ -33,6 +33,7 @@ UserInput::UserInput(Configuration &c)
     for(unsigned int i = 0; i < KeyCodeMax; ++i) {
         currentKeyState_[i] = false;
         lastKeyState_[i] = false;
+        lastInputTime_[i] = 0;
     }
     for ( unsigned int i = 0; i < cMaxJoy; i++ ) {
         joysticks_[i] = -1;
@@ -635,6 +636,24 @@ void UserInput::updateKeystate() {
         if (h) {
             h->updateKeystate(); // For polling-based inputs like touch
             currentKeyState_[keyHandlers_[i].second] |= h->pressed();
+        }
+    }
+    Uint32 now = SDL_GetTicks();
+    for (unsigned int i = 0; i < KeyCodeMax; ++i) {
+        // Is this a NEW press? (Hardware says true, but last frame was false)
+        if (currentKeyState_[i] && !lastKeyState_[i]) {
+
+            if (now - lastInputTime_[i] < DEBOUNCE_MS) {
+                // BOUNCE DETECTED! 
+                // The hardware flickered. Instead of dropping the input (which breaks holds),
+                // we trick the engine into thinking the button was never released.
+                lastKeyState_[i] = true;
+            }
+            else {
+                // VALID NEW PRESS!
+                // Anchor the timestamp so no other presses can happen for 100ms.
+                lastInputTime_[i] = now;
+            }
         }
     }
 }

@@ -167,12 +167,15 @@ public:
     Item* getSelectedItem();
     void allocateGraphicsMemory() override;
     void freeGraphicsMemory() override;
+    void pumpGraphicsPreparation() override;
+    bool isGraphicsReadyForFirstRender() const override;
     bool update(float dt) override;
     const std::vector<Component*>& getComponents() const;
     void setScrollAcceleration(float value);
     void setStartScrollTime(float value);
     void setMinScrollTime(float value);
     void setCoastFriction(float value);
+    bool canBeginCoast() const;
     void enableTextFallback(bool value);
     bool horizontalScroll{ false };
     void deallocateSpritePoints();
@@ -180,7 +183,9 @@ public:
     void reallocateSpritePoints();
     void resetScrollPeriod();
     void updateScrollPeriod();
-    void decelerateScrollPeriod();
+
+    void beginCoast();
+    void decelerateScrollPeriod(float dt);
     bool canCoast() const;
     bool isFastScrolling() const;
     void scroll(bool forward);
@@ -245,6 +250,10 @@ private:
     float scrollPeriod_{ 0 };
 	float letterSkipTimer_{ 0 };
     float coastFriction_{ 0.0f };
+    float currentDt_{0.0f};
+    bool coasting_ = false;
+    float coastElapsed_ = 0.0f;
+    float coastStartPeriod_ = 0.0f;
 
     Configuration& config_;
     FontManager* fontInst_;

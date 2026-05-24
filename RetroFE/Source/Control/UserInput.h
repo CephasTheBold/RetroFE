@@ -126,5 +126,7 @@ private:
     bool sdlGameController_{ false };
     std::vector<std::pair<InputHandler *, KeyCode_E> > keyHandlers_;
     bool lastKeyState_[KeyCodeMax]; 
-    bool currentKeyState_[KeyCodeMax]; 
+    bool currentKeyState_[KeyCodeMax];
+    Uint32 lastInputTime_[KeyCodeMax];
+    static const Uint32 DEBOUNCE_MS = 100; // 100ms lockout for bouncy hardware
 };

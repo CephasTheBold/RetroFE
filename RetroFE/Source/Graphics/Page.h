@@ -113,6 +113,8 @@ public:
     void draw(int monitor);
     void freeGraphicsMemory();
     void allocateGraphicsMemory();
+    void pumpGraphicsPreparation();
+    bool isGraphicsReadyForFirstRender() const;
     void deInitializeFonts( ) const;
     void initializeFonts( ) const;
     void playSelect();
@@ -161,8 +163,11 @@ public:
     bool isGamesScrolling() const;
     bool  isPlaying() const;
     void  resetScrollPeriod() const;
-    void decelerateScrollPeriod();
+    void decelerateScrollPeriod(float dt);
     bool canMenuCoast() const;
+    bool canBeginMenuCoast() const;
+    bool wasUserScrollInputActive_ = false;
+    void beginMenuCoast();
     void  updateScrollPeriod() const;
     bool  isMenuFastScrolling() const;
     void  scroll(bool forward, bool playlist);
@@ -259,6 +264,7 @@ private:
     bool cachedIsMenuIdle_{ true };
     bool cachedIsGraphicsIdle_{ true };
     bool cachedIsAttractIdle_{ true };
+	bool pendingScrollSelect_{ false };
 
     void invalidateIdleCache(); // Helper to flag state as active
 

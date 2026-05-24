@@ -837,6 +837,23 @@ void ScrollingList::freeGraphicsMemory() {
     }
 }
 
+void ScrollingList::pumpGraphicsPreparation() {
+    for (Component* c : components_.raw()) {
+        if (c) {
+            c->pumpGraphicsPreparation();
+        }
+    }
+}
+
+bool ScrollingList::isGraphicsReadyForFirstRender() const {
+    for (Component* c : components_.raw()) {
+        if (c && !c->isGraphicsReadyForFirstRender()) {
+            return false;
+        }
+    }
+    return true;
+}
+
 void ScrollingList::triggerEnterEvent( )
 {
     triggerEventOnAll("enter", 0);
@@ -961,28 +978,20 @@ void ScrollingList::triggerEventOnAll(const std::string& event, int menuIndex) {
 }
 
 bool ScrollingList::update(float dt) {
+    currentDt_ = dt;
     bool done = Component::update(dt);
 
-    // Grab the base component state first
+    // 1. Handle Letter Skip Timer
+    if (letterSkipTimer_ > 0.0f) {
+        letterSkipTimer_ -= dt;
+        if (letterSkipTimer_ <= 0.0f) letterSkipTimer_ = 0.0f;
+    }
+
+    // 2. Child Component Updates (Evaluate idle state)
+    size_t scrollPointsSize = scrollPoints_ ? scrollPoints_->size() : 0;
     bool allIdle = Component::isIdle();
     bool allAttractIdle = Component::isAttractIdle();
 
-    if (components_.empty() || !items_ || !scrollPoints_ || scrollPoints_->empty()) {
-        cachedIdle_ = allIdle;
-        cachedAttractIdle_ = allAttractIdle;
-        return done;
-    }
-
-    if (letterSkipTimer_ > 0.0f) {
-        letterSkipTimer_ -= dt;
-        if (letterSkipTimer_ <= 0.0f) {
-            letterSkipTimer_ = 0.0f;
-        }
-    }
-
-    size_t scrollPointsSize = scrollPoints_->size();
-
-    // Evaluate children and aggregate state
     for (unsigned int i = 0; i < scrollPointsSize; i++) {
         Component* c = components_[i];
         if (c) {
@@ -992,10 +1001,10 @@ bool ScrollingList::update(float dt) {
         }
     }
 
-    // Cache the result for the rest of the frame
     cachedIdle_ = allIdle;
     cachedAttractIdle_ = allAttractIdle;
 
+    // Notice: The movement logic is gone from here! It lives in Page.cpp now.
     return done;
 }
 
@@ -1146,6 +1155,15 @@ bool ScrollingList::allocateTexture(size_t componentIndex, size_t fullListIndex)
     if (t) {
         t->playlistName = playlistName;
         t->setHighPriority(componentIndex == selectedOffsetIndex_);
+
+        // CLEAN FIX: Instantly arm the component with its slot's baseline position and tween definitions
+        if (scrollPoints_ && componentIndex < scrollPoints_->size()) {
+            t->baseViewInfo = *(*scrollPoints_)[componentIndex];
+        }
+        if (tweenPoints_ && componentIndex < tweenPoints_->size()) {
+            t->setTweens((*tweenPoints_)[componentIndex]);
+        }
+
         components_[componentIndex] = t;
     }
 
@@ -1173,6 +1191,7 @@ void ScrollingList::deallocateTexture(size_t index) {
     }
 }
 
+
 const std::vector<Component*>& ScrollingList::getComponents() const {
     return components_.raw();
 }
@@ -1185,78 +1204,105 @@ bool ScrollingList::isScrollingListAttractIdle() {
     return cachedAttractIdle_;
 }
 
-void ScrollingList::resetScrollPeriod(  )
-{
+void ScrollingList::resetScrollPeriod() {
     scrollPeriod_ = startScrollTime_;
-    return;
+    coasting_ = false;
+    coastElapsed_ = 0.0f;
+    coastStartPeriod_ = 0.0f;
 }
 
-void ScrollingList::updateScrollPeriod(  )
-{
+void ScrollingList::updateScrollPeriod() {
+    if (scrollPeriod_ <= 0.0f) {
+        scrollPeriod_ = startScrollTime_;
+    }
+
     scrollPeriod_ -= scrollAcceleration_;
-    if ( scrollPeriod_ < minScrollTime_ )
-    {
+
+    if (scrollPeriod_ < minScrollTime_) {
         scrollPeriod_ = minScrollTime_;
     }
 }
 
 void ScrollingList::setCoastFriction(float value) {
-    // If it's explicitly disabled, leave it at 0
-    if (value <= 0.0f) {
-        coastFriction_ = 0.0f;
-        return;
-    }
-
-    // Prevent invalid values that would cause infinite coasting (friction must be > 1)
-    if (value <= 1.0f) {
-        value = 1.01f;
-    }
-
-    coastFriction_ = value;
+    coastFriction_ = std::max(0.0f, value);
 }
 
-void ScrollingList::decelerateScrollPeriod() {
-    // If disabled, instantly snap to the start time (legacy behavior)
-    if (coastFriction_ == 0.0f) {
+bool ScrollingList::canBeginCoast() const {
+    constexpr float EPSILON = 0.0001f;
+    return coastFriction_ > 0.0f &&
+        scrollPeriod_ <= minScrollTime_ + EPSILON;
+}
+
+void ScrollingList::beginCoast() {
+    if (!canBeginCoast()) {
+        coasting_ = false;
+        coastElapsed_ = 0.0f;
+        coastStartPeriod_ = 0.0f;
+        return;
+    }
+
+    coasting_ = true;
+    coastElapsed_ = 0.0f;
+
+    // Do not start coast at minScrollTime_; that produces the steppy burst.
+    const float coastEntryPeriod =
+        minScrollTime_ + (startScrollTime_ - minScrollTime_) * 0.45f;
+
+    coastStartPeriod_ = std::clamp(coastEntryPeriod, minScrollTime_, startScrollTime_);
+    scrollPeriod_ = coastStartPeriod_;
+}
+
+void ScrollingList::decelerateScrollPeriod(float dt) {
+    if (!coasting_) {
         scrollPeriod_ = startScrollTime_;
         return;
     }
 
-    // Apply the friction multiplier
-    scrollPeriod_ *= coastFriction_;
+    const float coastDurationSeconds =
+        std::clamp(coastFriction_ * 0.20f, 0.10f, 0.75f);
 
-    if (scrollPeriod_ > startScrollTime_) {
-        scrollPeriod_ = startScrollTime_;
+    coastElapsed_ += dt;
+
+    float t = coastElapsed_ / coastDurationSeconds;
+    if (t >= 1.0f) {
+        t = 1.0f;
+        coasting_ = false;
     }
+
+    const float eased = t * t * (3.0f - 2.0f * t);
+
+    scrollPeriod_ =
+        coastStartPeriod_ +
+        (startScrollTime_ - coastStartPeriod_) * eased;
 }
 
 bool ScrollingList::canCoast() const {
-    // Give it plenty of room to finish that smooth landing
-    return scrollPeriod_ < (startScrollTime_ * 0.98f);
+    return coasting_;
 }
 
 bool ScrollingList::isFastScrolling() const {
-    // Only trigger if we are significantly faster than the start.
-    // If start is 0.2 and min is 0.05, maybe 0.07 is the "Intentional" point.
-    float triggerThreshold = minScrollTime_ + (scrollAcceleration_ * 0.5f);
+    if (letterSkipTimer_ > 0.0f)
+        return true;
 
-    return (letterSkipTimer_ > 0.0f) || (scrollPeriod_ <= triggerThreshold);
+    constexpr float EPSILON = 0.0001f;
+    return scrollPeriod_ <= minScrollTime_ + EPSILON;
 }
 
 void ScrollingList::scroll(bool forward) {
     if (!items_ || items_->empty() || !scrollPoints_ || scrollPoints_->empty())
         return;
 
-    if (scrollPeriod_ < minScrollTime_) scrollPeriod_ = minScrollTime_;
+    if (scrollPeriod_ <= 0.0f) {
+        scrollPeriod_ = startScrollTime_;
+    }
 
+    // We no longer clamp period here. The update loop handles the clamp.
     const size_t itemsSize = items_->size();
     const size_t N = scrollPoints_->size();
     const size_t f = static_cast<size_t>(forward);
     const size_t exitIndex = (N <= 1) ? 0 : (N - 1) * (1 - f);
 
-    // --- pick item & advance ---
-// --- pick item & advance ---
-    size_t fullListIndex = 0; // We need this variable for the cache array
+    size_t fullListIndex = 0;
     if (forward) {
         fullListIndex = loopIncrement(itemIndex_, N, itemsSize);
         itemIndex_ = loopIncrement(itemIndex_, 1, itemsSize);
@@ -1266,48 +1312,20 @@ void ScrollingList::scroll(bool forward) {
         itemIndex_ = loopDecrement(itemIndex_, 1, itemsSize);
     }
 
-    // Pass the indices instead of the pointer
     allocateTexture(exitIndex, fullListIndex);
 
-    // --- THE OPTIMIZATION ---
-    // Only allocate VRAM for the single newly cycled component.
-    // The other N-1 components are already allocated and just sliding over.
     if (components_[exitIndex]) {
         components_[exitIndex]->allocateGraphicsMemory();
     }
 
-    // --- Use precomputed tuples ---
+    // Execute the visual jump
     const auto& T = forward ? forwardTween_ : backwardTween_;
-
-    // Guard (paranoia) in case N changed without setPoints being called:
-    if (T.size() != N) {
-        // fallback to maps if ever mismatched
-        const auto& neighbor = forward ? forwardMap_ : backwardMap_;
-        for (size_t index = 0; index < N; ++index) {
-            const size_t nextIndex = neighbor[index];
-            Component* component = components_[index];
-            if (!component) continue;
-
-            auto& nextTweenPoint = (*tweenPoints_)[nextIndex];
-            auto* currentScrollPoint = (*scrollPoints_)[index];
-            auto* nextScrollPoint = (*scrollPoints_)[nextIndex];
-
-            resetTweens(component, nextTweenPoint, currentScrollPoint, nextScrollPoint, scrollPeriod_);
-
-            if (component->baseViewInfo.font != nextScrollPoint->font)
-                component->baseViewInfo.font = nextScrollPoint->font;
-
-            component->triggerEvent("menuScroll");
-        }
-    }
-    else {
+    if (T.size() == N) {
         for (size_t index = 0; index < N; ++index) {
             Component* component = components_[index];
             if (!component) continue;
 
             const TweenNeighbor& t = T[index];
-
-            // VRAM allocation removed from here!
             resetTweens(component, t.tween, t.cur, t.next, scrollPeriod_);
 
             if (component->baseViewInfo.font != t.next->font)
@@ -1318,10 +1336,11 @@ void ScrollingList::scroll(bool forward) {
     }
 
     components_.rotate(forward);
-
-    // Scrolling breaks idleness
     cachedIdle_ = false;
     cachedAttractIdle_ = false;
+    LOG_DEBUG("ScrollingList",
+        "scroll() after itemIndex=" + std::to_string(itemIndex_) +
+        " selected=" + std::to_string(getSelectedIndex()));
 }
 
 bool ScrollingList::isPlaylist() const

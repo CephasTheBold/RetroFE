@@ -81,7 +81,14 @@ void Component::allocateGraphicsMemory() {
     // --- SHARED TEXTURE LOGIC ---
     if (sharedBackgroundTextures_.find(monitor) == sharedBackgroundTextures_.end()) {
 
-        SDL_Surface* surface = SDL_CreateRGBSurface(0, 4, 4, 32, 0, 0, 0, 0);
+        // FIX 3: Explicitly define RGBA masks so the texture supports alpha blending properly
+#if SDL_BYTEORDER == SDL_BIG_ENDIAN
+        Uint32 rmask = 0xff000000, gmask = 0x00ff0000, bmask = 0x0000ff00, amask = 0x000000ff;
+#else
+        Uint32 rmask = 0x000000ff, gmask = 0x0000ff00, bmask = 0x00ff0000, amask = 0xff000000;
+#endif
+
+        SDL_Surface* surface = SDL_CreateRGBSurface(0, 4, 4, 32, rmask, gmask, bmask, amask);
         SDL_FillRect(surface, NULL, SDL_MapRGBA(surface->format, 255, 255, 255, 255));
         sharedBackgroundTextures_[monitor] = SDL_CreateTextureFromSurface(SDL::getRenderer(monitor), surface);
         SDL_SetTextureBlendMode(sharedBackgroundTextures_[monitor], SDL_BLENDMODE_BLEND);
@@ -240,9 +247,9 @@ void Component::draw()
 
 
         SDL_SetTextureColorMod(backgroundTexture_,
-            static_cast<char>(baseViewInfo.BackgroundRed * 255),
-            static_cast<char>(baseViewInfo.BackgroundGreen * 255),
-            static_cast<char>(baseViewInfo.BackgroundBlue * 255));
+            static_cast<Uint8>(baseViewInfo.BackgroundRed * 255.0f),
+            static_cast<Uint8>(baseViewInfo.BackgroundGreen * 255.0f),
+            static_cast<Uint8>(baseViewInfo.BackgroundBlue * 255.0f));
 
         SDL::renderCopyF(backgroundTexture_, baseViewInfo.BackgroundAlpha, nullptr, &rect, baseViewInfo, page.getLayoutWidthByMonitor(baseViewInfo.Monitor), page.getLayoutHeightByMonitor(baseViewInfo.Monitor));
     }
