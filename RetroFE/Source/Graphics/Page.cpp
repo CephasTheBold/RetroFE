@@ -425,9 +425,10 @@ void Page::removeSelectedItem() {
 void Page::setScrollOffsetIndex(size_t i) {
 	if (!getAnActiveMenu()) return;
 
-	for (auto it = activeMenu_.begin(); it != activeMenu_.end(); ++it) {
-		if ((*it) && !(*it)->isPlaylist())
-			(*it)->setScrollOffsetIndex(i);
+	for (ScrollingList* menu : activeMenu_) {
+		if (menu && !menu->isPlaylist()) {
+			menu->syncToSelectedIndex(i);
+		}
 	}
 }
 
@@ -698,7 +699,7 @@ void Page::pageScroll(ScrollDirection direction) {
 	for (auto it = activeMenu_.begin(); it != activeMenu_.end(); it++) {
 		ScrollingList* menu = *it;
 		if (menu && menu != amenu && !menu->isPlaylist()) {
-			menu->setScrollOffsetIndex(index);
+			menu->syncToSelectedIndex(index);
 		}
 	}
 
@@ -722,7 +723,7 @@ void Page::selectRandom() {
 	for (auto it = activeMenu_.begin(); it != activeMenu_.end(); it++) {
 		ScrollingList* menu = *it;
 		if (menu && menu != amenu && !menu->isPlaylist()) {
-			menu->setScrollOffsetIndex(index);
+			menu->syncToSelectedIndex(index);
 		}
 	}
 
@@ -779,7 +780,7 @@ void Page::letterScroll(ScrollDirection direction) {
 	for (auto it = activeMenu_.begin(); it != activeMenu_.end(); it++) {
 		ScrollingList* menu = *it;
 		if (menu && menu != amenu && !menu->isPlaylist()) {
-			menu->setScrollOffsetIndex(index);
+			menu->syncToSelectedIndex(index);
 		}
 	}
 
@@ -807,7 +808,7 @@ void Page::metaScroll(ScrollDirection direction, std::string attribute) {
 	for (auto it = activeMenu_.begin(); it != activeMenu_.end(); it++) {
 		ScrollingList* menu = *it;
 		if (menu && menu != amenu && !menu->isPlaylist()) {
-			menu->setScrollOffsetIndex(index);
+			menu->syncToSelectedIndex(index);
 		}
 	}
 
@@ -830,7 +831,7 @@ void Page::cfwLetterSubScroll(ScrollDirection direction) {
 	for (auto it = activeMenu_.begin(); it != activeMenu_.end(); it++) {
 		ScrollingList* menu = *it;
 		if (menu && menu != amenu && !menu->isPlaylist()) {
-			menu->setScrollOffsetIndex(index);
+			menu->syncToSelectedIndex(index);
 		}
 	}
 
@@ -1950,68 +1951,66 @@ bool Page::isPlaying() const {
 
 
 void Page::resetScrollPeriod() const {
-	for (auto& menu : activeMenu_) {
-		if (menu) {
-			menu->resetScrollPeriod();
-		}
+	const bool playlist =
+		scrolling_ == ScrollDirectionPlaylistForward ||
+		scrolling_ == ScrollDirectionPlaylistBack;
+
+	if (ScrollingList* master = getMasterMenuForScroll(playlist)) {
+		master->resetScrollPeriod();
 	}
 }
 
 void Page::decelerateScrollPeriod(float dt) {
-	for (ScrollingList* menu : activeMenu_) {
-		if (menu) {
-			menu->decelerateScrollPeriod(dt);
-		}
+	const bool playlist =
+		scrolling_ == ScrollDirectionPlaylistForward ||
+		scrolling_ == ScrollDirectionPlaylistBack;
+
+	if (ScrollingList* master = getMasterMenuForScroll(playlist)) {
+		master->decelerateScrollPeriod(dt);
 	}
 }
 
 bool Page::canMenuCoast() const {
-	for (ScrollingList* menu : activeMenu_) {
-		if (menu && menu->canCoast()) return true;
+	const bool playlist =
+		scrolling_ == ScrollDirectionPlaylistForward ||
+		scrolling_ == ScrollDirectionPlaylistBack;
+
+	if (ScrollingList* master = getMasterMenuForScroll(playlist)) {
+		return master->canCoast();
 	}
+
 	return false;
 }
 
 bool Page::canBeginMenuCoast() const {
-	const bool playlistScroll =
+	const bool playlist =
 		scrolling_ == ScrollDirectionPlaylistForward ||
 		scrolling_ == ScrollDirectionPlaylistBack;
 
-	for (ScrollingList* menu : activeMenu_) {
-		if (!menu)
-			continue;
-
-		if (playlistScroll != menu->isPlaylist())
-			continue;
-
-		if (menu->canBeginCoast())
-			return true;
+	if (ScrollingList* master = getMasterMenuForScroll(playlist)) {
+		return master->canBeginCoast();
 	}
 
 	return false;
 }
 
 void Page::updateScrollPeriod() const {
-	for (auto& menu : activeMenu_) {
-		if (menu) {
-			menu->updateScrollPeriod();
-		}
+	const bool playlist =
+		scrolling_ == ScrollDirectionPlaylistForward ||
+		scrolling_ == ScrollDirectionPlaylistBack;
+
+	if (ScrollingList* master = getMasterMenuForScroll(playlist)) {
+		master->updateScrollPeriod();
 	}
 }
 
 void Page::beginMenuCoast() {
-	const bool playlistScroll =
+	const bool playlist =
 		scrolling_ == ScrollDirectionPlaylistForward ||
 		scrolling_ == ScrollDirectionPlaylistBack;
 
-	for (ScrollingList* menu : activeMenu_) {
-		if (!menu)
-			continue;
-
-		if (playlistScroll != menu->isPlaylist())
-			continue;
-
-		menu->beginCoast();
+	if (ScrollingList* master = getMasterMenuForScroll(playlist)) {
+		master->beginCoast();
 	}
 }
 
@@ -2022,13 +2021,8 @@ bool Page::isMenuFastScrolling() const {
 	if (!gameScrollActive_)
 		return false;
 
-	for (const auto& menu : activeMenu_) {
-		if (menu && !menu->isPlaylist() && menu->isFastScrolling()) {
-			return true;
-		}
-	}
-
-	return false;
+	ScrollingList* master = getMasterMenuForScroll(false);
+	return master && master->isFastScrolling();
 }
 
 ScrollingList* Page::getMasterMenuForScroll(bool playlist) const {
@@ -2052,16 +2046,10 @@ void Page::scroll(bool forward, bool playlist) {
 	}
 
 	const float masterPeriod = masterMenu->getScrollPeriod();
+	const size_t newSelectedIndex = masterMenu->nextSelectedIndex(forward);
 
-	// Master advances selection.
-	masterMenu->setScrollPeriod(masterPeriod);
-	masterMenu->scroll(forward);
-
-	const size_t masterSelectedIndex = masterMenu->getSelectedIndex();
-
-	// Followers animate using the same period, then sync to master's selected item.
 	for (ScrollingList* menu : activeMenu_) {
-		if (!menu || menu == masterMenu) {
+		if (!menu) {
 			continue;
 		}
 
@@ -2073,9 +2061,7 @@ void Page::scroll(bool forward, bool playlist) {
 			continue;
 		}
 
-		menu->setScrollPeriod(masterPeriod);
-		menu->scroll(forward);
-		menu->syncToSelectedIndex(masterSelectedIndex);
+		menu->scrollToSelectedIndex(newSelectedIndex, forward, masterPeriod);
 	}
 
 	pendingScrollSelect_ = true;

@@ -64,6 +64,8 @@ bool VideoComponent::recycleAsVideo(const std::string& path, const std::string& 
     // Reset state flags
     instanceReady_ = false;
     dimensionsUpdated_ = false;
+	baseViewInfo.ImageWidth = 0;
+	baseViewInfo.ImageHeight = 0;
     hasBeenOnScreen_ = false;
     wasVisible_ = false;
     wasPlayingBeforeFastScroll_ = false;

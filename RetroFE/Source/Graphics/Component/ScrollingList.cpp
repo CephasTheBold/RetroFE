@@ -142,6 +142,7 @@ void ScrollingList::setItems(std::vector<Item*>* items) {
         }
     }
     precalculateMediaPaths();
+
 }
 
 void ScrollingList::precalculateMediaPaths() {
@@ -1032,28 +1033,41 @@ size_t ScrollingList::getSize() const
 void ScrollingList::resetTweens(Component* c, const std::shared_ptr<AnimationEvents>& sets, ViewInfo* currentViewInfo, ViewInfo* nextViewInfo, float scrollTime) const {
     if (!c || !sets || !currentViewInfo || !nextViewInfo) return;
 
-    // Sync non-animated properties to ensure smooth transitions
-    currentViewInfo->ImageHeight = c->baseViewInfo.ImageHeight;
-    currentViewInfo->ImageWidth = c->baseViewInfo.ImageWidth;
-    nextViewInfo->ImageHeight = c->baseViewInfo.ImageHeight;
-    nextViewInfo->ImageWidth = c->baseViewInfo.ImageWidth;
-    nextViewInfo->BackgroundAlpha = c->baseViewInfo.BackgroundAlpha;
-
     c->setTweens(sets);
 
     // Fetch a pointer to the specific Animation object in the map
     Animation* scrollAnimation = sets->getAnimation("menuScroll");
+    if (!scrollAnimation)
+        return;
     scrollAnimation->Clear();
 
-    // Reset baseViewInfo to the scroll start position
+    // Backup only the fields this function temporarily patches.
+    const float oldCurImageHeight = currentViewInfo->ImageHeight;
+    const float oldCurImageWidth = currentViewInfo->ImageWidth;
+
+    const float oldNextImageHeight = nextViewInfo->ImageHeight;
+    const float oldNextImageWidth = nextViewInfo->ImageWidth;
+    const float oldNextBackgroundAlpha = nextViewInfo->BackgroundAlpha;
+
+    // Temporary runtime patch for correct image rendering during this tween setup.
+    currentViewInfo->ImageHeight = c->baseViewInfo.ImageHeight;
+    currentViewInfo->ImageWidth = c->baseViewInfo.ImageWidth;
+
+    nextViewInfo->ImageHeight = c->baseViewInfo.ImageHeight;
+    nextViewInfo->ImageWidth = c->baseViewInfo.ImageWidth;
+    nextViewInfo->BackgroundAlpha = c->baseViewInfo.BackgroundAlpha;
+
+    // Reset baseViewInfo to the scroll start position.
+    // This now sees the temporarily patched ImageWidth/ImageHeight values.
     c->baseViewInfo = *currentViewInfo;
+
 
     // Allocate the TweenSet on the stack for cache efficiency
     TweenSet set;
     const float EPSILON_FLOAT = 0.0001f;
 
     // Conditionally add Tweens only if properties differ
-    if (currentViewInfo->Restart != nextViewInfo->Restart && scrollPeriod_ > minScrollTime_) {
+    if (currentViewInfo->Restart != nextViewInfo->Restart && scrollTime > 0.0f) {
         set.push(Tween(TWEEN_PROPERTY_RESTART, LINEAR, static_cast<float>(currentViewInfo->Restart), static_cast<float>(nextViewInfo->Restart), 0.0f));
     }
     if (std::abs(currentViewInfo->Height - nextViewInfo->Height) > EPSILON_FLOAT) {
@@ -1112,6 +1126,15 @@ void ScrollingList::resetTweens(Component* c, const std::shared_ptr<AnimationEve
     if (set.size() > 0) {
         scrollAnimation->Push(std::move(set));
     }
+
+    // Restore layout slot definitions so stale image dimensions do not leak
+// into future playlist/menu states.
+    currentViewInfo->ImageHeight = oldCurImageHeight;
+    currentViewInfo->ImageWidth = oldCurImageWidth;
+
+    nextViewInfo->ImageHeight = oldNextImageHeight;
+    nextViewInfo->ImageWidth = oldNextImageWidth;
+    nextViewInfo->BackgroundAlpha = oldNextBackgroundAlpha;
 }
 
 bool ScrollingList::allocateTexture(size_t componentIndex, size_t fullListIndex) {
@@ -1305,6 +1328,86 @@ float ScrollingList::getScrollPeriod() const {
 
 void ScrollingList::setScrollPeriod(float value) {
     scrollPeriod_ = value > 0.0f ? value : startScrollTime_;
+}
+
+size_t ScrollingList::nextSelectedIndex(bool forward) const {
+    if (!items_ || items_->empty())
+        return 0;
+
+    const size_t current = getSelectedIndex();
+    const size_t size = items_->size();
+
+    return forward
+        ? loopIncrement(current, 1, size)
+        : loopDecrement(current, 1, size);
+}
+
+void ScrollingList::scrollToSelectedIndex(size_t newSelectedIndex, bool forward, float scrollTime) {
+    if (!items_ || items_->empty() || !scrollPoints_ || scrollPoints_->empty())
+        return;
+
+    if (components_.empty())
+        return;
+
+    const size_t itemsSize = items_->size();
+    const size_t N = scrollPoints_->size();
+
+    if (N == 0 || components_.size() < N)
+        return;
+
+    if (scrollTime <= 0.0f) {
+        scrollTime = startScrollTime_;
+    }
+
+    const size_t oldItemIndex = itemIndex_;
+    const size_t newItemIndex =
+        loopDecrement(newSelectedIndex, selectedOffsetIndex_, itemsSize);
+
+    const size_t exitIndex =
+        (N <= 1) ? 0 : (N - 1) * (1 - static_cast<size_t>(forward));
+
+    const size_t fullListIndex = forward
+        ? loopIncrement(oldItemIndex, N, itemsSize)
+        : loopDecrement(oldItemIndex, 1, itemsSize);
+
+    allocateTexture(exitIndex, fullListIndex);
+
+    if (components_[exitIndex]) {
+        components_[exitIndex]->allocateGraphicsMemory();
+    }
+
+    const auto& T = forward ? forwardTween_ : backwardTween_;
+
+    if (T.size() == N) {
+        for (size_t index = 0; index < N; ++index) {
+            Component* component = components_[index];
+            if (!component)
+                continue;
+
+            const TweenNeighbor& t = T[index];
+
+            resetTweens(component, t.tween, t.cur, t.next, scrollTime);
+
+            if (component->baseViewInfo.font != t.next->font) {
+                component->baseViewInfo.font = t.next->font;
+            }
+
+            component->triggerEvent("menuScroll");
+        }
+    }
+
+    components_.rotate(forward);
+
+    itemIndex_ = newItemIndex;
+
+    cachedIdle_ = false;
+    cachedAttractIdle_ = false;
+
+    LOG_DEBUG("ScrollingList",
+        "scrollToSelectedIndex() itemIndex=" + std::to_string(itemIndex_) +
+        " selected=" + std::to_string(getSelectedIndex()) +
+        " target=" + std::to_string(newSelectedIndex) +
+        " period=" + std::to_string(scrollTime));
 }
 
 void ScrollingList::scroll(bool forward) {

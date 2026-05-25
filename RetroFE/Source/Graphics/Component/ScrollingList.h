@@ -149,6 +149,7 @@ public:
     void destroyItems();
     void setPoints(std::vector<ViewInfo*>* points, std::shared_ptr<std::vector<std::shared_ptr<AnimationEvents>>> tweenPoints);
     size_t getSelectedIndex() const;
+    size_t nextSelectedIndex(bool forward) const;
     void setItemIndex(unsigned int index);
     size_t getSize() const;
     void pageUp();
@@ -194,6 +195,7 @@ public:
     bool canCoast() const;
     bool isFastScrolling() const;
     void scroll(bool forward);
+    void scrollToSelectedIndex(size_t newSelectedIndex, bool forward, float scrollTime);
     bool isPlaylist() const;
 
     void setPerspectiveCorners(const int corners[8]) {
