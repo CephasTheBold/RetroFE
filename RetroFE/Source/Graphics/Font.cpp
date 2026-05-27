@@ -361,215 +361,181 @@ void FontManager::preloadGlyphRange(TTF_Font* font,
     }
 }
 
-// HEAVILY MODIFIED: initialize() now generates a chain of atlases
 bool FontManager::initialize() {
     clearMips();
 
-    const int   MIN_FONT_SIZE_DEFAULT = 24; // was hard floor
-    const float DENSE_FACTOR = 0.70f;
-    const float SPARSE_FACTOR = 0.50f;
-    const int   SWITCH_THRESHOLD = 40;
+    const int MIN_FONT_SIZE_DEFAULT = 24;
 
-    // --- FIX: if maxFontSize_ is smaller than the default floor, allow it ---
-    // e.g. loadFontSize=19 should still generate at least one mip level at 19.
+    // Determine a safe min floor based on maxFontSize_
     const int minFontSize =
         (maxFontSize_ > 0) ? std::min(MIN_FONT_SIZE_DEFAULT, maxFontSize_) : MIN_FONT_SIZE_DEFAULT;
 
-    bool first = true;
-    for (int currentSize = maxFontSize_; currentSize >= minFontSize; ) {
-        TTF_Font* font = TTF_OpenFont(fontPath_.c_str(), currentSize);
-        if (!font) {
-            LOG_WARNING("Font", "Failed to open font '" + fontPath_ + "' at size " +
-                std::to_string(currentSize) + ": " + std::string(TTF_GetError()));
-            float factor = (currentSize > SWITCH_THRESHOLD) ? DENSE_FACTOR : SPARSE_FACTOR;
-            int   nextSize = (int)std::round(currentSize * factor);
-            if (nextSize >= currentSize) break;
-            currentSize = nextSize;
-            continue;
-        }
+    // We only initialize the specific size target requested by PageBuilder.
+    int currentSize = maxFontSize_;
 
-        TTF_SetFontKerning(font, 1);
-        TTF_SetFontHinting(font, TTF_HINTING_LIGHT);
+    TTF_Font* font = TTF_OpenFont(fontPath_.c_str(), currentSize);
+    if (!font) {
+        LOG_WARNING("Font", "Failed to open font '" + fontPath_ + "' at size " +
+            std::to_string(currentSize) + ": " + std::string(TTF_GetError()));
+        return false;
+    }
 
-        auto* mip = new MipLevel();
-        mip->fontSize = currentSize;
-        mip->height = TTF_FontHeight(font);
-        mip->ascent = TTF_FontAscent(font);
-        mip->descent = TTF_FontDescent(font);
-        mip->font = font; // <? keep per-mip handle
+    TTF_SetFontKerning(font, 1);
+    TTF_SetFontHinting(font, TTF_HINTING_LIGHT);
 
-        const int GLYPH_SPACING = std::max(1, std::max(outlinePx_ + 1, currentSize / 16));
-        int atlasWidth = std::min(1024, currentSize * 16);
-        int atlasHeight = 0;
-        int x = 0, y = 0;
+    auto* mip = new MipLevel();
+    mip->fontSize = currentSize;
+    mip->height = TTF_FontHeight(font);
+    mip->ascent = TTF_FontAscent(font);
+    mip->descent = TTF_FontDescent(font);
+    mip->font = font; // Held per-mip handle
 
-        Uint32 rmask, gmask, bmask, amask;
+    const int GLYPH_SPACING = std::max(1, std::max(outlinePx_ + 1, currentSize / 16));
+    int atlasWidth = std::min(1024, currentSize * 16);
+    int atlasHeight = 0;
+    int x = 0, y = 0;
+
+    Uint32 rmask, gmask, bmask, amask;
 #if SDL_BYTEORDER == SDL_BIG_ENDIAN
-        rmask = 0xff000000; gmask = 0x00ff0000; bmask = 0x0000ff00; amask = 0x000000ff;
+    rmask = 0xff000000; gmask = 0x00ff0000; bmask = 0x0000ff00; amask = 0x000000ff;
 #else
-        rmask = 0x000000ff; gmask = 0x0000ff00; bmask = 0x00ff0000; amask = 0xff000000;
+    rmask = 0x000000ff; gmask = 0x0000ff00; bmask = 0x00ff0000; amask = 0xff000000;
 #endif
 
-        std::vector<TmpGlyph> tmp;
-        tmp.reserve(512);
-        std::unordered_map<unsigned int, GlyphInfoBuild*> temp_build;
+    std::vector<TmpGlyph> tmp;
+    tmp.reserve(128); // Sized for the standard alphanumeric range footprint
+    std::unordered_map<unsigned int, GlyphInfoBuild*> temp_build;
 
-        // ASCII + Latin ext + Greek + Cyrillic
-        preloadGlyphRange(font, 32, 1023, x, y, atlasWidth, atlasHeight, GLYPH_SPACING, tmp, temp_build);
+    // --- OPTIMIZATION ---
+    // Instead of rendering ASCII 32 through 1023 on startup, we only preload basic 
+    // keyboard ASCII (32 to 126). Extended layout parameters, foreign characters, and symbols 
+    // stream seamlessly into the streaming atlas dynamically via FontManager::loadGlyphOnDemand.
+    preloadGlyphRange(font, 32, 126, x, y, atlasWidth, atlasHeight, GLYPH_SPACING, tmp, temp_build);
 
-        // Optional: CJK seed (Hiragana/Katakana) if font provides
-        bool hasCJK = TTF_GlyphIsProvided32(font, 0x30A2) || TTF_GlyphIsProvided32(font, 0x3042);
-        if (hasCJK) {
-            preloadGlyphRange(font, 0x3040, 0x309F, x, y, atlasWidth, atlasHeight, GLYPH_SPACING, tmp, temp_build);
-            preloadGlyphRange(font, 0x30A0, 0x30FF, x, y, atlasWidth, atlasHeight, GLYPH_SPACING, tmp, temp_build);
-        }
+    atlasWidth = std::max(atlasWidth, x);
+    atlasHeight += y + GLYPH_SPACING;
 
-        atlasWidth = std::max(atlasWidth, x);
-        atlasHeight += y + GLYPH_SPACING;
+    SDL_Surface* atlasFill = SDL_CreateRGBSurface(0, atlasWidth, atlasHeight, 32, rmask, gmask, bmask, amask);
+    if (!atlasFill) {
+        LOG_WARNING("Font", "Failed to create fill atlas surface for size " + std::to_string(currentSize));
+        for (auto& p : temp_build) delete p.second;
+        delete mip;
+        return false;
+    }
+    SDL_FillRect(atlasFill, nullptr, SDL_MapRGBA(atlasFill->format, 0, 0, 0, 0));
 
-        SDL_Surface* atlasFill = SDL_CreateRGBSurface(0, atlasWidth, atlasHeight, 32, rmask, gmask, bmask, amask);
-        if (!atlasFill) {
-            LOG_WARNING("Font", "Failed to create fill atlas surface for size " + std::to_string(currentSize));
+    SDL_Surface* atlasOutline = nullptr;
+    if (outlinePx_ > 0) {
+        atlasOutline = SDL_CreateRGBSurface(0, atlasWidth, atlasHeight, 32, rmask, gmask, bmask, amask);
+        if (!atlasOutline) {
+            SDL_FreeSurface(atlasFill);
             for (auto& p : temp_build) delete p.second;
             delete mip;
-            float factor = (currentSize > SWITCH_THRESHOLD) ? DENSE_FACTOR : SPARSE_FACTOR;
-            int   nextSize = (int)std::round(currentSize * factor);
-            if (nextSize >= currentSize) break;
-            currentSize = nextSize;
-            continue;
+            return false;
         }
-        SDL_FillRect(atlasFill, nullptr, SDL_MapRGBA(atlasFill->format, 0, 0, 0, 0));
+        SDL_FillRect(atlasOutline, nullptr, SDL_MapRGBA(atlasOutline->format, 0, 0, 0, 0));
+    }
 
-        SDL_Surface* atlasOutline = nullptr;
-        if (outlinePx_ > 0) {
-            atlasOutline = SDL_CreateRGBSurface(0, atlasWidth, atlasHeight, 32, rmask, gmask, bmask, amask);
-            if (!atlasOutline) {
-                SDL_FreeSurface(atlasFill);
-                for (auto& p : temp_build) delete p.second;
-                delete mip;
-                float factor = (currentSize > SWITCH_THRESHOLD) ? DENSE_FACTOR : SPARSE_FACTOR;
-                int   nextSize = (int)std::round(currentSize * factor);
-                if (nextSize >= currentSize) break;
-                currentSize = nextSize;
-                continue;
+    for (const auto& t : tmp) {
+        SDL_Rect dst = t.info->glyph.rect;
+        if (atlasOutline && t.outline) {
+            SDL_SetSurfaceBlendMode(t.outline, SDL_BLENDMODE_BLEND);
+            SDL_BlitSurface(t.outline, nullptr, atlasOutline, &dst);
+        }
+        if (t.fill) {
+            SDL_SetSurfaceBlendMode(t.fill, SDL_BLENDMODE_BLEND);
+            SDL_Rect dstFill{ dst.x + t.dx, dst.y + t.dy, t.fill->w, t.fill->h };
+            SDL_BlitSurface(t.fill, nullptr, atlasFill, &dstFill);
+        }
+        if (t.fill)    SDL_FreeSurface(t.fill);
+        if (t.outline) SDL_FreeSurface(t.outline);
+    }
+
+    // Create static atlas textures
+    SDL_Texture* fillTex = SDL_CreateTextureFromSurface(SDL::getRenderer(monitor_), atlasFill);
+    if (fillTex) {
+        SDL_SetTextureScaleMode(fillTex, SDL_ScaleModeLinear);
+        SDL_SetTextureBlendMode(fillTex, SDL_BLENDMODE_BLEND);
+        SDL_SetTextureColorMod(fillTex, color_.r, color_.g, color_.b);
+        mip->fillTexture = fillTex;
+    }
+    if (atlasOutline) {
+        SDL_Texture* outTex = SDL_CreateTextureFromSurface(SDL::getRenderer(monitor_), atlasOutline);
+        if (outTex) {
+            SDL_SetTextureScaleMode(outTex, SDL_ScaleModeLinear);
+            SDL_SetTextureBlendMode(outTex, SDL_BLENDMODE_BLEND);
+            mip->outlineTexture = outTex;
+        }
+    }
+
+    mip->atlasW = atlasFill->w;
+    mip->atlasH = atlasFill->h;
+    SDL_FreeSurface(atlasFill);
+    if (atlasOutline) SDL_FreeSurface(atlasOutline);
+
+    // Dynamic atlases - STREAMING
+    mip->dynamicFillTexture = SDL_CreateTexture(
+        SDL::getRenderer(monitor_),
+        SDL_PIXELFORMAT_ARGB8888,
+        SDL_TEXTUREACCESS_STREAMING,
+        DYNAMIC_ATLAS_SIZE, DYNAMIC_ATLAS_SIZE);
+    if (mip->dynamicFillTexture) {
+        SDL_SetTextureScaleMode(mip->dynamicFillTexture, SDL_ScaleModeLinear);
+        SDL_SetTextureBlendMode(mip->dynamicFillTexture, SDL_BLENDMODE_BLEND);
+        SDL_SetTextureColorMod(mip->dynamicFillTexture, color_.r, color_.g, color_.b);
+        void* pixels = nullptr; int pitch = 0;
+        SDL_Rect full{ 0,0,DYNAMIC_ATLAS_SIZE,DYNAMIC_ATLAS_SIZE };
+        if (SDL_LockTexture(mip->dynamicFillTexture, &full, &pixels, &pitch) == 0) {
+            for (int y0 = 0; y0 < DYNAMIC_ATLAS_SIZE; ++y0) {
+                std::memset((Uint8*)pixels + y0 * pitch, 0x00, DYNAMIC_ATLAS_SIZE * 4);
             }
-            SDL_FillRect(atlasOutline, nullptr, SDL_MapRGBA(atlasOutline->format, 0, 0, 0, 0));
+            SDL_UnlockTexture(mip->dynamicFillTexture);
         }
+    }
+    else {
+        LOG_WARNING("Font", "Failed to create dynamic fill texture");
+    }
 
-        for (const auto& t : tmp) {
-            SDL_Rect dst = t.info->glyph.rect;
-            if (atlasOutline && t.outline) {
-                SDL_SetSurfaceBlendMode(t.outline, SDL_BLENDMODE_BLEND);
-                SDL_BlitSurface(t.outline, nullptr, atlasOutline, &dst);
-            }
-            if (t.fill) {
-                SDL_SetSurfaceBlendMode(t.fill, SDL_BLENDMODE_BLEND);
-                SDL_Rect dstFill{ dst.x + t.dx, dst.y + t.dy, t.fill->w, t.fill->h };
-                SDL_BlitSurface(t.fill, nullptr, atlasFill, &dstFill);
-            }
-            if (t.fill)    SDL_FreeSurface(t.fill);
-            if (t.outline) SDL_FreeSurface(t.outline);
-        }
-
-        // Create static atlas textures
-        SDL_Texture* fillTex = SDL_CreateTextureFromSurface(SDL::getRenderer(monitor_), atlasFill);
-        if (fillTex) {
-            SDL_SetTextureScaleMode(fillTex, SDL_ScaleModeLinear);
-            SDL_SetTextureBlendMode(fillTex, SDL_BLENDMODE_BLEND);
-            SDL_SetTextureColorMod(fillTex, color_.r, color_.g, color_.b);
-            mip->fillTexture = fillTex;
-        }
-        if (atlasOutline) {
-            SDL_Texture* outTex = SDL_CreateTextureFromSurface(SDL::getRenderer(monitor_), atlasOutline);
-            if (outTex) {
-                SDL_SetTextureScaleMode(outTex, SDL_ScaleModeLinear);
-                SDL_SetTextureBlendMode(outTex, SDL_BLENDMODE_BLEND);
-                mip->outlineTexture = outTex;
-            }
-        }
-
-        mip->atlasW = atlasFill->w;
-        mip->atlasH = atlasFill->h;
-        SDL_FreeSurface(atlasFill);
-        if (atlasOutline) SDL_FreeSurface(atlasOutline);
-
-        // Dynamic atlases ? STREAMING
-        mip->dynamicFillTexture = SDL_CreateTexture(
+    if (outlinePx_ > 0) {
+        mip->dynamicOutlineTexture = SDL_CreateTexture(
             SDL::getRenderer(monitor_),
             SDL_PIXELFORMAT_ARGB8888,
             SDL_TEXTUREACCESS_STREAMING,
             DYNAMIC_ATLAS_SIZE, DYNAMIC_ATLAS_SIZE);
-        if (mip->dynamicFillTexture) {
-            SDL_SetTextureScaleMode(mip->dynamicFillTexture, SDL_ScaleModeLinear);
-            SDL_SetTextureBlendMode(mip->dynamicFillTexture, SDL_BLENDMODE_BLEND);
-            SDL_SetTextureColorMod(mip->dynamicFillTexture, color_.r, color_.g, color_.b);
+        if (mip->dynamicOutlineTexture) {
+            SDL_SetTextureScaleMode(mip->dynamicOutlineTexture, SDL_ScaleModeLinear);
+            SDL_SetTextureBlendMode(mip->dynamicOutlineTexture, SDL_BLENDMODE_BLEND);
             void* pixels = nullptr; int pitch = 0;
             SDL_Rect full{ 0,0,DYNAMIC_ATLAS_SIZE,DYNAMIC_ATLAS_SIZE };
-            if (SDL_LockTexture(mip->dynamicFillTexture, &full, &pixels, &pitch) == 0) {
+            if (SDL_LockTexture(mip->dynamicOutlineTexture, &full, &pixels, &pitch) == 0) {
                 for (int y0 = 0; y0 < DYNAMIC_ATLAS_SIZE; ++y0) {
                     std::memset((Uint8*)pixels + y0 * pitch, 0x00, DYNAMIC_ATLAS_SIZE * 4);
                 }
-                SDL_UnlockTexture(mip->dynamicFillTexture);
+                SDL_UnlockTexture(mip->dynamicOutlineTexture);
             }
         }
         else {
-            LOG_WARNING("Font", "Failed to create dynamic fill texture");
+            LOG_WARNING("Font", "Failed to create dynamic outline texture");
         }
-
-        if (outlinePx_ > 0) {
-            mip->dynamicOutlineTexture = SDL_CreateTexture(
-                SDL::getRenderer(monitor_),
-                SDL_PIXELFORMAT_ARGB8888,
-                SDL_TEXTUREACCESS_STREAMING,
-                DYNAMIC_ATLAS_SIZE, DYNAMIC_ATLAS_SIZE);
-            if (mip->dynamicOutlineTexture) {
-                SDL_SetTextureScaleMode(mip->dynamicOutlineTexture, SDL_ScaleModeLinear);
-                SDL_SetTextureBlendMode(mip->dynamicOutlineTexture, SDL_BLENDMODE_BLEND);
-                void* pixels = nullptr; int pitch = 0;
-                SDL_Rect full{ 0,0,DYNAMIC_ATLAS_SIZE,DYNAMIC_ATLAS_SIZE };
-                if (SDL_LockTexture(mip->dynamicOutlineTexture, &full, &pixels, &pitch) == 0) {
-                    for (int y0 = 0; y0 < DYNAMIC_ATLAS_SIZE; ++y0) {
-                        std::memset((Uint8*)pixels + y0 * pitch, 0x00, DYNAMIC_ATLAS_SIZE * 4);
-                    }
-                    SDL_UnlockTexture(mip->dynamicOutlineTexture);
-                }
-            }
-            else {
-                LOG_WARNING("Font", "Failed to create dynamic outline texture");
-            }
-        }
-
-        mip->dynamicNextX = 0;
-        mip->dynamicNextY = 0;
-        mip->dynamicRowHeight = 0;
-
-        for (auto const& [key, val] : temp_build) {
-            mip->glyphs[key] = val->glyph;
-            delete val;
-        }
-        temp_build.clear();
-
-        mipLevels_[currentSize] = mip;
-
-        if (first) {
-            max_font_ = font; // same pointer as mip->font for largest size
-            max_height_ = mip->height;
-            max_ascent_ = mip->ascent;
-            max_descent_ = mip->descent;
-            first = false;
-        }
-        // NOTE: do NOT TTF_CloseFont(font) here; held by mip->font
-        float factor = (currentSize > SWITCH_THRESHOLD) ? DENSE_FACTOR : SPARSE_FACTOR;
-        int   nextSize = (int)std::round(currentSize * factor);
-        if (nextSize >= currentSize) break;
-        currentSize = nextSize;
     }
 
-    if (mipLevels_.empty()) {
-        LOG_WARNING("Font", "Failed to generate any mip levels for font: " + fontPath_);
-        max_font_ = nullptr;      // do not TTF_CloseFont here
-        return false;
+    mip->dynamicNextX = 0;
+    mip->dynamicNextY = 0;
+    mip->dynamicRowHeight = 0;
+
+    for (auto const& [key, val] : temp_build) {
+        mip->glyphs[key] = val->glyph;
+        delete val;
     }
+    temp_build.clear();
+
+    mipLevels_[currentSize] = mip;
+
+    // Establish maximum size pointer constraints for layout dimension operations
+    max_font_ = font; // same pointer as mip->font for largest size
+    max_height_ = mip->height;
+    max_ascent_ = mip->ascent;
+    max_descent_ = mip->descent;
 
     setColor(color_); // ensure color mod on static & dynamic fill textures
     return true;

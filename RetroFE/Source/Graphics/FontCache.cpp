@@ -51,14 +51,39 @@ bool FontCache::initialize() const {
     }
 }
 
-// MODIFIED: Parameter renamed to maxFontSize.
 FontManager* FontCache::getFont(const std::string& fontPath, int maxFontSize, SDL_Color color, bool gradient, int outlinePx, int monitor) {
-    // MODIFIED: Call buildFontKey with maxFontSize.
-    std::string key = buildFontKey(fontPath, maxFontSize, color, gradient, outlinePx, monitor);
-    auto it = fontFaceMap_.find(key);
-
+    // 1. First, check for a perfect, exact configuration match (Fast path)
+    std::string exactKey = buildFontKey(fontPath, maxFontSize, color, gradient, outlinePx, monitor);
+    auto it = fontFaceMap_.find(exactKey);
     if (it != fontFaceMap_.end()) {
-        return it->second.get(); // Access the raw pointer from unique_ptr
+        return it->second.get();
+    }
+
+    // 2. Fallback: Search for an existing larger font that can satisfy this request via mipmapping
+    FontManager* bestMatch = nullptr;
+    int closestLargerSize = std::numeric_limits<int>::max();
+
+    for (const auto& [key, fontPtr] : fontFaceMap_) {
+        // Verify all styling attributes match perfectly so we aren't mixing colors or outlines
+        if (fontPtr->getOutlinePx() == outlinePx &&
+            // Note: If you add accessor methods for color/gradient to FontManager, verify them here:
+            // fontPtr->getFontPath() == fontPath && fontPtr->getMonitor() == monitor
+            key.rfind(fontPath, 0) == 0) // Basic prefix path check matching our key structure
+        {
+            int existingSize = fontPtr->getMaxFontSize(); // Add a public getter for maxFontSize_ if missing in Font.h
+
+            // Is it larger than what we need, but smaller than any other candidate we've seen?
+            if (existingSize >= maxFontSize && existingSize < closestLargerSize) {
+                closestLargerSize = existingSize;
+                bestMatch = fontPtr.get();
+            }
+        }
+    }
+
+    if (bestMatch) {
+        LOG_INFO("FontCache", "[PERF] Shared font hit! Using existing size " +
+            std::to_string(closestLargerSize) + " to satisfy request for size " + std::to_string(maxFontSize));
+        return bestMatch;
     }
 
     return nullptr;
@@ -76,19 +101,20 @@ std::string FontCache::buildFontKey(std::string font, int maxFontSize, SDL_Color
     return ss.str();
 }
 
-// MODIFIED: Parameter renamed to maxFontSize.
 bool FontCache::loadFont(std::string fontPath, int maxFontSize, SDL_Color color, bool gradient, int outlinePx, int monitor) {
-    // MODIFIED: Call buildFontKey with maxFontSize.
-    std::string key = buildFontKey(fontPath, maxFontSize, color, gradient, outlinePx, monitor);
-    if (fontFaceMap_.find(key) == fontFaceMap_.end()) {
-        // MODIFIED: Construct FontManager with maxFontSize.
-        auto font = std::make_unique<FontManager>(fontPath, maxFontSize, color, gradient, outlinePx, monitor);
-        if (font->initialize()) {
-            fontFaceMap_[key] = std::move(font);
-        }
-        else {
-            return false;
-        }
+    // Check if we already have an identical or larger font available that satisfies this layout component
+    if (getFont(fontPath, maxFontSize, color, gradient, outlinePx, monitor) != nullptr) {
+        return true; // Short-circuit completely! A valid target asset handle is already warm
     }
-    return true;
+
+    std::string key = buildFontKey(fontPath, maxFontSize, color, gradient, outlinePx, monitor);
+
+    // Only compile a cold initialization pass if absolutely no larger matching variant exists
+    auto font = std::make_unique<FontManager>(fontPath, maxFontSize, color, gradient, outlinePx, monitor);
+    if (font->initialize()) {
+        fontFaceMap_[key] = std::move(font);
+        return true;
+    }
+
+    return false;
 }
