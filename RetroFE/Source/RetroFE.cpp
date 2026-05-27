@@ -587,22 +587,40 @@ void RetroFE::launchExit(bool userInitiated) {
 
 // Free the textures, and optionall take down SDL
 void RetroFE::freeGraphicsMemory() {
-	// Free textures
-	if (currentPage_)
-	{
+	// 1. Cleanly detach hardware bindings for the foreground layout
+	if (currentPage_) {
 		currentPage_->freeGraphicsMemory();
 	}
 
-	// Close down SDL
+	// 2. FIX: Deep-clean all dormant layouts sitting on the layout stack
+	// Temporarily unroll the stack to access elements, or use a helper to clear them
+	std::vector<Page*> tempStack;
+	while (!pages_.empty()) {
+		if (pages_.top()) {
+			pages_.top()->freeGraphicsMemory();
+			tempStack.push_back(pages_.top());
+		}
+		pages_.pop();
+	}
+	// Re-stack them in original order
+	for (auto it = tempStack.rbegin(); it != tempStack.rend(); ++it) {
+		pages_.push(*it);
+	}
+
+	// 3. Complete system-wide SDL teardown
 	bool unloadSDL = false;
 	config_.getProperty(OPTION_UNLOADSDL, unloadSDL);
-	if (unloadSDL)
-	{
-		// Ensure currentPage_ is not null before calling deInitializeFonts
-		if (currentPage_)
-		{
+	if (unloadSDL) {
+		if (currentPage_) {
 			currentPage_->deInitializeFonts();
 		}
+
+		// Also ensure any stacked layout fonts drop their font layouts
+		// to prevent TrueType memory leaks across SDL context recreations
+		for (Page* p : tempStack) {
+			p->deInitializeFonts();
+		}
+
 		Component::clearSharedTextures();
 		SDL::deInitialize();
 		input_.clearJoysticks();
@@ -611,12 +629,9 @@ void RetroFE::freeGraphicsMemory() {
 
 // Optionally set up SDL, and load the textures
 void RetroFE::allocateGraphicsMemory() {
-
-	// Reopen SDL
 	bool unloadSDL = false;
 	config_.getProperty(OPTION_UNLOADSDL, unloadSDL);
-	if (unloadSDL)
-	{
+	if (unloadSDL) {
 		SDL::initialize(config_);
 		if (musicPlayer_) {
 			musicPlayer_->reinitialize();
@@ -624,41 +639,45 @@ void RetroFE::allocateGraphicsMemory() {
 		currentPage_->initializeFonts();
 	}
 
-	// Allocate textures
-	if (currentPage_)
-	{
+	// Allocate textures for the foreground view
+	if (currentPage_) {
 		currentPage_->allocateGraphicsMemory();
 	}
-
 }
 
 // Deinitialize RetroFE
 bool RetroFE::deInitialize() {
-
 	bool retVal = true;
 	VideoPool::shuttingDown_ = true;
 
-	// Free textures
-	freeGraphicsMemory();
-
-	// Delete page
+	// 1. Gather all existing pages into a unified destruction queue
+	std::vector<Page*> disintegrationQueue;
 	if (currentPage_) {
-		currentPage_->deInitialize();
-		delete currentPage_;
+		disintegrationQueue.push_back(currentPage_);
 		currentPage_ = nullptr;
 	}
 
-	// Destroy dormant pages in the layout stack
 	while (!pages_.empty()) {
-		Page* p = pages_.top();
-		pages_.pop();
-		if (p) {
-			p->deInitialize();
-			delete p;
+		if (pages_.top()) {
+			disintegrationQueue.push_back(pages_.top());
 		}
+		pages_.pop();
 	}
 
-	// Delete databases and other instance resources...
+	// 2. Clear graphics context dependencies across ALL pages immediately
+	// This stops any cross-page dangling pointer access during individual object destruction
+	for (Page* p : disintegrationQueue) {
+		p->freeGraphicsMemory();
+	}
+
+	// 3. Now safely delete structural heap elements 
+	for (Page* p : disintegrationQueue) {
+		p->deInitialize();
+		delete p;
+	}
+	disintegrationQueue.clear();
+
+	// 4. Tear down shared global database/font instances safely
 	if (metadb_) { delete metadb_; metadb_ = nullptr; }
 	if (db_) { delete db_; db_ = nullptr; }
 	if (debugFont_) { TTF_CloseFont(debugFont_); debugFont_ = nullptr; }
@@ -671,15 +690,12 @@ bool RetroFE::deInitialize() {
 	ThreadPool::getInstance().wait();
 	HiScores::getInstance().saveGlobalCacheToDisk();
 
-	// This must be called on EVERY exit to prevent a zombie singleton.
-
 	if (musicPlayer_) {
 		musicPlayer_->shutdown();
 		musicPlayer_ = nullptr;
 	}
 
 	LOG_INFO("RetroFE", (reboot_ ? "Rebooting" : "Exiting"));
-
 	return retVal;
 }
 
@@ -1726,7 +1742,7 @@ bool RetroFE::run() {
 				// refresh menu if in different collection
 				if (quickListCollection != "" && quickListCollection != collectionName)
 				{
-					currentPage_->allocateGraphicsMemory(); // Changed from reallocateMenuSpritePoints
+					currentPage_->allocateMenuSpritePoints(true); // Changed from reallocateMenuSpritePoints
 					preparePageForFirstRender(currentPage_);
 				}
 			}
@@ -1791,9 +1807,10 @@ bool RetroFE::run() {
 					else
 					{
 						LOG_ERROR("RetroFE", "Could not create page");
+						break;
 					}
-					currentPage_->reallocateMenuSpritePoints(); // update menu
 				}
+
 				std::string selectPlaylist = settingsPlaylist;
 				if (settingsPlaylist == "")
 				{
@@ -1809,12 +1826,16 @@ bool RetroFE::run() {
 					}
 					selectPlaylist = autoPlaylist;
 				}
+
 				currentPage_->selectPlaylist(selectPlaylist);
 				currentPage_->onNewItemSelected();
-				// refresh menu if in different collection
+
 				if (settingsCollection != "" && settingsCollection != collectionName)
 				{
-					currentPage_->allocateGraphicsMemory(); // Changed from reallocateMenuSpritePoints
+					// FIX: Ensure VRAM sub-allocations, font structures, and textures match the newly generated XML objects
+					//currentPage_->initializeFonts();
+					currentPage_->allocateGraphicsMemory();
+					currentPage_->allocateMenuSpritePoints(true);
 					preparePageForFirstRender(currentPage_);
 				}
 			}
