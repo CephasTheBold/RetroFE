@@ -24,6 +24,7 @@
 #include "Utility/Log.h"
 #include "Utility/ThreadPool.h"
 #include "Utility/Utils.h"
+#include "Utility/CrashHandler.h"
 #include "RetroFE.h"
 #include "SDL.h"
 #include "versioning.h" // Created at build time
@@ -121,6 +122,7 @@ static void sendEnterKey() {
 
 int main(int argc, char** argv)
 {
+    CrashHandler::initialize();
     Configuration::initialize();
     Configuration config;
     std::string dbPath = Utils::combinePath(Configuration::absolutePath, "meta.db");
