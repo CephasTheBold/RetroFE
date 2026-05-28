@@ -11,6 +11,7 @@ public:
 
     void startInitialization();
     bool isReady();
+    void waitForCompletion();
 
     static IRestrictor* getGlobalRestrictor();
 

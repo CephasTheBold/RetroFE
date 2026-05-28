@@ -19,25 +19,21 @@
  }
 
  bool RestrictorManager::isReady() {
-     if (!restrictorFuture_.valid()) {
-         return false;
-     }
-     auto status = restrictorFuture_.wait_for(std::chrono::seconds(0));
-     if (status == std::future_status::ready) {
-         if (!restrictor_) {
-             restrictor_ = restrictorFuture_.get(); // Move the result from the future
-             if (restrictor_) {
-                 LOG_INFO(COMPONENT, "Restrictor hardware detection complete. Device found.");
-                 gRestrictor = restrictor_.get(); // Set the global pointer
-             }
-             else {
-                 LOG_INFO(COMPONENT, "Restrictor hardware detection complete. No device found.");
-                 gRestrictor = nullptr;
-             }
+     return !restrictorFuture_.valid() || restrictorFuture_.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+ }
+
+ // ADD THIS FUNCTION:
+ void RestrictorManager::waitForCompletion() {
+     if (restrictorFuture_.valid()) {
+         // This safely transitions ownership of the unique_ptr out of the future
+         restrictor_ = restrictorFuture_.get();
+         if (restrictor_) {
+             gRestrictor = restrictor_.get();
          }
-         return true;
+         else {
+             gRestrictor = nullptr;
+         }
      }
-     return false;
  }
 
  IRestrictor* RestrictorManager::getGlobalRestrictor() {
