@@ -1,16 +1,19 @@
 #include "CrashHandler.h"
+#include "Utils.h"           
 #include "SDL.h"
 #include <iostream>
 #include <fstream>
 #include <sstream>
+#include <filesystem>
 
 #ifdef _WIN32
 #include <windows.h>
 #else
-#include <csignal>
 #include <unistd.h>
-#include <execinfo.h> 
+#include <limits.h>
 #endif
+
+namespace fs = std::filesystem;
 
 void CrashHandler::initialize() {
 #ifdef _WIN32
@@ -29,8 +32,42 @@ void CrashHandler::logAndShowCrash(const std::string& errorReason, const std::st
         << "Reason: " << errorReason << "\n\n"
         << "Call Stack Context:\n" << stackTrace;
 
-    // 1. Force an unbuffered file write to disk immediately (bypasses memory logging lag)
-    std::ofstream logFile("log.txt", std::ios::app);
+    std::string targetLogPath = "";
+
+    // 1. ASK THE OS KERNEL WHERE OUR EXECUTABLE DIRECTORY IS SITTING
+    try {
+        fs::path baseDir;
+#ifdef _WIN32
+        wchar_t buffer[MAX_PATH];
+        GetModuleFileNameW(NULL, buffer, MAX_PATH);
+        baseDir = fs::path(buffer).parent_path(); // Folder containing retrofe.exe
+
+        // Match your Windows structural rule: The log sits in the parent folder
+        // relative to the executable directory (one folder up)
+        targetLogPath = Utils::combinePath(baseDir.parent_path().string(), "log.txt");
+#else
+        // Linux / macOS native execution lookups
+        char buffer[PATH_MAX];
+        ssize_t len = readlink("/proc/self/exe", buffer, sizeof(buffer) - 1);
+        if (len != -1) {
+            buffer[len] = '\0';
+            baseDir = fs::path(buffer).parent_path();
+            targetLogPath = Utils::combinePath(baseDir.string(), "log.txt");
+        }
+#endif
+    }
+    catch (...) {
+        // Absolute worst-case fallback if the filesystem check fails
+        targetLogPath = "";
+    }
+
+    // If the path resolution failed entirely, default to execution runtime context
+    if (targetLogPath.empty()) {
+        targetLogPath = "log.txt";
+    }
+
+    // 2. Force the unbuffered write straight to the derived path
+    std::ofstream logFile(targetLogPath, std::ios::app);
     if (logFile.is_open()) {
         logFile << "\n==================================================\n";
         logFile << "[CRITICAL] [FATAL CRASH DETECTED]\n";
@@ -39,9 +76,9 @@ void CrashHandler::logAndShowCrash(const std::string& errorReason, const std::st
         logFile.close();
     }
 
-    // 2. Cross-platform popup container
+    // 3. Display the standard cross-platform message box
     std::string popupMsg = "RetroFE has encountered a fatal error (" + errorReason + ").\n\n"
-        "A diagnostic call stack trace has been forced to log.txt.\n"
+        "A diagnostic call stack trace has been forced to your log file.\n"
         "Please send your layout configurations and log.txt to the developer.";
 
     SDL_ShowSimpleMessageBox(
