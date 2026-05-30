@@ -9,6 +9,9 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include <dbghelp.h>
+// Instruct the compiler to link dbghelp.lib dynamically on Windows
+#pragma comment(lib, "dbghelp.lib") 
 #else
 #include <unistd.h>
 #include <limits.h>
@@ -169,5 +172,49 @@ void CrashHandler::linuxSignalHandler(int signalNumber) {
 
     // 5. Hard immediate kernel bypass drop. Safe from deadlock states.
     _exit(EXIT_FAILURE);
+}
+#endif
+
+#ifdef _WIN32
+void createMinidump(struct _EXCEPTION_POINTERS* exceptionInfo, const std::string& baseDirectory) {
+    // 1. Construct a unique filename based on the current system time
+    SYSTEMTIME localTime;
+    GetLocalTime(&localTime);
+
+    std::string dumpPath = Utils::combinePath(baseDirectory, "retrofe_crash.dmp");
+
+    // 2. Create the file on disk using native Windows API
+    HANDLE hFile = CreateFileA(
+        dumpPath.c_str(),
+        GENERIC_WRITE,
+        0,
+        nullptr,
+        CREATE_ALWAYS,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr
+    );
+
+    if (hFile != INVALID_HANDLE_VALUE) {
+        // 3. Bind the exception pointers so the dump knows exactly which thread faulted
+        MINIDUMP_EXCEPTION_INFORMATION dumpExceptionInfo;
+        dumpExceptionInfo.ThreadId = GetCurrentThreadId();
+        dumpExceptionInfo.ExceptionPointers = exceptionInfo;
+        dumpExceptionInfo.ClientPointers = TRUE;
+
+        // 4. Write the dump file
+        // MiniDumpWithDataSegs gives you a great balance: captures global state variables 
+        // without ballooning the file size like a full memory dump would.
+        BOOL success = MiniDumpWriteDump(
+            GetCurrentProcess(),
+            GetCurrentProcessId(),
+            hFile,
+            MiniDumpWithDataSegs,
+            &dumpExceptionInfo,
+            nullptr,
+            nullptr
+        );
+
+        CloseHandle(hFile);
+    }
 }
 #endif
