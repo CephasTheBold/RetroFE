@@ -14,7 +14,6 @@ private:
 #ifdef _WIN32
     // Windows Structured Exception Handling Callback
     static long __stdcall windowsExceptionFilter(struct _EXCEPTION_POINTERS* exceptionInfo);
-    void createMinidump(_EXCEPTION_POINTERS* exceptionInfo, const std::string& baseDirectory);
 #else
     // Linux POSIX Signal Callback
     static void linuxSignalHandler(int signalNumber);
