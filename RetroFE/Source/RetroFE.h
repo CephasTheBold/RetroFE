@@ -75,8 +75,8 @@ private:
 #ifdef WIN32	
     HWND hwnd;
 #endif
-    volatile bool initialized;
-    volatile bool initializeError;
+    std::atomic<bool> initialized{ false };
+    std::atomic<bool> initializeError{ false };
     SDL_Thread   *initializeThread;
     static int    initialize( void *context );
 

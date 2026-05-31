@@ -383,71 +383,100 @@ void RetroFE::render() {
 
 // Initialize the configuration and database
 int RetroFE::initialize(void* context) {
-
 	auto* instance = static_cast<RetroFE*>(context);
 
-	LOG_INFO("RetroFE", "Initializing");
+	LOG_INFO("RetroFE", "Asynchronous background core initialization started");
 
+	// Initializing curl safely once across the application lifecycle
 	static std::once_flag curlOnce;
 	std::call_once(curlOnce, [] {
 		curl_global_init(CURL_GLOBAL_DEFAULT);
 		});
 
-	if (!instance->input_.initialize())
-	{
-		LOG_ERROR("RetroFE", "Could not initialize user controls");
-		instance->initializeError = true;
-		return -1;
+	// =================================================================
+	// STEP 1: PARALLEL HARDWARE & NETWORK SYNCHRONIZATION
+	// =================================================================
+	// Halt the background thread—NOT the main UI thread—until your physical 
+	// joystick restrictor hardware (e.g., ServoStik) finishes handshake lookups.
+	g_restrictorManager.waitForCompletion();
+
+	// Check if global high scores are enabled. Since all config_.import() calls 
+	// finished on the main thread before this thread spawned, reading here is completely race-free.
+	bool globalHiscoresEnabled = false;
+	instance->config_.getProperty(OPTION_GLOBALHISCORESENABLED, globalHiscoresEnabled);
+
+	// Run community payload synchronizations in parallel with the splash screen animation
+	PayloadSync::Config psCfg = PayloadSync::Config::LoadFrom(instance->config_);
+	if (psCfg.enabled && globalHiscoresEnabled) {
+		LOG_INFO("Payload", std::string("Startup sync: file=\"") + psCfg.ResolvePayloadPath() + "\"");
+
+		const bool ok = PayloadSync::RunWithConfig(psCfg, /*dryRun=*/false);
+
+		LOG_INFO("Payload", std::string("Startup sync finished: ") + (ok ? "OK" : "Errors (see log)"));
 	}
+	else {
+		LOG_INFO("Payload", "Startup sync disabled by config (payload.enabled=false)");
+	}
+
+	// =================================================================
+	// STEP 2: METADATA & DATABASE SCHEMAS LIFECYCLE DEPLOYMENT
+	// =================================================================
+	// Allocate database structures on the heap (matching the raw pointer lifecycle 
+	// expected by RetroFE's destructor / deInitialize function).
 	instance->db_ = new DB(Utils::combinePath(Configuration::absolutePath, "meta.db"));
 
 	if (!instance->db_->initialize())
 	{
 		LOG_ERROR("RetroFE", "Could not initialize database");
-		instance->initializeError = true;
+		instance->initializeError.store(true); // Thread-safe atomic store
 		return -1;
 	}
+
 	instance->metadb_ = new MetadataDatabase(*(instance->db_), instance->config_);
 
 	if (!instance->metadb_->initialize())
 	{
 		LOG_ERROR("RetroFE", "Could not initialize meta database");
-		instance->initializeError = true;
+		instance->initializeError.store(true); // Thread-safe atomic store
 		return -1;
 	}
 
+	// Spin up sound pipeline bindings without stalling visual UI rendering
 	instance->initializeMusicPlayer();
 
-	// Initialize HiScores
+	// =================================================================
+	// STEP 3: HIGH SCORE DISK PACK EXTRACT & SERVER WARMUP
+	// =================================================================
 	std::string zipPath = Utils::combinePath(Configuration::absolutePath, "hi2txt", "hi2txt_defaults.zip");
 	std::string overridePath = Utils::combinePath(Configuration::absolutePath, "hi2txt", "scores");
 
 	HiScores::getInstance().loadHighScores(zipPath, overridePath);
-	
-	bool globalHiscoresEnabled = false;
-	instance->config_.getProperty(OPTION_GLOBALHISCORESENABLED, globalHiscoresEnabled);
-	
+
 	if (globalHiscoresEnabled) {
 		LOG_INFO("RetroFE", "Global HiScores enabled; initializing iScored integration.");
 		// 1) Set the gameroom name (must match server-side config).
 		HiScores::getInstance().setGlobalGameroom("Pipmick");
 
-		// 2 Set a JSON file to persist global cache for offline fallback.
+		// 2) Set a JSON file to persist global cache for offline fallback.
 		HiScores::getInstance().setGlobalPersistPath(Utils::combinePath(Configuration::absolutePath,
 			"iScored", "global_cache.json"));
 
-		// 3) (Optional) Load last-good cache first so the UI has something instantly.
+		// 3) Load last-good cache first so the UI has data instantly.
 		HiScores::getInstance().loadGlobalCacheFromDisk();
 
-		// 4) Warm EVERYTHING from iScored in the background (single HTTP call).
-		//    getAllScores has no server-side max; HiScores will cap locally to GlobalScoresMax.
+		// 4) Warm everything from iScored in the background via async network requests.
 		HiScores::getInstance().refreshGlobalAllFromSingleCallAsync(
-			/*limit=*/0
-			// Optional finish hook:
-			, []() { LOG_INFO("HiScores", "Global refresh completed."); }
+			/*limit=*/0,
+			[]() { LOG_INFO("HiScores", "Global refresh completed."); }
 		);
 	}
-	instance->initialized = true;
+
+	// =================================================================
+	// STEP 4: ESTABLISH SYSTEM-WIDE CROSS THREAD MEMORY BARRIER
+	// =================================================================
+	// Atomically store true. This creates an immediate execution fence, ensuring 
+	// all pointer allocations made above become fully visible to the Main UI Thread.
+	instance->initialized.store(true);
 	return 0;
 }
 
@@ -728,7 +757,7 @@ void RetroFE::preparePageForFirstRender(Page* page, int maxPasses) {
 
 // Run RetroFE
 bool RetroFE::run() {
-#ifdef WIN32	
+#ifdef WIN32    
 	bool highPriority = false;
 	config_.getProperty(OPTION_HIGHPRIORITY, highPriority);
 	if (highPriority) {
@@ -738,8 +767,34 @@ bool RetroFE::run() {
 	}
 #endif
 
-	g_restrictorManager.startInitialization();
+	// =================================================================
+	// PHASE 1: IMMEDIATE SPLASH DISPLAY (Original Intent)
+	// =================================================================
+	// Spin up SDL and font frameworks instantly so we can show the screen
+	if (!SDL::initialize(config_))
+		return false;
+	if (!fontcache_.initialize())
+		return false;
 
+	auto* mp = MusicPlayer::getInstance();
+
+	// Load the splash page, settle assets, and draw it immediately
+	currentPage_ = loadSplashPage();
+	if (!currentPage_) {
+		LOG_ERROR("RetroFE", "Could not create splash page context layout");
+		return false;
+	}
+	preparePageForFirstRender(currentPage_);
+	state_ = RETROFE_ENTER;
+	bool splashMode = true;
+	bool exitSplashMode = false;
+
+	// Push the very first visual frame to the display buffer instantly
+	render();
+
+	// =================================================================
+		// PHASE 2: LOAD CONFIGURATIONS & INITIALIZE SUB-SYSTEMS (Main Thread)
+		// =================================================================
 	std::string controlsConfPath = Utils::combinePath(Configuration::absolutePath, "controls");
 	if (!fs::exists(controlsConfPath + ".conf"))
 	{
@@ -763,32 +818,35 @@ bool RetroFE::run() {
 		exit(EXIT_FAILURE);
 	}
 
-	//globalhiscores enabled?
-	bool globalHiscoresEnabled = false;
-	config_.getProperty(OPTION_GLOBALHISCORESENABLED, globalHiscoresEnabled);
-
-	PayloadSync::Config psCfg = PayloadSync::Config::LoadFrom(config_);
-	if (psCfg.enabled && globalHiscoresEnabled) {
-		LOG_INFO("Payload", std::string("Startup sync: file=\"") + psCfg.ResolvePayloadPath() + "\"");
-
-		const bool ok = PayloadSync::RunWithConfig(psCfg, /*dryRun=*/false);
-
-		LOG_INFO("Payload", std::string("Startup sync finished: ") + (ok ? "OK" : "Errors (see log)"));
-	}
-	else {
-		LOG_INFO("Payload", "Startup sync disabled by config (payload.enabled=false)");
+	// STEP 1: Load all baseline input properties into config_ first so they exist in memory
+	config_.import("controls", controlsConfPath + ".conf");
+	for (int i = 1; i < 10; i++)
+	{
+		std::string numberedControlsFile = controlsConfPath + std::to_string(i) + ".conf";
+		if (fs::exists(numberedControlsFile))
+		{
+			config_.import("controls", numberedControlsFile, false);
+		}
 	}
 
-	g_restrictorManager.waitForCompletion();
-
-	// Initialize SDL
-	if (!SDL::initialize(config_))
+	if (config_.propertiesEmpty())
+	{
+		LOG_ERROR("RetroFE", "No controls.conf found");
 		return false;
-	if (!fontcache_.initialize())
+	}
+
+	// STEP 2: Now that mappings exist in config_, safely initialize hardware hooks on the Main Thread
+	if (!input_.initialize())
+	{
+		LOG_ERROR("RetroFE", "Could not initialize user controls on the main thread");
 		return false;
+	}
 
-	auto* mp = MusicPlayer::getInstance();
-
+	// =================================================================
+	// PHASE 3: CONTEXT PROPERTY CONVERSION ZONE (Eliminates the Data Race)
+	// =================================================================
+	// Sequentially extract tracking values from config_ now so that the main
+	// thread isn't inspecting properties while the background thread starts up.
 	config_.getProperty(OPTION_SHOWFPS, showFps_);
 	if (showFps_)
 	{
@@ -813,26 +871,9 @@ bool RetroFE::run() {
 	SDL_RaiseWindow(SDL::getWindow(0));
 	SDL_SetWindowGrab(SDL::getWindow(0), SDL_TRUE);
 
-	// Define control configuration
-	config_.import("controls", controlsConfPath + ".conf");
-	for (int i = 1; i < 10; i++)
-	{
-		std::string numberedControlsFile = controlsConfPath + std::to_string(i) + ".conf";
-		if (fs::exists(numberedControlsFile))
-		{
-			config_.import("controls", numberedControlsFile, false);
-		}
-	}
-
-	if (config_.propertiesEmpty())
-	{
-		LOG_ERROR("RetroFE", "No controls.conf found");
-		return false;
-	}
-
 	float preloadTime = 0;
 
-	// Initialize video
+	// Initialize video settings properties
 	bool videoEnable = true;
 	int videoLoop = 0;
 	config_.getProperty(OPTION_VIDEOENABLE, videoEnable);
@@ -842,14 +883,7 @@ bool RetroFE::run() {
 
 	VideoPool::shuttingDown_ = false;
 
-	initializeThread = SDL_CreateThread(initialize, "RetroFEInit", (void*)this);
-
-	if (!initializeThread)
-	{
-		LOG_INFO("RetroFE", "Could not initialize RetroFE");
-		return false;
-	}
-
+	// Extract Attract Mode engine options
 	bool attractModeFast = false;
 	int attractModeTime = 0;
 	int attractModeNextTime = 0;
@@ -860,27 +894,19 @@ bool RetroFE::run() {
 	bool attractModeLaunch = false;
 	std::string attractModeLaunchMinMaxScrolls = "3,5";
 
-	std::string firstCollection = "Main";
-	bool running = true;
-	state_ = RETROFE_NEW;
-
-#ifndef WIN32
-	// SIGUSR1 triggers a live layout XML hot-reload
-	signal(SIGUSR1, RetroFE::handleSigusr1);
-	// SIGHUP triggers a clean restart (re-reads all configuration)
-	signal(SIGHUP, RetroFE::handleSighup);
-#endif
-
 	config_.getProperty(OPTION_ATTRACTMODETIME, attractModeTime);
 	config_.getProperty(OPTION_ATTRACTMODENEXTTIME, attractModeNextTime);
 	config_.getProperty(OPTION_ATTRACTMODEPLAYLISTTIME, attractModePlaylistTime);
 	config_.getProperty(OPTION_ATTRACTMODECOLLECTIONTIME, attractModeCollectionTime);
 	config_.getProperty(OPTION_ATTRACTMODEMINTIME, attractModeMinTime);
 	config_.getProperty(OPTION_ATTRACTMODEMAXTIME, attractModeMaxTime);
+
+	std::string firstCollection = "Main";
 	config_.getProperty(OPTION_FIRSTCOLLECTION, firstCollection);
 	config_.getProperty(OPTION_ATTRACTMODEFAST, attractModeFast);
 	config_.getProperty(OPTION_ATTRACTMODELAUNCH, attractModeLaunch);
 	config_.getProperty(OPTION_ATTRACTMODELAUNCHMINMAXSCROLLS, attractModeLaunchMinMaxScrolls);
+
 	std::vector<std::string> attMinMaxVec;
 	Utils::listToVector(attractModeLaunchMinMaxScrolls, attMinMaxVec, ',');
 
@@ -895,9 +921,10 @@ bool RetroFE::run() {
 	attract_.setLaunchFrequencyRange(Utils::convertInt(attMinMaxVec[0]), Utils::convertInt(attMinMaxVec[1]));
 
 	attract_.setPlaylistValidator([this](const std::string& playlistName) {
-		return isInAttractModeSkipPlaylist(playlistName); //
+		return isInAttractModeSkipPlaylist(playlistName);
 		});
 
+	// Extract FPS pacing details
 	int fps = 60;
 	int fpsIdle = 60;
 	config_.getProperty(OPTION_FPS, fps);
@@ -907,28 +934,11 @@ bool RetroFE::run() {
 	bool vSync = false;
 	config_.getProperty(OPTION_VSYNC, vSync);
 
-	int initializeStatus = 0;
-	bool inputClear = false;
-
-	// load the initial splash screen, unload it once it is complete
-	currentPage_ = loadSplashPage();
-	preparePageForFirstRender(currentPage_);
-	state_ = RETROFE_ENTER;
-	bool splashMode = true;
-	bool exitSplashMode = false;
-	// don't show splash
 	bool screensaver = false;
 	config_.getProperty(OPTION_SCREENSAVER, screensaver);
-
-	Launcher l(config_, *this);
-	Menu m(config_, input_);
-	preloadTime = static_cast<float>(SDL_GetPerformanceCounter() / freq_);
-
-	l.LEDBlinky(1);
-	l.startScript();
 	config_.getProperty(OPTION_KIOSK, kioskLock_);
 
-	// settings button
+	// Extract Collection Navigation UI shortcuts properties
 	std::string settingsCollection = "";
 	std::string settingsPlaylist = "settings";
 	std::string settingsCollectionPlaylist;
@@ -940,7 +950,6 @@ bool RetroFE::run() {
 		config_.setProperty("settingsPlaylist", settingsPlaylist);
 	}
 
-	// quickList button
 	std::string quickListCollection = "";
 	std::string quickListPlaylist = "quicklist";
 	std::string quickListCollectionPlaylist;
@@ -952,6 +961,50 @@ bool RetroFE::run() {
 		config_.setProperty("quickListPlaylist", quickListPlaylist);
 	}
 
+	bool globalHiscoresEnabled = false;
+	config_.getProperty(OPTION_GLOBALHISCORESENABLED, globalHiscoresEnabled);
+
+	// =================================================================
+	// PHASE 4: ASYNC INITIALIZATION KICKOFF
+	// =================================================================
+	// Kickoff control hardware monitoring layers async lookup
+	g_restrictorManager.startInitialization();
+
+	// Reset status flags securely using the updated atomic variables
+	initializeError.store(false);
+	initialized.store(false);
+
+	// Deploy the heavy blocking operations background database thread
+	initializeThread = SDL_CreateThread(initialize, "RetroFEInit", (void*)this);
+	if (!initializeThread)
+	{
+		LOG_INFO("RetroFE", "Could not initialize RetroFE background worker thread");
+		return false;
+	}
+
+	// =================================================================
+	// PHASE 5: RUNTIME METRIC ANCHORS SETUP
+	// =================================================================
+	bool running = true;
+	state_ = RETROFE_NEW;
+
+#ifndef WIN32
+	// SIGUSR1 triggers a live layout XML hot-reload
+	signal(SIGUSR1, RetroFE::handleSigusr1);
+	// SIGHUP triggers a clean restart (re-reads all configuration)
+	signal(SIGHUP, RetroFE::handleSighup);
+#endif
+
+	int initializeStatus = 0;
+	bool inputClear = false;
+
+	Launcher l(config_, *this);
+	Menu m(config_, input_);
+	preloadTime = static_cast<float>(SDL_GetPerformanceCounter() / freq_);
+
+	l.LEDBlinky(1);
+	l.startScript();
+
 	float deltaTime = 0;
 
 	double initial_current_time_ms = SDL_GetPerformanceCounter() * 1000.0 / (double)freq_;
@@ -960,9 +1013,8 @@ bool RetroFE::run() {
 	lastFrameTimePointMs_ = initial_current_time_ms;
 
 	constexpr double GlobalScoreFetchIntervalMs = 5 * 60 * 1000.0; // 5 minutes
-	constexpr double payloadSyncIntervalMs = 30.0 * 60.0 * 1000.0; //30 minutes
+	constexpr double payloadSyncIntervalMs = 30.0 * 60.0 * 1000.0; // 30 minutes
 	double nextFetchTimeMs = initial_current_time_ms + GlobalScoreFetchIntervalMs;
-
 	double nextPayloadSyncMs = initial_current_time_ms + payloadSyncIntervalMs;
 
 	// --- Frame timing smoothing state (persistent across frames in this run) ---
@@ -971,7 +1023,6 @@ bool RetroFE::run() {
 	constexpr float MAX_DT = 1.0f / 15.0f;    // clamp to ~15 FPS
 	constexpr float SMOOTH_FACTOR = 0.10f;    // 10% smoothing factor (higher = faster adaptation)
 
-
 	int hardwareHz = SDL::getDisplayRefresh(0);
 	if (hardwareHz <= 0) hardwareHz = fps; // Fallback to config if HW query fails
 
@@ -979,12 +1030,12 @@ bool RetroFE::run() {
 
 	auto kickFetch = [&]() {
 		HiScores::getInstance().refreshGlobalAllFromSingleCallAsync(
-			/*limit=*/0
-			// Optional finish hook:
-			, []() { LOG_INFO("HiScores", "Global refresh completed."); }
+			/*limit=*/0,
+			[]() { LOG_INFO("HiScores", "Global refresh completed."); }
 		);
 		};
 
+	PayloadSync::Config psCfg = PayloadSync::Config::LoadFrom(config_);
 
 	while (running)
 	{
@@ -1017,8 +1068,10 @@ bool RetroFE::run() {
 		while (SDL_PollEvent(&e)) input_.update(e);
 		input_.updateKeystate(); // once per frame, AFTER consuming events, BEFORE processUserInput()
 
-		if (mp) mp->pump();
-
+		if (initialized.load() && mp) {
+			mp->pump();
+		}
+		
 		bool activelyAnimating = (currentPage_ && (
 				currentPage_->isMenuScrolling()
 				|| !currentPage_->isIdle()
@@ -2859,7 +2912,6 @@ bool RetroFE::run() {
 				render();
 
 			// Only do custom frame pacing if vsync is OFF
-// Inside the while (running) loop:
 			if (!vSync)
 			{
 				const double currentFrameIntervalMs = activelyAnimating ? fpsTime : fpsIdleTime;
