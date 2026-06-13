@@ -942,7 +942,6 @@ void PageBuilder::loadReloadableImages(const xml_node<>* layout, const std::stri
 
 FontManager* PageBuilder::addFont(const xml_node<>* component, const xml_node<>* defaults, int monitor) {
 	xml_attribute<> const* fontXml = component->first_attribute("font");
-	xml_attribute<> const* fontColorXml = component->first_attribute("fontColor");
 	xml_attribute<> const* fontSizeXml = component->first_attribute("loadFontSize");
 	xml_attribute<> const* fontGradientXml = component->first_attribute("fontGradient");
 	xml_attribute<> const* fontOutlineXml = component->first_attribute("fontOutline");
@@ -951,16 +950,10 @@ FontManager* PageBuilder::addFont(const xml_node<>* component, const xml_node<>*
 		if (!fontXml && defaults->first_attribute("font")) {
 			fontXml = defaults->first_attribute("font");
 		}
-
-		if (!fontColorXml && defaults->first_attribute("fontColor")) {
-			fontColorXml = defaults->first_attribute("fontColor");
-		}
-
 		if (!fontSizeXml && defaults->first_attribute("loadFontSize")) {
 			fontSizeXml = defaults->first_attribute("loadFontSize");
 		}
-
-		if(!fontGradientXml && defaults->first_attribute("fontGradient")) {
+		if (!fontGradientXml && defaults->first_attribute("fontGradient")) {
 			fontGradientXml = defaults->first_attribute("fontGradient");
 		}
 		if (!fontOutlineXml && defaults->first_attribute("fontOutline")) {
@@ -968,14 +961,11 @@ FontManager* PageBuilder::addFont(const xml_node<>* component, const xml_node<>*
 		}
 	}
 
-
-	// use layout defaults unless overridden
+	// Use layout configuration defaults unless explicitly overridden by component properties
 	std::string fontName = fontName_;
-	SDL_Color fontColor = fontColor_;
 	int fontSize = fontSize_;
 	bool fontGradient = fontGradient_;
 	int fontOutline = fontOutline_;
-
 
 	if (fontXml) {
 		fontName = Configuration::convertToAbsolutePath(
@@ -983,18 +973,6 @@ FontManager* PageBuilder::addFont(const xml_node<>* component, const xml_node<>*
 			fontXml->value());
 
 		LOG_DEBUG("Layout", "loading font " + fontName);
-	}
-	if (fontColorXml) {
-		int intColor = 0;
-		std::stringstream ss;
-		ss << std::hex << fontColorXml->value();
-		ss >> intColor;
-
-		fontColor.b = intColor & 0xFF;
-		intColor >>= 8;
-		fontColor.g = intColor & 0xFF;
-		intColor >>= 8;
-		fontColor.r = intColor & 0xFF;
 	}
 
 	if (fontSizeXml) {
@@ -1009,8 +987,12 @@ FontManager* PageBuilder::addFont(const xml_node<>* component, const xml_node<>*
 		fontOutline = Utils::convertInt(fontOutlineXml->value());
 	}
 
-	fontCache_->loadFont(fontName, fontSize, fontColor, fontGradient, fontOutline, monitor);
-	return fontCache_->getFont(fontName, fontSize, fontColor, fontGradient, fontOutline, monitor);
+	// OPTIMIZATION: Pass a flat white baseline color to the asset cache pipeline.
+	// Individual text instance color is now a rendering property tracked strictly by ViewInfo!
+	SDL_Color whiteBaseline{ 255, 255, 255, 255 };
+
+	fontCache_->loadFont(fontName, fontSize, whiteBaseline, fontGradient, fontOutline, monitor);
+	return fontCache_->getFont(fontName, fontSize, whiteBaseline, fontGradient, fontOutline, monitor);
 }
 
 void PageBuilder::loadTweens(Component* c, xml_node<>* componentXml) {
@@ -1598,6 +1580,25 @@ void PageBuilder::buildViewInfo(xml_node<>* componentXml, ViewInfo& info, xml_no
 	if (fontColor) {
 		FontManager* font = addFont(componentXml, defaultXml, info.Monitor);
 		info.font = font;
+	}
+
+	// NEW: Parse component text color, falling back to layout defaults if unassigned
+	xml_attribute<> const* compFontColor = findAttribute(componentXml, "fontColor", defaultXml);
+	if (compFontColor) {
+		int intColor = 0;
+		std::stringstream ss;
+		ss << std::hex << compFontColor->value();
+		ss >> intColor;
+
+		info.textColor.b = intColor & 0xFF;
+		intColor >>= 8;
+		info.textColor.g = intColor & 0xFF;
+		intColor >>= 8;
+		info.textColor.r = intColor & 0xFF;
+		info.textColor.a = 255;
+	}
+	else {
+		info.textColor = fontColor_; // Fall back to layout's global fontColor default
 	}
 
 	if (backgroundColor) {

@@ -85,6 +85,10 @@ public:
     int getWidth(const std::string& text);
     int getOutlinePx() const;  // FIXED: removed trailing backslash
 
+    const std::string& getFontPath() const { return fontPath_; }
+    bool               getGradient() const { return gradient_; }
+    int                getMonitor()  const { return monitor_; }
+
     // NEW: On-demand glyph loading
     bool loadGlyphOnDemand(Uint32 ch, MipLevel* mip);
 

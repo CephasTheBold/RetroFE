@@ -68,12 +68,12 @@ void Text::draw() {
     if (!mip || !mip->fillTexture) return;
 
     const float scale = (mip->fontSize > 0)
-    ? (baseViewInfo.FontSize / (float)mip->fontSize)
-    : 1.f;
+        ? (baseViewInfo.FontSize / (float)mip->fontSize)
+        : 1.f;
 
     const float maxW =
-    (baseViewInfo.Width < baseViewInfo.MaxWidth && baseViewInfo.Width > 0)
-    ? baseViewInfo.Width : baseViewInfo.MaxWidth;
+        (baseViewInfo.Width < baseViewInfo.MaxWidth && baseViewInfo.Width > 0)
+        ? baseViewInfo.Width : baseViewInfo.MaxWidth;
 
     if (needsUpdate_ || lastScale_ != scale || lastMaxWidth_ != maxW) {
         updateGlyphPositions(font, scale, maxW);
@@ -82,6 +82,12 @@ void Text::draw() {
         lastMaxWidth_ = maxW;
     }
     if (cachedPositions_.empty()) return;
+
+    // NEW: Apply on-the-fly texture color modulation before entering loops
+    SDL_SetTextureColorMod(mip->fillTexture, baseViewInfo.textColor.r, baseViewInfo.textColor.g, baseViewInfo.textColor.b);
+    if (mip->dynamicFillTexture) {
+        SDL_SetTextureColorMod(mip->dynamicFillTexture, baseViewInfo.textColor.r, baseViewInfo.textColor.g, baseViewInfo.textColor.b);
+    }
 
     const float oldW = baseViewInfo.Width;
     const float oldH = baseViewInfo.Height;
@@ -134,6 +140,9 @@ void Text::draw() {
 
 void Text::updateGlyphPositions(FontManager* font, float scale, float maxWidth) {
     cachedPositions_.clear();
+
+    if (!font) return;
+
     cachedPositions_.reserve(textData_.size());
 
     const int targetFontSize = static_cast<int>(baseViewInfo.FontSize);

@@ -16,6 +16,7 @@
 #pragma once
 
 #include "Animate/TweenTypes.h"
+#include <SDL2/SDL_ttf.h>
 #include <string>
 #include <map>
 #include <cfloat>
@@ -81,6 +82,8 @@ public:
     bool         Restart{ false };
     bool         Additive{ false };
     bool         PauseOnScroll{ true };
+
+    SDL_Color    textColor{ 255, 255, 255, 255 };
 
 private:
     float AbsoluteHeight() const;

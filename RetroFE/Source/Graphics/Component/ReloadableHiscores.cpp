@@ -583,6 +583,11 @@ void ReloadableHiscores::reloadTexture(bool resetScroll) {
 		SDL_Texture* fillTex = mip->fillTexture;
 		SDL_Texture* outlineTex = mip->outlineTexture;
 
+		SDL_SetTextureColorMod(fillTex, baseViewInfo.textColor.r, baseViewInfo.textColor.g, baseViewInfo.textColor.b);
+		if (mip->dynamicFillTexture) {
+			SDL_SetTextureColorMod(mip->dynamicFillTexture, baseViewInfo.textColor.r, baseViewInfo.textColor.g, baseViewInfo.textColor.b);
+		}
+
 		// Draw Header
 		if (headerTexture_) {
 			SDL_SetRenderTarget(renderer, headerTexture_);
@@ -691,6 +696,11 @@ void ReloadableHiscores::renderNoDataMessage(SDL_Renderer* renderer, FontManager
 
 	if (mip && mip->fillTexture) {
 		const float mipRelativeScale = (mip->height > 0) ? (targetPixelHeight / mip->height) : 1.0f;
+
+		SDL_SetTextureColorMod(mip->fillTexture, baseViewInfo.textColor.r, baseViewInfo.textColor.g, baseViewInfo.textColor.b);
+		if (mip->dynamicFillTexture) {
+			SDL_SetTextureColorMod(mip->dynamicFillTexture, baseViewInfo.textColor.r, baseViewInfo.textColor.g, baseViewInfo.textColor.b);
+		}
 
 		for (const auto& line : lines) {
 			float textW = measureTextWidthExact(font, line, scale);

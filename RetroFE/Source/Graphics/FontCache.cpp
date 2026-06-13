@@ -64,13 +64,13 @@ FontManager* FontCache::getFont(const std::string& fontPath, int maxFontSize, SD
     int closestLargerSize = std::numeric_limits<int>::max();
 
     for (const auto& [key, fontPtr] : fontFaceMap_) {
-        // Verify all styling attributes match perfectly so we aren't mixing colors or outlines
+        // FIX: Verify structural layout attributes match perfectly, ignoring color paths completely
         if (fontPtr->getOutlinePx() == outlinePx &&
-            // Note: If you add accessor methods for color/gradient to FontManager, verify them here:
-            // fontPtr->getFontPath() == fontPath && fontPtr->getMonitor() == monitor
-            key.rfind(fontPath, 0) == 0) // Basic prefix path check matching our key structure
+            fontPtr->getGradient() == gradient &&
+            fontPtr->getMonitor() == monitor &&
+            fontPtr->getFontPath() == fontPath)
         {
-            int existingSize = fontPtr->getMaxFontSize(); // Add a public getter for maxFontSize_ if missing in Font.h
+            int existingSize = fontPtr->getMaxFontSize();
 
             // Is it larger than what we need, but smaller than any other candidate we've seen?
             if (existingSize >= maxFontSize && existingSize < closestLargerSize) {
@@ -89,12 +89,10 @@ FontManager* FontCache::getFont(const std::string& fontPath, int maxFontSize, SD
     return nullptr;
 }
 
-
-// MODIFIED: Parameter renamed to maxFontSize.
 std::string FontCache::buildFontKey(std::string font, int maxFontSize, SDL_Color color, bool gradient, int outlinePx, int monitor) {
     std::stringstream ss;
-    // MODIFIED: The key now uses the maxFontSize to ensure uniqueness for different mipmap chains.
-    ss << font << "_SIZE=" << maxFontSize << " RGB=" << color.r << "." << color.g << "." << color.b;
+    // Fix: Dropped RGB parameters. Color is a rendering property, not a font geometry property.
+    ss << font << "_SIZE=" << maxFontSize;
     ss << "_MONITOR=" << monitor;
     ss << (gradient ? "_GRADIENT" : "");
     ss << "_OUTLINE=" << outlinePx;

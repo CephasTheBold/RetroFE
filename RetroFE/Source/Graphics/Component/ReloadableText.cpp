@@ -114,6 +114,8 @@ bool ReloadableText::update(float dt)
 }
 
 void ReloadableText::allocateGraphicsMemory() {
+    if (!fontInst_) return;
+
     ReloadTexture();
 
     // Wake up the existing text object's VRAM
@@ -136,12 +138,12 @@ void ReloadableText::freeGraphicsMemory() {
 
 void ReloadableText::initializeFonts()
 {
-    fontInst_->initialize();
+    if (fontInst_) fontInst_->initialize();
 }
 
 void ReloadableText::deInitializeFonts()
 {
-    fontInst_->deInitialize();
+    if (fontInst_) fontInst_->deInitialize();
 }
 
 // Add a method to check the transition state
@@ -153,6 +155,16 @@ bool ReloadableText::isInTransition() const
 }
 
 void ReloadableText::ReloadTexture() {
+
+    if (!fontInst_) {
+        static bool errorLogged = false;
+        if (!errorLogged) {
+            LOG_ERROR("ReloadableText", "Component disabled. Font resource mapping is missing or invalid.");
+            errorLogged = true;
+        }
+        return;
+    }
+
     auto isPlaylistType = [this]() -> bool {
         return (type_.rfind("playlist", 0) == 0);
         };

@@ -877,6 +877,11 @@ void ReloadableGlobalHiscores::reloadTexture() {
             SDL_Texture* outlineTex = mip->outlineTexture;
             const float ySnap = std::round(y);
 
+            SDL_SetTextureColorMod(fillTex, baseViewInfo.textColor.r, baseViewInfo.textColor.g, baseViewInfo.textColor.b);
+            if (mip->dynamicFillTexture) {
+                SDL_SetTextureColorMod(mip->dynamicFillTexture, baseViewInfo.textColor.r, baseViewInfo.textColor.g, baseViewInfo.textColor.b);
+            }
+
             // Helper to process UTF-8 strings for both passes
             auto renderPass = [&](SDL_Texture* tex, bool isFill) {
                 if (!tex) return;
