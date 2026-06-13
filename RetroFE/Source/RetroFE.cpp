@@ -66,15 +66,10 @@
 #include <sys/types.h>
 #endif
 
-#ifdef __linux
-#include <libusb-1.0/libusb.h>
-#endif
-
 #ifdef WIN32
 #include <SDL_syswm.h>
 #include <SDL_thread.h>
 #include <Windows.h>
-#include "StdAfx.h"
 #endif
 
 std::atomic<bool> RetroFE::reloadRequested_{false};
@@ -394,14 +389,12 @@ int RetroFE::initialize(void* context) {
 		});
 
 	// =================================================================
-	// STEP 1: PARALLEL HARDWARE & NETWORK SYNCHRONIZATION
+	// STEP 1: NETWORK SYNCHRONIZATION
 	// =================================================================
-	// Halt the background thread—NOT the main UI thread—until your physical 
-	// joystick restrictor hardware (e.g., ServoStik) finishes handshake lookups.
-	g_restrictorManager.waitForCompletion();
+	// Restrictor hardware detection is started from run() and completed
+	// by the main loop. Do not call g_restrictorManager.waitForCompletion()
+	// from this background initialization thread.
 
-	// Check if global high scores are enabled. Since all config_.import() calls 
-	// finished on the main thread before this thread spawned, reading here is completely race-free.
 	bool globalHiscoresEnabled = false;
 	instance->config_.getProperty(OPTION_GLOBALHISCORESENABLED, globalHiscoresEnabled);
 
@@ -421,14 +414,12 @@ int RetroFE::initialize(void* context) {
 	// =================================================================
 	// STEP 2: METADATA & DATABASE SCHEMAS LIFECYCLE DEPLOYMENT
 	// =================================================================
-	// Allocate database structures on the heap (matching the raw pointer lifecycle 
-	// expected by RetroFE's destructor / deInitialize function).
 	instance->db_ = new DB(Utils::combinePath(Configuration::absolutePath, "meta.db"));
 
 	if (!instance->db_->initialize())
 	{
 		LOG_ERROR("RetroFE", "Could not initialize database");
-		instance->initializeError.store(true); // Thread-safe atomic store
+		instance->initializeError.store(true);
 		return -1;
 	}
 
@@ -437,7 +428,7 @@ int RetroFE::initialize(void* context) {
 	if (!instance->metadb_->initialize())
 	{
 		LOG_ERROR("RetroFE", "Could not initialize meta database");
-		instance->initializeError.store(true); // Thread-safe atomic store
+		instance->initializeError.store(true);
 		return -1;
 	}
 
@@ -454,17 +445,14 @@ int RetroFE::initialize(void* context) {
 
 	if (globalHiscoresEnabled) {
 		LOG_INFO("RetroFE", "Global HiScores enabled; initializing iScored integration.");
-		// 1) Set the gameroom name (must match server-side config).
+
 		HiScores::getInstance().setGlobalGameroom("Pipmick");
 
-		// 2) Set a JSON file to persist global cache for offline fallback.
 		HiScores::getInstance().setGlobalPersistPath(Utils::combinePath(Configuration::absolutePath,
 			"iScored", "global_cache.json"));
 
-		// 3) Load last-good cache first so the UI has data instantly.
 		HiScores::getInstance().loadGlobalCacheFromDisk();
 
-		// 4) Warm everything from iScored in the background via async network requests.
 		HiScores::getInstance().refreshGlobalAllFromSingleCallAsync(
 			/*limit=*/0,
 			[]() { LOG_INFO("HiScores", "Global refresh completed."); }
@@ -474,8 +462,6 @@ int RetroFE::initialize(void* context) {
 	// =================================================================
 	// STEP 4: ESTABLISH SYSTEM-WIDE CROSS THREAD MEMORY BARRIER
 	// =================================================================
-	// Atomically store true. This creates an immediate execution fence, ensuring 
-	// all pointer allocations made above become fully visible to the Main UI Thread.
 	instance->initialized.store(true);
 	return 0;
 }
@@ -1131,6 +1117,7 @@ bool RetroFE::run() {
 
 		if (!g_isRestrictorCheckDone) {
 			if (g_restrictorManager.isReady()) {
+				g_restrictorManager.waitForCompletion();
 				g_isRestrictorCheckDone = true;
 
 				IRestrictor* restrictor = RestrictorManager::getGlobalRestrictor();
