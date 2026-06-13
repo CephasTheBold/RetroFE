@@ -353,46 +353,56 @@ bool Launcher::run(std::string collection, Item* collectionItem, Page* currentPa
 
                 switch (preWaitMode) {
                     case PreWaitMode::Indefinite: {
-                        // keep launch() + wait() here (safe: we wait until it exits)
-                        LOG_INFO("Launcher", "Waiting indefinitely for pre-hook...");
+                        LOG_INFO("Launcher", "Waiting indefinitely for pre-hook.");
                         auto t0 = std::chrono::steady_clock::now();
+
                         if (!preMgr->launch(pExe.string(), preArgs, pCwd.string())) {
                             LOG_ERROR("Launcher", "Pre-hook failed to start: " + pExe.string());
                             return false;
                         }
+
                         preMgr->wait(0, nullptr, onFrameTick);
-                        int waitedMs = (int)std::chrono::duration_cast<std::chrono::milliseconds>(
-                            std::chrono::steady_clock::now() - t0).count();
-                        logHookOutcome("Pre-hook", waitedMs, *preMgr); // will include exit code
+
+                        int waitedMs = static_cast<int>(
+                            std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - t0
+                            ).count()
+                            );
+
+                        logHookOutcome("Pre-hook", waitedMs, *preMgr);
                         break;
                     }
+
                     case PreWaitMode::UpToMs: {
-                        // IMPORTANT: use simpleLaunch() so job-close doesn’t kill it
-                        LOG_INFO("Launcher", std::string("Waiting up to ") + std::to_string(preWaitMs) + " ms for pre-hook (non-blocking)...");
+                        LOG_INFO("Launcher", std::string("Waiting up to ") + std::to_string(preWaitMs) + " ms for pre-hook (non-blocking).");
+
                         if (!preMgr->simpleLaunch(pExe.string(), preArgs, pCwd.string())) {
                             LOG_ERROR("Launcher", "Pre-hook failed to start: " + pExe.string());
                             return false;
                         }
+
                         auto t0 = std::chrono::steady_clock::now();
-                        // bounded pump so UI stays responsive
+
                         while (std::chrono::duration_cast<std::chrono::milliseconds>(
                             std::chrono::steady_clock::now() - t0).count() < preWaitMs) {
-                            if (onFrameTick) onFrameTick();
-                            // ~30fps
+                            if (onFrameTick)
+                                onFrameTick();
+
                             std::this_thread::sleep_for(std::chrono::milliseconds(33));
                         }
-                        // We can’t know exit code in this mode (no handle by design)
+
                         LOG_INFO("Launcher", std::string("Pre-hook still running after ")
                             + std::to_string(preWaitMs) + " ms; continuing.");
                         break;
                     }
+
                     case PreWaitMode::NoWait:
                     default: {
-                        // IMPORTANT: use simpleLaunch() so job-close doesn’t kill it
                         if (!preMgr->simpleLaunch(pExe.string(), preArgs, pCwd.string())) {
                             LOG_ERROR("Launcher", "Pre-hook failed to start: " + pExe.string());
                             return false;
                         }
+
                         LOG_INFO("Launcher", "Pre-hook started (fire-and-forget).");
                         break;
                     }

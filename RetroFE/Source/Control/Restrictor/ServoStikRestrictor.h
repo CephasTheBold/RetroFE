@@ -1,10 +1,10 @@
 #pragma once
+
 #include "Restrictor.h"
-#ifdef _WIN32
-#include <Windows.h>
-#else
+
+#include <cstdint>
+#include <optional>
 #include <libusb.h>
-#endif
 
 class ServoStikRestrictor : public IRestrictor {
 public:
@@ -18,11 +18,10 @@ public:
     static bool isPresent();
 
 private:
-    uint16_t vid_, pid_;
-#ifdef _WIN32
-    bool initialized_;
-#else
+    uint16_t vid_;
+    uint16_t pid_;
+
     libusb_context* ctx_;
     libusb_device_handle* handle_;
-#endif
+    bool claimed_;
 };

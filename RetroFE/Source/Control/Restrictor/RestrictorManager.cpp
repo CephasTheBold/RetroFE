@@ -22,18 +22,13 @@
      return !restrictorFuture_.valid() || restrictorFuture_.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
  }
 
- // ADD THIS FUNCTION:
  void RestrictorManager::waitForCompletion() {
-     if (restrictorFuture_.valid()) {
-         // This safely transitions ownership of the unique_ptr out of the future
-         restrictor_ = restrictorFuture_.get();
-         if (restrictor_) {
-             gRestrictor = restrictor_.get();
-         }
-         else {
-             gRestrictor = nullptr;
-         }
+     if (!restrictorFuture_.valid()) {
+         return;
      }
+
+     restrictor_ = restrictorFuture_.get();
+     gRestrictor = restrictor_.get();
  }
 
  IRestrictor* RestrictorManager::getGlobalRestrictor() {
