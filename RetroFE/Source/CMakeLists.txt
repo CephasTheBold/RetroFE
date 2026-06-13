@@ -44,9 +44,9 @@ if(WIN32)
     set(GSTREAMER_ROOT "C:/gstreamer/1.0/msvc_x64" CACHE STRING "location of where your gstreamer include and lib folders reside")
     set(GLIB2_ROOT "${GSTREAMER_ROOT}")
 
-    # Set PacDrive paths
-    set(PACDRIVE_ROOT "${RETROFE_THIRD_PARTY_DIR}/PacDrive")
-    include_directories("${PACDRIVE_ROOT}")
+    # Set libusb paths
+    set(LIBUSB_ROOT "${RETROFE_THIRD_PARTY_DIR}/libusb-1.0.30")
+    include_directories("${LIBUSB_ROOT}/include")
 
     set(LIBSERIALPORT_ROOT "${RETROFE_THIRD_PARTY_DIR}/libserialport")
     include_directories("${LIBSERIALPORT_ROOT}")
@@ -167,12 +167,15 @@ set(RETROFE_INCLUDE_DIRS
     "${JSON_ROOT}"
     "${CURL_ROOT}/include"
     "${SQLITE3_ROOT}"
-    "${PACDRIVE_ROOT}"
     "${KISSFFT_ROOT}"
     "/opt/homebrew/lib/glib-2.0/include"
 )
 
-# Link PacDrive library if on Windows
+if(WIN32)
+    list(APPEND RETROFE_INCLUDE_DIRS "${LIBUSB_ROOT}/include")
+endif()
+
+# Link libusb library if on Windows
 if(WIN32)
     set(RETROFE_LIBRARIES
     ${GLIB2_LIBRARIES}
@@ -183,7 +186,7 @@ if(WIN32)
     ${SDL2_TTF_LIBRARIES}
     ${ZLIB_LIBRARIES}
 )
-    list(APPEND RETROFE_LIBRARIES "${PACDRIVE_ROOT}/PacDrive64.lib")
+    list(APPEND RETROFE_LIBRARIES "${LIBUSB_ROOT}/dll/libusb-1.0.lib")
     list(APPEND RETROFE_LIBRARIES 
         "${ZLIB_ROOT}/lib/minizip.lib"
         "${LIBSERIALPORT_ROOT}/lib/libserialport.lib"
