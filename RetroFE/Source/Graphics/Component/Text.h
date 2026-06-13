@@ -18,7 +18,7 @@
 
 #include "Component.h"
 #include "../Page.h"
-#include <SDL.h>
+#include "Utility/SDLCompatibility.h"
 #include <vector>
 
 

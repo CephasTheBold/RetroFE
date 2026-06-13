@@ -22,7 +22,7 @@
 #include "../../Utility/Log.h"
 #include "../../Utility/Utils.h"
 #include "../../SDL.h"
-#include "SDL_image.h"
+#include "Utility/SDLImageCompatibility.h"
 #include "../Font.h"
 
 #include <algorithm>

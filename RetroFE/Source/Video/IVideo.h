@@ -15,7 +15,7 @@
  */
 #pragma once
 
-#include <SDL.h>
+#include "Utility/SDLCompatibility.h"
 #include <string>
 #include <cstdint>
 

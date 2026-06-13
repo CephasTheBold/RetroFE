@@ -22,7 +22,7 @@
 #include <set> 
 #include <chrono>
 
-#include <SDL.h>
+#include "Utility/SDLCompatibility.h"
 
 #include "SDLJoyStickScopeGuard.h"
 #include "KeyboardBackendFactory.h"

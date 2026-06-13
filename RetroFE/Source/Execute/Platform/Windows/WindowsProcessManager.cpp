@@ -32,7 +32,7 @@
 #include <Tlhelp32.h>
 #include <winreg.h>
 
-#include <SDL2/SDL_syswm.h>
+#include "Utility/SDLSysWMCompatibility.h"
 
 #include "../../../SDL.h"                 // SDL::getWindow
 #include "../../../Utility/Log.h"
@@ -244,7 +244,7 @@ namespace {
                 auto pos = line.find("\"installdir\"");
                 if (pos == std::string::npos) continue;
 
-                // We’re now somewhere on:  ..."installdir"   "Game Folder"
+                // Were now somewhere on:  ..."installdir"   "Game Folder"
                 // Move to *after* the closing quote of "installdir"
                 const size_t keyLen = std::strlen("\"installdir\"");
                 size_t searchFrom = pos + keyLen;
@@ -618,7 +618,7 @@ static BOOL CALLBACK EnumWindowsForPidProc(HWND hwnd, LPARAM lParam) {
     if (!IsWindowVisible(hwnd))
         return TRUE;
 
-    // 2) Skip the desktop and taskbar – they belong to other processes,
+    // 2) Skip the desktop and taskbar  they belong to other processes,
     //    but we keep these checks as a safety guard anyway.
     char className[256] = { 0 };
     GetClassNameA(hwnd, className, sizeof(className));
@@ -664,7 +664,7 @@ static bool forceForegroundForPid(DWORD pid) {
     std::vector<HWND> hwnds;
     collectWindowsForPid(pid, hwnds);
     if (hwnds.empty()) {
-        // Quiet failure – happens often while the game is still starting
+        // Quiet failure  happens often while the game is still starting
         return false;
     }
 
@@ -1133,7 +1133,7 @@ bool WindowsProcessManager::launch(const std::string& executable,
                     + g_steamGameRoot);
 
                 if (shExInfo.hProcess) {
-                    CloseHandle(shExInfo.hProcess); // don’t hold Steam’s handle
+                    CloseHandle(shExInfo.hProcess); // dont hold Steams handle
                 }
             }
             else if (shExInfo.hProcess) {
@@ -1370,7 +1370,7 @@ WaitResult WindowsProcessManager::wait(
                                     std::to_string(newPid));
                             }
 
-                            // New main Steam game is now running – give it a foreground retry window
+                            // New main Steam game is now running  give it a foreground retry window
                             pendingForeground_ = true;
                             foregroundDeadline_ = now + std::chrono::seconds(5);
 
@@ -1419,7 +1419,7 @@ WaitResult WindowsProcessManager::wait(
                                     std::to_string(newPid));
                             }
 
-                            // New main Epic game is now running – give it a foreground retry window
+                            // New main Epic game is now running  give it a foreground retry window
                             pendingForeground_ = true;
                             foregroundDeadline_ = now + std::chrono::seconds(5);
 

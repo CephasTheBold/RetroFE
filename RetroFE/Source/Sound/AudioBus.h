@@ -1,6 +1,6 @@
 #pragma once
-#include <SDL.h>
-#include <SDL_mixer.h>
+#include "Utility/SDLCompatibility.h"
+#include "Utility/SDLMixerCompatibility.h"
 #include <atomic>
 #include <cstdint>
 #include <mutex>
@@ -79,7 +79,7 @@ private:
         std::atomic<float> gain{ 1.0f };
         // NEW: Fade-in state for handling DISCONT
         std::atomic<int> fadeSamplesLeft{ 0 };
-        static constexpr int kMaxFadeSamples = 256;  // ~5.3ms at 48kHz — adjustable
+        static constexpr int kMaxFadeSamples = 256;  // ~5.3ms at 48kHz  adjustable
 
         explicit Source(size_t cap, size_t align) : ring(cap, align) {}
     };

@@ -28,7 +28,7 @@
 #include "../Utility/Log.h"
 #include "../Utility/ThreadPool.h"
 #include "../Utility/Utils.h"
-#include <SDL.h>
+#include "Utility/SDLCompatibility.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -530,7 +530,7 @@ bool GStreamerVideo::unload() {
         // Move the pipeline to READY (releases file handles and VRAM)
         gst_element_set_state(p, GST_STATE_READY);
 
-        // Wait with a finite timeout — never block indefinitely.
+        // Wait with a finite timeout  never block indefinitely.
         // 5 seconds is generous; a healthy pipeline transitions in <100ms.
         GstStateChangeReturn ret = gst_element_get_state(
             p, nullptr, nullptr,

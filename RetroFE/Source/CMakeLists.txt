@@ -82,11 +82,30 @@ elseif(APPLE)
 else()
     include(FindPkgConfig)
     
-    # Find necessary libraries using pkg-config
-    pkg_search_module(SDL2 REQUIRED sdl2)
-    pkg_search_module(SDL2_IMAGE REQUIRED SDL2_image)
-    pkg_search_module(SDL2_MIXER REQUIRED SDL2_mixer)
-    pkg_search_module(SDL2_TTF REQUIRED SDL2_ttf)
+    # Prefer SDL3 for core, image, and ttf, while keeping SDL2_mixer until the
+    # audio stack is migrated away from the SDL2_mixer API.
+    pkg_search_module(SDL3 QUIET sdl3)
+    if(SDL3_FOUND)
+        pkg_search_module(SDL_IMAGE REQUIRED SDL3_image)
+        pkg_search_module(SDL_TTF REQUIRED SDL3_ttf)
+        set(SDL_INCLUDE_DIRS ${SDL3_INCLUDE_DIRS})
+        set(SDL_LIBRARY_DIRS ${SDL3_LIBRARY_DIRS})
+        set(SDL_LIBRARIES ${SDL3_LIBRARIES})
+    else()
+        pkg_search_module(SDL2 REQUIRED sdl2)
+        pkg_search_module(SDL2_IMAGE REQUIRED SDL2_image)
+        pkg_search_module(SDL2_TTF REQUIRED SDL2_ttf)
+        set(SDL_INCLUDE_DIRS ${SDL2_INCLUDE_DIRS})
+        set(SDL_LIBRARY_DIRS ${SDL2_LIBRARY_DIRS})
+        set(SDL_LIBRARIES ${SDL2_LIBRARIES})
+        set(SDL_IMAGE_INCLUDE_DIRS ${SDL2_IMAGE_INCLUDE_DIRS})
+        set(SDL_IMAGE_LIBRARY_DIRS ${SDL2_IMAGE_LIBRARY_DIRS})
+        set(SDL_IMAGE_LIBRARIES ${SDL2_IMAGE_LIBRARIES})
+        set(SDL_TTF_INCLUDE_DIRS ${SDL2_TTF_INCLUDE_DIRS})
+        set(SDL_TTF_LIBRARY_DIRS ${SDL2_TTF_LIBRARY_DIRS})
+        set(SDL_TTF_LIBRARIES ${SDL2_TTF_LIBRARIES})
+    endif()
+    pkg_search_module(SDL_MIXER REQUIRED SDL2_mixer)
     pkg_search_module(ZLIB REQUIRED zlib)
     pkg_search_module(MINIZIP REQUIRED minizip)
     pkg_check_modules(GSTREAMER REQUIRED gstreamer-1.0 gstreamer-video-1.0 gstreamer-audio-1.0 gstreamer-app-1.0)
@@ -100,10 +119,10 @@ else()
     
     # Include directories for all found libraries
     include_directories(
-        ${SDL2_INCLUDE_DIRS}
-        ${SDL2_IMAGE_INCLUDE_DIRS}
-        ${SDL2_MIXER_INCLUDE_DIRS}
-        ${SDL2_TTF_INCLUDE_DIRS}
+        ${SDL_INCLUDE_DIRS}
+        ${SDL_IMAGE_INCLUDE_DIRS}
+        ${SDL_MIXER_INCLUDE_DIRS}
+        ${SDL_TTF_INCLUDE_DIRS}
         ${ZLIB_INCLUDE_DIRS}
         ${MINIZIP_INCLUDE_DIRS}
         ${GSTREAMER_INCLUDE_DIRS}
@@ -119,10 +138,10 @@ else()
     
     # Link directories (optional, mostly handled by pkg-config)
     link_directories(
-        ${SDL2_LIBRARY_DIRS}
-        ${SDL2_IMAGE_LIBRARY_DIRS}
-        ${SDL2_MIXER_LIBRARY_DIRS}
-        ${SDL2_TTF_LIBRARY_DIRS}
+        ${SDL_LIBRARY_DIRS}
+        ${SDL_IMAGE_LIBRARY_DIRS}
+        ${SDL_MIXER_LIBRARY_DIRS}
+        ${SDL_TTF_LIBRARY_DIRS}
         ${ZLIB_LIBRARY_DIRS}
         ${MINIZIP_LIBRARY_DIRS}
         ${GSTREAMER_LIBRARY_DIRS}
@@ -136,10 +155,10 @@ else()
     
     # Append the necessary libraries to be linked
     list(APPEND RETROFE_LIBRARIES
-        ${SDL2_LIBRARIES}
-        ${SDL2_IMAGE_LIBRARIES}
-        ${SDL2_MIXER_LIBRARIES}
-        ${SDL2_TTF_LIBRARIES}
+        ${SDL_LIBRARIES}
+        ${SDL_IMAGE_LIBRARIES}
+        ${SDL_MIXER_LIBRARIES}
+        ${SDL_TTF_LIBRARIES}
         ${ZLIB_LIBRARIES}
         ${MINIZIP_LIBRARIES}
         ${GSTREAMER_LIBRARIES}
@@ -155,13 +174,25 @@ else()
     add_definitions(${LIBEVDEV_CFLAGS_OTHER})
     endif()
 
+if(WIN32 OR APPLE)
+    set(SDL_INCLUDE_DIRS ${SDL2_INCLUDE_DIRS})
+    set(SDL_IMAGE_INCLUDE_DIRS ${SDL2_IMAGE_INCLUDE_DIRS})
+    set(SDL_MIXER_INCLUDE_DIRS ${SDL2_MIXER_INCLUDE_DIRS})
+    set(SDL_TTF_INCLUDE_DIRS ${SDL2_TTF_INCLUDE_DIRS})
+    set(SDL_LIBRARIES ${SDL2_LIBRARIES})
+    set(SDL_IMAGE_LIBRARIES ${SDL2_IMAGE_LIBRARIES})
+    set(SDL_MIXER_LIBRARIES ${SDL2_MIXER_LIBRARIES})
+    set(SDL_TTF_LIBRARIES ${SDL2_TTF_LIBRARIES})
+endif()
+
 set(RETROFE_INCLUDE_DIRS
+    "${RETROFE_DIR}/Source"
     "${GLIB2_INCLUDE_DIRS}"
     "${GSTREAMER_INCLUDE_DIRS}"
-    "${SDL2_INCLUDE_DIRS}"
-    "${SDL2_IMAGE_INCLUDE_DIRS}"
-    "${SDL2_MIXER_INCLUDE_DIRS}"
-    "${SDL2_TTF_INCLUDE_DIRS}"
+    "${SDL_INCLUDE_DIRS}"
+    "${SDL_IMAGE_INCLUDE_DIRS}"
+    "${SDL_MIXER_INCLUDE_DIRS}"
+    "${SDL_TTF_INCLUDE_DIRS}"
     "${ZLIB_INCLUDE_DIRS}"
     "${QRCODEGEN_ROOT}"
     "${JSON_ROOT}"
@@ -180,10 +211,10 @@ if(WIN32)
     set(RETROFE_LIBRARIES
     ${GLIB2_LIBRARIES}
     ${GSTREAMER_LIBRARIES}
-    ${SDL2_LIBRARIES}
-    ${SDL2_IMAGE_LIBRARIES}
-    ${SDL2_MIXER_LIBRARIES}
-    ${SDL2_TTF_LIBRARIES}
+    ${SDL_LIBRARIES}
+    ${SDL_IMAGE_LIBRARIES}
+    ${SDL_MIXER_LIBRARIES}
+    ${SDL_TTF_LIBRARIES}
     ${ZLIB_LIBRARIES}
 )
     list(APPEND RETROFE_LIBRARIES "${LIBUSB_ROOT}/dll/libusb-1.0.lib")

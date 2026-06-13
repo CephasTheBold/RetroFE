@@ -28,6 +28,7 @@
 #include "RetroFE.h"
 #include "SDL.h"
 #include "versioning.h" // Created at build time
+#include "Utility/SDLMainCompatibility.h"
 
 #include <cstdlib>
 #include <fstream>

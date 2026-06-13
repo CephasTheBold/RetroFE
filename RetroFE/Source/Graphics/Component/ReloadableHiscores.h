@@ -19,7 +19,7 @@
 #include <filesystem>
 #include <unordered_set>
 
-#include <SDL.h>
+#include "Utility/SDLCompatibility.h"
 
 #include "Component.h"
 #include "../../Collection/Item.h"

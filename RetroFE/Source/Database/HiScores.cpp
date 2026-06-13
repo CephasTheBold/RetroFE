@@ -10,7 +10,7 @@
 #include "../Utility/Log.h"
 #include "../Collection/Item.h" 
 #include "SDL.h"
-#include "SDL_image.h"
+#include "Utility/SDLImageCompatibility.h"
 #include "minizip/unzip.h"
 #include "qrcodegen.hpp"
 #include "rapidxml.hpp"
@@ -1444,7 +1444,7 @@ static inline std::string normName_(std::string s) {
 
 
 
-// strict integer parse (±digits only)
+// strict integer parse (digits only)
 static inline bool parseLongLongStrict_(const std::string& s, long long& out) {
 	if (s.empty()) return false;
 	char* end = nullptr;
@@ -1850,7 +1850,7 @@ static inline std::string monthName_(int m) {
 	return (m >= 1 && m <= 12) ? M[m - 1] : std::string();
 }
 static inline std::string prettyDate_(const std::string& ymd_hms) {
-	// Expect "YYYY-MM-DD HH:MM:SS" – be forgiving if not exact
+	// Expect "YYYY-MM-DD HH:MM:SS"  be forgiving if not exact
 	if (ymd_hms.size() < 10) return ymd_hms;
 	int y = 0, m = 0, d = 0;
 	try {

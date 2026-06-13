@@ -37,14 +37,14 @@ void FontManager::fillHolesInOutline(SDL_Surface* s,
     int minHoleArea,
     int minHoleW,
     int minHoleH) {
-    if (!s || s->format->BytesPerPixel != 4) return;
+    if (!s || RetroFE_SurfaceBytesPerPixel(s) != 4) return;
 
     SDL_LockSurface(s);
     const int w = s->w, h = s->h, pitch32 = s->pitch / 4;
     Uint32* px = (Uint32*)s->pixels;
 
-    const Uint32 AMASK = s->format->Amask;
-    const int    ASH = s->format->Ashift;
+    const Uint32 AMASK = RetroFE_SurfaceAlphaMask(s);
+    const int    ASH = RetroFE_SurfaceAlphaShift(s);
 
     auto aOf = [&](int x, int y)->Uint8 {
         return (Uint8)((px[y * pitch32 + x] & AMASK) >> ASH);
@@ -146,7 +146,7 @@ void FontManager::fillHolesInOutline(SDL_Surface* s,
 // Helper: count rows of mostly-transparent pixels at the top of a glyph surface.
 // This compensates for fonts that render punctuation with extra blank padding.
 static int computeGlyphTopPad(SDL_Surface* s, Uint8 alphaThresh = 8) {
-    if (!s || s->format->BytesPerPixel != 4) return 0;
+    if (!s || RetroFE_SurfaceBytesPerPixel(s) != 4) return 0;
 
     SDL_LockSurface(s);
     const int w = s->w;
@@ -154,8 +154,8 @@ static int computeGlyphTopPad(SDL_Surface* s, Uint8 alphaThresh = 8) {
     const int pitch32 = s->pitch / 4;
     Uint32* px = static_cast<Uint32*>(s->pixels);
 
-    const Uint32 AMASK = s->format->Amask;
-    const int ASH = s->format->Ashift;
+    const Uint32 AMASK = RetroFE_SurfaceAlphaMask(s);
+    const int ASH = RetroFE_SurfaceAlphaShift(s);
 
     for (int y = 0; y < h; ++y) {
         Uint32* row = px + y * pitch32;
@@ -195,7 +195,7 @@ FontManager::~FontManager() { deInitialize(); }
 
 SDL_Surface* FontManager::applyVerticalGrayGradient(SDL_Surface* s, Uint8 topGray, Uint8 bottomGray) {
     if (!s) return nullptr;
-    if (s->format->BytesPerPixel != 4) {
+    if (RetroFE_SurfaceBytesPerPixel(s) != 4) {
         SDL_Surface* conv = SDL_ConvertSurfaceFormat(s, SDL_PIXELFORMAT_ARGB8888, 0);
         SDL_FreeSurface(s);
         if (!conv) return nullptr;
@@ -285,7 +285,7 @@ void FontManager::preloadGlyphRange(TTF_Font* font,
             fill = applyVerticalGrayGradient(fill, 255, 128);
             if (!fill) continue;
         }
-        else if (fill->format->BytesPerPixel != 4) {
+        else if (RetroFE_SurfaceBytesPerPixel(fill) != 4) {
             SDL_Surface* conv = SDL_ConvertSurfaceFormat(fill, SDL_PIXELFORMAT_ARGB8888, 0);
             SDL_FreeSurface(fill);
             fill = conv;
@@ -300,7 +300,7 @@ void FontManager::preloadGlyphRange(TTF_Font* font,
             outline = TTF_RenderGlyph32_Blended(font, ch, outlineColor_);
             TTF_SetFontOutline(font, 0);
             if (outline) {
-                if (outline->format->BytesPerPixel != 4) {
+                if (RetroFE_SurfaceBytesPerPixel(outline) != 4) {
                     SDL_Surface* conv = SDL_ConvertSurfaceFormat(outline, SDL_PIXELFORMAT_ARGB8888, 0);
                     SDL_FreeSurface(outline);
                     outline = conv;
@@ -579,7 +579,7 @@ bool FontManager::loadGlyphOnDemand(Uint32 ch, MipLevel* mip) {
         fill = applyVerticalGrayGradient(fill, 255, 128);
         if (!fill) return false;
     }
-    else if (fill->format->BytesPerPixel != 4) {
+    else if (RetroFE_SurfaceBytesPerPixel(fill) != 4) {
         SDL_Surface* conv = SDL_ConvertSurfaceFormat(fill, SDL_PIXELFORMAT_ARGB8888, 0);
         SDL_FreeSurface(fill);
         fill = conv;
@@ -593,7 +593,7 @@ bool FontManager::loadGlyphOnDemand(Uint32 ch, MipLevel* mip) {
         outline = TTF_RenderGlyph32_Blended(font, ch, outlineColor_);
         TTF_SetFontOutline(font, 0);
         if (outline) {
-            if (outline->format->BytesPerPixel != 4) {
+            if (RetroFE_SurfaceBytesPerPixel(outline) != 4) {
                 SDL_Surface* conv = SDL_ConvertSurfaceFormat(outline, SDL_PIXELFORMAT_ARGB8888, 0);
                 SDL_FreeSurface(outline);
                 outline = conv;

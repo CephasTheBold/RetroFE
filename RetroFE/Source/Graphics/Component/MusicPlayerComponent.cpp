@@ -461,7 +461,7 @@ void MusicPlayerComponent::pushToGst(const Uint8* data, int len) {
 
 int MusicPlayerComponent::detectSegmentsFromSurface(SDL_Surface* surface) {
 	if (!surface || !surface->pixels) return 0;
-	if (surface->format->BytesPerPixel != 4) return 0;
+	if (RetroFE_SurfaceBytesPerPixel(surface) != 4) return 0;
 
 	const int texW = surface->w;
 	const int texH = surface->h;

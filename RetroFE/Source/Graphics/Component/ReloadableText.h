@@ -19,7 +19,7 @@
 #include "../Font.h"
 #include "../Page.h"
 #include "../../Collection/Item.h"
-#include <SDL.h>
+#include "Utility/SDLCompatibility.h"
 #include <string>
 #include <filesystem>
 

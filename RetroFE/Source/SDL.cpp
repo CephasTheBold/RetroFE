@@ -21,13 +21,7 @@
 #include "Utility/Log.h"
 #include "Sound/AudioBus.h"
 #include "Sound/MusicPlayer.h"
-#if __has_include(<SDL_mixer.h>)
-#include <SDL_mixer.h>
-#elif __has_include(<SDL2_mixer/SDL_mixer.h>)
-#include <SDL2_mixer/SDL_mixer.h>
-#else
-#error "Cannot find SDL_mixer header"
-#endif
+#include "Utility/SDLMixerCompatibility.h"
 #include "Utility/Utils.h"
 
 std::vector<SDL_Window*>    SDL::window_;
@@ -535,7 +529,7 @@ bool SDL::initialize(Configuration& config) {
 				MusicPlayer* mp;   // nullptr if music player disabled
 			};
 
-			// … during init …
+			//  during init 
 			bool musicPlayerEnabled = false;
 			config.getProperty("musicPlayer.enabled", musicPlayerEnabled);
 

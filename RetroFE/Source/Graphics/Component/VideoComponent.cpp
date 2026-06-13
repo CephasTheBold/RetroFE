@@ -30,11 +30,9 @@
 #include "../Page.h"
 
 #ifdef __APPLE__
-#include "SDL2/SDL_rect.h"
-#include "SDL2/SDL_render.h"
+#include "Utility/SDLCompatibility.h"
 #else
-#include "SDL_rect.h"
-#include "SDL_render.h"
+#include "Utility/SDLCompatibility.h"
 #endif
 
 VideoComponent::VideoComponent(Page& p, const std::string& videoFile, int monitor, int numLoops, bool softOverlay, int listId, const int* perspectiveCorners)

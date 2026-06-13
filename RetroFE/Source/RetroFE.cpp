@@ -50,13 +50,7 @@
 #include <cmath>
 #include <cstdint>
 #include <curl/curl.h>
-#if __has_include(<SDL_ttf.h>)
-#include <SDL_ttf.h>
-#elif __has_include(<SDL2_ttf/SDL_ttf.h>)
-#include <SDL2_ttf/SDL_ttf.h>
-#else
-#error "Cannot find SDL_ttf header"
-#endif
+#include "Utility/SDLTtfCompatibility.h"
 
 #if defined(__linux) || defined(__APPLE__)
 #include <csignal>
@@ -67,8 +61,7 @@
 #endif
 
 #ifdef WIN32
-#include <SDL_syswm.h>
-#include <SDL_thread.h>
+#include "Utility/SDLSysWMCompatibility.h"
 #include <Windows.h>
 #endif
 

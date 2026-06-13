@@ -16,7 +16,7 @@
 #pragma once
 #include "Component.h"
 #include "../../Collection/Item.h"
-#include <SDL.h>
+#include "Utility/SDLCompatibility.h"
 #include <vector>
 #include <string>
 #include <filesystem>

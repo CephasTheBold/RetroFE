@@ -19,7 +19,7 @@
 #include "../Collection/Item.h"
 #include "../Control/UserInput.h"
 #include "../Database/Configuration.h"
-#include <SDL.h>
+#include "Utility/SDLCompatibility.h"
 #include <iostream>
 
 

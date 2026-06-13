@@ -11,7 +11,7 @@
 #include <future>
 #include <memory>
 #include <limits>
-#include <SDL2/SDL_image.h>
+#include "Utility/SDLImageCompatibility.h"
 
 struct SDL_Texture;
 struct SDL_Surface;

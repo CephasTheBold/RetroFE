@@ -18,7 +18,7 @@
 #include <vector>
 #include <string>
 #include <cstdint>
-#include <SDL.h>
+#include "Utility/SDLCompatibility.h"
 
 #include "Component.h"
 #include "../../Database/HiScores.h"

@@ -6,7 +6,7 @@
 #include <string>
 
 // Assuming SDL headers are available via the build system's include paths
-#include <SDL.h>
+#include "Utility/SDLCompatibility.h"
 
 // Assuming your logging utility is accessible from this location.
 // Adjust the path if necessary based on your project structure.
