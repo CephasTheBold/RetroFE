@@ -15,10 +15,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ./SDL2-2.32.4.dmg
-            ./SDL2_image-2.8.8.dmg
-            ./SDL2_mixer-2.8.1.dmg
-            ./SDL2_ttf-2.24.0.dmg
+            ./SDL3-3.2.10.dmg
+            ./SDL3_image-3.2.4.dmg
+            ./SDL3_mixer-3.0.1.dmg
+            ./SDL3_ttf-3.2.0.dmg
             ./gstreamer-1.0-1.22.12-universal.pkg
             ./gstreamer-1.0-devel-1.22.12-universal.pkg
           key: macos-dependencies-${{ hashFiles('**/build-appbundle.yml') }}
@@ -27,17 +27,17 @@ jobs:
 
       - name: Download dependencies
         run: |
-          if [ ! -f "SDL2-2.32.4.dmg" ]; then
-            curl -LO https://github.com/libsdl-org/SDL/releases/download/release-2.32.4/SDL2-2.32.4.dmg
+          if [ ! -f "SDL3-3.2.10.dmg" ]; then
+            curl -LO https://github.com/libsdl-org/SDL/releases/download/release-3.2.10/SDL3-3.2.10.dmg
           fi
-          if [ ! -f "SDL2_image-2.8.8.dmg" ]; then
-            curl -LO https://github.com/libsdl-org/SDL_image/releases/download/release-2.8.8/SDL2_image-2.8.8.dmg
+          if [ ! -f "SDL3_image-3.2.4.dmg" ]; then
+            curl -LO https://github.com/libsdl-org/SDL_image/releases/download/release-3.2.4/SDL3_image-3.2.4.dmg
           fi
-          if [ ! -f "SDL2_mixer-2.8.1.dmg" ]; then
-            curl -LO https://github.com/libsdl-org/SDL_mixer/releases/download/release-2.8.1/SDL2_mixer-2.8.1.dmg
+          if [ ! -f "SDL3_mixer-3.0.1.dmg" ]; then
+            curl -LO https://github.com/libsdl-org/SDL_mixer/releases/download/release-3.0.1/SDL3_mixer-3.0.1.dmg
           fi
-          if [ ! -f "SDL2_ttf-2.24.0.dmg" ]; then
-            curl -LO https://github.com/libsdl-org/SDL_ttf/releases/download/release-2.24.0/SDL2_ttf-2.24.0.dmg
+          if [ ! -f "SDL3_ttf-3.2.0.dmg" ]; then
+            curl -LO https://github.com/libsdl-org/SDL_ttf/releases/download/release-3.2.0/SDL3_ttf-3.2.0.dmg
           fi
           if [ ! -f "gstreamer-1.0-1.22.12-universal.pkg" ]; then
             curl -LO https://gstreamer.freedesktop.org/data/pkg/osx/1.22.12/gstreamer-1.0-1.22.12-universal.pkg
@@ -51,30 +51,30 @@ jobs:
           sudo installer -pkg gstreamer-1.0-1.22.12-universal.pkg -target /
           sudo installer -pkg gstreamer-1.0-devel-1.22.12-universal.pkg -target /
 
-      - name: Attach and copy SDL2 framework
+      - name: Attach and copy SDL3 framework
         run: |
-          hdiutil attach SDL2-2.32.4.dmg
-          cp -R /Volumes/SDL2/SDL2.framework RetroFE/ThirdPartyMac/
-          hdiutil detach /Volumes/SDL2
+          hdiutil attach SDL3-3.2.10.dmg
+          cp -R /Volumes/SDL3/SDL3.framework RetroFE/ThirdPartyMac/
+          hdiutil detach /Volumes/SDL3
 
-      - name: Attach and copy SDL2_image framework
+      - name: Attach and copy SDL3_image framework
         run: |
-          hdiutil attach SDL2_image-2.8.8.dmg
-          cp -R /Volumes/SDL2_image/SDL2_image.framework RetroFE/ThirdPartyMac/
-          cp -R /Volumes/SDL2_image/optional/webp.framework RetroFE/ThirdPartyMac/
-          hdiutil detach /Volumes/SDL2_image
+          hdiutil attach SDL3_image-3.2.4.dmg
+          cp -R /Volumes/SDL3_image/SDL3_image.framework RetroFE/ThirdPartyMac/
+          cp -R /Volumes/SDL3_image/optional/webp.framework RetroFE/ThirdPartyMac/
+          hdiutil detach /Volumes/SDL3_image
 
-      - name: Attach and copy SDL2_mixer framework
+      - name: Attach and copy SDL3_mixer framework
         run: |
-          hdiutil attach SDL2_mixer-2.8.1.dmg
-          cp -R /Volumes/SDL2_mixer/SDL2_mixer.framework RetroFE/ThirdPartyMac/
-          hdiutil detach /Volumes/SDL2_mixer
+          hdiutil attach SDL3_mixer-3.0.1.dmg
+          cp -R /Volumes/SDL3_mixer/SDL3_mixer.framework RetroFE/ThirdPartyMac/
+          hdiutil detach /Volumes/SDL3_mixer
 
-      - name: Attach and copy SDL2_ttf framework
+      - name: Attach and copy SDL3_ttf framework
         run: |
-          hdiutil attach SDL2_ttf-2.24.0.dmg
-          cp -R /Volumes/SDL2_ttf/SDL2_ttf.framework RetroFE/ThirdPartyMac/
-          hdiutil detach /Volumes/SDL2_ttf
+          hdiutil attach SDL3_ttf-3.2.0.dmg
+          cp -R /Volumes/SDL3_ttf/SDL3_ttf.framework RetroFE/ThirdPartyMac/
+          hdiutil detach /Volumes/SDL3_ttf
 
       - name: Copy GStreamer framework
         run: | 

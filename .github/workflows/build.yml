@@ -31,10 +31,10 @@ jobs:
         packages: |
           cmake
           zlib1g-dev
-          libsdl2-dev
-          libsdl2-mixer-dev
-          libsdl2-image-dev
-          libsdl2-ttf-dev
+          libsdl3-dev
+          libsdl3-mixer-dev
+          libsdl3-image-dev
+          libsdl3-ttf-dev
           libgstreamer1.0-dev
           libgstreamer-plugins-base1.0-dev
           libgstreamer-plugins-good1.0-dev
@@ -53,10 +53,10 @@ jobs:
         sudo apt-get install -y \
           cmake \
           zlib1g-dev \
-          libsdl2-dev \
-          libsdl2-mixer-dev \
-          libsdl2-image-dev \
-          libsdl2-ttf-dev \
+          libsdl3-dev \
+          libsdl3-mixer-dev \
+          libsdl3-image-dev \
+          libsdl3-ttf-dev \
           libgstreamer1.0-dev \
           libgstreamer-plugins-base1.0-dev \
           libgstreamer-plugins-good1.0-dev \

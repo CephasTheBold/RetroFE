@@ -120,8 +120,8 @@ The executable is then found in `/RetroFE/Build`, copy `RetroFE.lnk` and the `re
  #### Debian
 ```bash
 sudo apt-get install git g++ cmake zlib1g-dev \
-libsdl2-2.0 libsdl2-mixer-2.0 libsdl2-image-2.0 libsdl2-ttf-2.0 \
-libsdl2-dev libsdl2-mixer-dev libsdl2-image-dev libsdl2-ttf-dev \
+libsdl3-0 libsdl3-image-0 libsdl3-mixer-0 libsdl3-ttf-0 \
+libsdl3-dev libsdl3-image-dev libsdl3-mixer-dev libsdl3-ttf-dev \
 libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-good1.0-dev gstreamer1.0-libav \
 libglib2.0-0 libglib2.0-dev libminizip-dev libwebp-dev libusb-1.0-0-dev libevdev-dev
 ```
@@ -129,8 +129,8 @@ libglib2.0-0 libglib2.0-dev libminizip-dev libwebp-dev libusb-1.0-0-dev libevdev
 #### Fedora
 ```bash
 sudo dnf install -y git gcc-c++ cmake zlib-devel \
-SDL2 SDL2_mixer SDL2_image SDL2_ttf \
-SDL2-devel SDL2_mixer-devel SDL2_image-devel SDL2_ttf-devel \
+SDL3 SDL3_mixer SDL3_image SDL3_ttf \
+SDL3-devel SDL3_mixer-devel SDL3_image-devel SDL3_ttf-devel \
 gstreamer1 gstreamer1-plugins-base gstreamer1-plugins-good gstreamer1-libav \
 glib2 glib2-devel minizip-devel libwebp-devel libusb1-devel libevdev-devel \
 zlib libusb1 libevdev
@@ -139,7 +139,7 @@ zlib libusb1 libevdev
 #### Arch
 ```bash
 sudo pacman -S git gcc cmake zlib \
-sdl2 sdl2_mixer sdl2_image sdl2_ttf \
+sdl3 sdl3_mixer sdl3_image sdl3_ttf \
 gstreamer gst-plugins-base gst-plugins-good gst-libav \
 glib2 minizip libwebp libusb libevdev
 ```
@@ -176,32 +176,32 @@ An Xcode project has been created to build universal binaries (x86_64 and arm64)
 
 ### Install libraries
 
-	curl -LO https://github.com/libsdl-org/SDL/releases/download/release-2.32.4/SDL2-2.32.4.dmg
-	curl -LO https://github.com/libsdl-org/SDL_image/releases/download/release-2.8.8/SDL2_image-2.8.8.dmg
-	curl -LO https://github.com/libsdl-org/SDL_mixer/releases/download/release-2.8.1/SDL2_mixer-2.8.1.dmg
-	curl -LO https://github.com/libsdl-org/SDL_ttf/releases/download/release-2.24.0/SDL2_ttf-2.24.0.dmg
+	curl -LO https://github.com/libsdl-org/SDL/releases/download/release-3.2.10/SDL3-3.2.10.dmg
+	curl -LO https://github.com/libsdl-org/SDL_image/releases/download/release-3.2.4/SDL3_image-3.2.4.dmg
+	curl -LO https://github.com/libsdl-org/SDL_mixer/releases/download/release-3.0.1/SDL3_mixer-3.0.1.dmg
+	curl -LO https://github.com/libsdl-org/SDL_ttf/releases/download/release-3.2.0/SDL3_ttf-3.2.0.dmg
 	curl -LO https://gstreamer.freedesktop.org/data/pkg/osx/1.22.12/gstreamer-1.0-1.22.12-universal.pkg
 	curl -LO https://gstreamer.freedesktop.org/data/pkg/osx/1.22.12/gstreamer-1.0-devel-1.22.12-universal.pkg
 	
 	sudo installer -pkg gstreamer-1.0-1.22.12-universal.pkg -target /
 	sudo installer -pkg gstreamer-1.0-devel-1.22.12-universal.pkg -target /
 	
-	hdiutil attach SDL2-2.32.4.dmg
-	cp -R /Volumes/SDL2/SDL2.framework RetroFE/RetroFE/ThirdPartyMac/
-	hdiutil detach /Volumes/SDL2
+	hdiutil attach SDL3-3.2.10.dmg
+	cp -R /Volumes/SDL3/SDL3.framework RetroFE/RetroFE/ThirdPartyMac/
+	hdiutil detach /Volumes/SDL3
 	
-	hdiutil attach SDL2_image-2.8.8.dmg
-	cp -R /Volumes/SDL2_image/SDL2_image.framework RetroFE/RetroFE/ThirdPartyMac/
-	cp -R /Volumes/SDL2_image/optional/webp.framework RetroFE/RetroFE/ThirdPartyMac/
-	hdiutil detach /Volumes/SDL2_image
+	hdiutil attach SDL3_image-3.2.4.dmg
+	cp -R /Volumes/SDL3_image/SDL3_image.framework RetroFE/RetroFE/ThirdPartyMac/
+	cp -R /Volumes/SDL3_image/optional/webp.framework RetroFE/RetroFE/ThirdPartyMac/
+	hdiutil detach /Volumes/SDL3_image
 	
-	hdiutil attach SDL2_mixer-2.8.1.dmg
-	cp -R /Volumes/SDL2_mixer/SDL2_mixer.framework RetroFE/RetroFE/ThirdPartyMac/
-	hdiutil detach /Volumes/SDL2_mixer
+	hdiutil attach SDL3_mixer-3.0.1.dmg
+	cp -R /Volumes/SDL3_mixer/SDL3_mixer.framework RetroFE/RetroFE/ThirdPartyMac/
+	hdiutil detach /Volumes/SDL3_mixer
 	
-	hdiutil attach SDL2_ttf-2.24.0.dmg
-	cp -R /Volumes/SDL2_ttf/SDL2_ttf.framework RetroFE/RetroFE/ThirdPartyMac/
-	hdiutil detach /Volumes/SDL2_ttf
+	hdiutil attach SDL3_ttf-3.2.0.dmg
+	cp -R /Volumes/SDL3_ttf/SDL3_ttf.framework RetroFE/RetroFE/ThirdPartyMac/
+	hdiutil detach /Volumes/SDL3_ttf
 	
 	cp -R /Library/Frameworks/GStreamer.framework RetroFE/RetroFE/ThirdPartyMac/
 	

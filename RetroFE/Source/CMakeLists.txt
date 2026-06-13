@@ -34,10 +34,10 @@ set(KISSFFT_ROOT "${RETROFE_THIRD_PARTY_DIR}/kissfft-131.1.0")
 
 if(WIN32)
     if(MSVC)
-        set(SDL2_ROOT "${RETROFE_THIRD_PARTY_DIR}/SDL2-2.32.10")
-        set(SDL2_IMAGE_ROOT "${RETROFE_THIRD_PARTY_DIR}/SDL2_image-2.8.8")
-        set(SDL2_MIXER_ROOT "${RETROFE_THIRD_PARTY_DIR}/SDL2_mixer-2.8.1")
-        set(SDL2_TTF_ROOT "${RETROFE_THIRD_PARTY_DIR}/SDL2_ttf-2.24.0")
+        set(SDL3_ROOT "${RETROFE_THIRD_PARTY_DIR}/SDL3")
+        set(SDL3_IMAGE_ROOT "${RETROFE_THIRD_PARTY_DIR}/SDL3_image")
+        set(SDL3_MIXER_ROOT "${RETROFE_THIRD_PARTY_DIR}/SDL3_mixer")
+        set(SDL3_TTF_ROOT "${RETROFE_THIRD_PARTY_DIR}/SDL3_ttf")
     endif()
 
     set(ZLIB_ROOT "${RETROFE_THIRD_PARTY_DIR}/zlib13-dll")
@@ -56,19 +56,19 @@ endif()
 if(WIN32)
     find_package(Glib2 REQUIRED)
     find_package(GStreamer REQUIRED)
-    find_package(SDL2 REQUIRED)
-    find_package(SDL2_image REQUIRED)
-    find_package(SDL2_mixer REQUIRED)
-    find_package(SDL2_ttf REQUIRED)
+    find_package(SDL3 REQUIRED)
+    find_package(SDL3_image REQUIRED)
+    find_package(SDL3_mixer REQUIRED)
+    find_package(SDL3_ttf REQUIRED)
     find_package(ZLIB REQUIRED)
 
 elseif(APPLE)
     find_package(Glib2 REQUIRED)
     find_package(GStreamer REQUIRED)
-    find_package(SDL2 REQUIRED)
-    find_package(SDL2_image REQUIRED)
-    find_package(SDL2_mixer REQUIRED)
-    find_package(SDL2_ttf REQUIRED)
+    find_package(SDL3 REQUIRED)
+    find_package(SDL3_image REQUIRED)
+    find_package(SDL3_mixer REQUIRED)
+    find_package(SDL3_ttf REQUIRED)
     find_package(ZLIB REQUIRED)
     find_library(COREFOUNDATION CoreFoundation)
     find_library(IOKIT IOKit)
@@ -81,31 +81,25 @@ elseif(APPLE)
     
 else()
     include(FindPkgConfig)
-    
-    # Prefer SDL3 for core, image, and ttf, while keeping SDL2_mixer until the
-    # audio stack is migrated away from the SDL2_mixer API.
-    pkg_search_module(SDL3 QUIET sdl3)
-    if(SDL3_FOUND)
-        pkg_search_module(SDL_IMAGE REQUIRED SDL3_image)
-        pkg_search_module(SDL_TTF REQUIRED SDL3_ttf)
-        set(SDL_INCLUDE_DIRS ${SDL3_INCLUDE_DIRS})
-        set(SDL_LIBRARY_DIRS ${SDL3_LIBRARY_DIRS})
-        set(SDL_LIBRARIES ${SDL3_LIBRARIES})
-    else()
-        pkg_search_module(SDL2 REQUIRED sdl2)
-        pkg_search_module(SDL2_IMAGE REQUIRED SDL2_image)
-        pkg_search_module(SDL2_TTF REQUIRED SDL2_ttf)
-        set(SDL_INCLUDE_DIRS ${SDL2_INCLUDE_DIRS})
-        set(SDL_LIBRARY_DIRS ${SDL2_LIBRARY_DIRS})
-        set(SDL_LIBRARIES ${SDL2_LIBRARIES})
-        set(SDL_IMAGE_INCLUDE_DIRS ${SDL2_IMAGE_INCLUDE_DIRS})
-        set(SDL_IMAGE_LIBRARY_DIRS ${SDL2_IMAGE_LIBRARY_DIRS})
-        set(SDL_IMAGE_LIBRARIES ${SDL2_IMAGE_LIBRARIES})
-        set(SDL_TTF_INCLUDE_DIRS ${SDL2_TTF_INCLUDE_DIRS})
-        set(SDL_TTF_LIBRARY_DIRS ${SDL2_TTF_LIBRARY_DIRS})
-        set(SDL_TTF_LIBRARIES ${SDL2_TTF_LIBRARIES})
-    endif()
-    pkg_search_module(SDL_MIXER REQUIRED SDL2_mixer)
+
+    pkg_search_module(SDL REQUIRED sdl3)
+    pkg_search_module(SDL_IMAGE REQUIRED SDL3_image)
+    pkg_search_module(SDL_MIXER REQUIRED SDL3_mixer)
+    pkg_search_module(SDL_TTF REQUIRED SDL3_ttf)
+
+    set(SDL_INCLUDE_DIRS ${SDL_INCLUDE_DIRS})
+    set(SDL_LIBRARY_DIRS ${SDL_LIBRARY_DIRS})
+    set(SDL_LIBRARIES ${SDL_LIBRARIES})
+    set(SDL_IMAGE_INCLUDE_DIRS ${SDL_IMAGE_INCLUDE_DIRS})
+    set(SDL_IMAGE_LIBRARY_DIRS ${SDL_IMAGE_LIBRARY_DIRS})
+    set(SDL_IMAGE_LIBRARIES ${SDL_IMAGE_LIBRARIES})
+    set(SDL_MIXER_INCLUDE_DIRS ${SDL_MIXER_INCLUDE_DIRS})
+    set(SDL_MIXER_LIBRARY_DIRS ${SDL_MIXER_LIBRARY_DIRS})
+    set(SDL_MIXER_LIBRARIES ${SDL_MIXER_LIBRARIES})
+    set(SDL_TTF_INCLUDE_DIRS ${SDL_TTF_INCLUDE_DIRS})
+    set(SDL_TTF_LIBRARY_DIRS ${SDL_TTF_LIBRARY_DIRS})
+    set(SDL_TTF_LIBRARIES ${SDL_TTF_LIBRARIES})
+
     pkg_search_module(ZLIB REQUIRED zlib)
     pkg_search_module(MINIZIP REQUIRED minizip)
     pkg_check_modules(GSTREAMER REQUIRED gstreamer-1.0 gstreamer-video-1.0 gstreamer-audio-1.0 gstreamer-app-1.0)
@@ -175,14 +169,14 @@ else()
     endif()
 
 if(WIN32 OR APPLE)
-    set(SDL_INCLUDE_DIRS ${SDL2_INCLUDE_DIRS})
-    set(SDL_IMAGE_INCLUDE_DIRS ${SDL2_IMAGE_INCLUDE_DIRS})
-    set(SDL_MIXER_INCLUDE_DIRS ${SDL2_MIXER_INCLUDE_DIRS})
-    set(SDL_TTF_INCLUDE_DIRS ${SDL2_TTF_INCLUDE_DIRS})
-    set(SDL_LIBRARIES ${SDL2_LIBRARIES})
-    set(SDL_IMAGE_LIBRARIES ${SDL2_IMAGE_LIBRARIES})
-    set(SDL_MIXER_LIBRARIES ${SDL2_MIXER_LIBRARIES})
-    set(SDL_TTF_LIBRARIES ${SDL2_TTF_LIBRARIES})
+    set(SDL_INCLUDE_DIRS ${SDL3_INCLUDE_DIRS})
+    set(SDL_IMAGE_INCLUDE_DIRS ${SDL3_IMAGE_INCLUDE_DIRS})
+    set(SDL_MIXER_INCLUDE_DIRS ${SDL3_MIXER_INCLUDE_DIRS})
+    set(SDL_TTF_INCLUDE_DIRS ${SDL3_TTF_INCLUDE_DIRS})
+    set(SDL_LIBRARIES ${SDL3_LIBRARIES})
+    set(SDL_IMAGE_LIBRARIES ${SDL3_IMAGE_LIBRARIES})
+    set(SDL_MIXER_LIBRARIES ${SDL3_MIXER_LIBRARIES})
+    set(SDL_TTF_LIBRARIES ${SDL3_TTF_LIBRARIES})
 endif()
 
 set(RETROFE_INCLUDE_DIRS
@@ -427,10 +421,10 @@ if(APPLE)
     target_link_libraries(retrofe
         ${COREFOUNDATION}
         ${IOKIT}
-        ${SDL2_LIBRARIES}
-        ${SDL2_IMAGE_LIBRARIES}
-        ${SDL2_MIXER_LIBRARIES}
-        ${SDL2_TTF_LIBRARIES}
+        ${SDL3_LIBRARIES}
+        ${SDL3_IMAGE_LIBRARIES}
+        ${SDL3_MIXER_LIBRARIES}
+        ${SDL3_TTF_LIBRARIES}
         ${LIBUSB_LIBRARY}
         ${GLIB2_LIBRARIES}
         ${GSTREAMER_LIBRARIES}

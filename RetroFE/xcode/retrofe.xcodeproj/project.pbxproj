@@ -49,14 +49,14 @@
 		D13224E8035B4C24806BB1D2 /* JoyAxisHandler.cpp in Sources */ = {isa = PBXBuildFile; fileRef = AFBFD8ED7A76485FB4AE6FE7 /* JoyAxisHandler.cpp */; };
 		DE4104C81A7D4148ADEBAFC8 /* Animation.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 265E7B256A954D8793198331 /* Animation.cpp */; };
 		DED5255F5B2A458586051B1C /* RetroFE.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 003330130E81476F9950FA59 /* RetroFE.cpp */; };
-		DF010EF92B4DDDAA0062DCCA /* SDL2_image.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DFF91E9F2B260B5B00507957 /* SDL2_image.framework */; };
-		DF010EFA2B4DDDAA0062DCCA /* SDL2_image.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = DFF91E9F2B260B5B00507957 /* SDL2_image.framework */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
-		DF010EFB2B4DDDAA0062DCCA /* SDL2_mixer.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DFF91E9B2B260B5B00507957 /* SDL2_mixer.framework */; };
-		DF010EFC2B4DDDAA0062DCCA /* SDL2_mixer.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = DFF91E9B2B260B5B00507957 /* SDL2_mixer.framework */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
-		DF010EFD2B4DDDAA0062DCCA /* SDL2_ttf.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DFF91E9E2B260B5B00507957 /* SDL2_ttf.framework */; };
-		DF010EFE2B4DDDAA0062DCCA /* SDL2_ttf.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = DFF91E9E2B260B5B00507957 /* SDL2_ttf.framework */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
-		DF010EFF2B4DDDAA0062DCCA /* SDL2.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DFF91E9C2B260B5B00507957 /* SDL2.framework */; };
-		DF010F002B4DDDAA0062DCCA /* SDL2.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = DFF91E9C2B260B5B00507957 /* SDL2.framework */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		DF010EF92B4DDDAA0062DCCA /* SDL3_image.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DFF91E9F2B260B5B00507957 /* SDL3_image.framework */; };
+		DF010EFA2B4DDDAA0062DCCA /* SDL3_image.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = DFF91E9F2B260B5B00507957 /* SDL3_image.framework */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		DF010EFB2B4DDDAA0062DCCA /* SDL3_mixer.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DFF91E9B2B260B5B00507957 /* SDL3_mixer.framework */; };
+		DF010EFC2B4DDDAA0062DCCA /* SDL3_mixer.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = DFF91E9B2B260B5B00507957 /* SDL3_mixer.framework */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		DF010EFD2B4DDDAA0062DCCA /* SDL3_ttf.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DFF91E9E2B260B5B00507957 /* SDL3_ttf.framework */; };
+		DF010EFE2B4DDDAA0062DCCA /* SDL3_ttf.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = DFF91E9E2B260B5B00507957 /* SDL3_ttf.framework */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		DF010EFF2B4DDDAA0062DCCA /* SDL3.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DFF91E9C2B260B5B00507957 /* SDL3.framework */; };
+		DF010F002B4DDDAA0062DCCA /* SDL3.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = DFF91E9C2B260B5B00507957 /* SDL3.framework */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		DF07B3E52B2A14CE00B732CF /* GStreamer.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DF07B3E42B2A14CE00B732CF /* GStreamer.framework */; };
 		DF07B3E62B2A14CE00B732CF /* GStreamer.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = DF07B3E42B2A14CE00B732CF /* GStreamer.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		DF20B2A52DAA8F7F00CE3B74 /* MusicPlayer.cpp in Sources */ = {isa = PBXBuildFile; fileRef = DF20B2A42DAA8F7F00CE3B74 /* MusicPlayer.cpp */; };
@@ -93,10 +93,10 @@
 				DFC83C8B2D57973600AA7522 /* libusb-1.0.0.dylib in Embed Frameworks */,
 				DFC83C8A2D57973600AA7522 /* webp.framework in Embed Frameworks */,
 				DF07B3E62B2A14CE00B732CF /* GStreamer.framework in Embed Frameworks */,
-				DF010F002B4DDDAA0062DCCA /* SDL2.framework in Embed Frameworks */,
-				DF010EFE2B4DDDAA0062DCCA /* SDL2_ttf.framework in Embed Frameworks */,
-				DF010EFC2B4DDDAA0062DCCA /* SDL2_mixer.framework in Embed Frameworks */,
-				DF010EFA2B4DDDAA0062DCCA /* SDL2_image.framework in Embed Frameworks */,
+				DF010F002B4DDDAA0062DCCA /* SDL3.framework in Embed Frameworks */,
+				DF010EFE2B4DDDAA0062DCCA /* SDL3_ttf.framework in Embed Frameworks */,
+				DF010EFC2B4DDDAA0062DCCA /* SDL3_mixer.framework in Embed Frameworks */,
+				DF010EFA2B4DDDAA0062DCCA /* SDL3_image.framework in Embed Frameworks */,
 			);
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -209,10 +209,10 @@
 		DFC83C9E2D579D8600AA7522 /* VideoPool.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = VideoPool.h; path = Video/VideoPool.h; sourceTree = SOURCE_ROOT; };
 		DFF5D9572B6F9EFA005E9600 /* ThreadPool.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = ThreadPool.cpp; path = Graphics/ThreadPool.cpp; sourceTree = SOURCE_ROOT; };
 		DFF5D9592B6F9F0F005E9600 /* ThreadPool.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = ThreadPool.h; path = Graphics/ThreadPool.h; sourceTree = SOURCE_ROOT; };
-		DFF91E9B2B260B5B00507957 /* SDL2_mixer.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SDL2_mixer.framework; path = ../ThirdPartyMac/SDL2_mixer.framework; sourceTree = SOURCE_ROOT; };
-		DFF91E9C2B260B5B00507957 /* SDL2.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SDL2.framework; path = ../ThirdPartyMac/SDL2.framework; sourceTree = SOURCE_ROOT; };
-		DFF91E9E2B260B5B00507957 /* SDL2_ttf.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SDL2_ttf.framework; path = ../ThirdPartyMac/SDL2_ttf.framework; sourceTree = SOURCE_ROOT; };
-		DFF91E9F2B260B5B00507957 /* SDL2_image.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SDL2_image.framework; path = ../ThirdPartyMac/SDL2_image.framework; sourceTree = SOURCE_ROOT; };
+		DFF91E9B2B260B5B00507957 /* SDL3_mixer.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SDL3_mixer.framework; path = ../ThirdPartyMac/SDL3_mixer.framework; sourceTree = SOURCE_ROOT; };
+		DFF91E9C2B260B5B00507957 /* SDL3.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SDL3.framework; path = ../ThirdPartyMac/SDL3.framework; sourceTree = SOURCE_ROOT; };
+		DFF91E9E2B260B5B00507957 /* SDL3_ttf.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SDL3_ttf.framework; path = ../ThirdPartyMac/SDL3_ttf.framework; sourceTree = SOURCE_ROOT; };
+		DFF91E9F2B260B5B00507957 /* SDL3_image.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SDL3_image.framework; path = ../ThirdPartyMac/SDL3_image.framework; sourceTree = SOURCE_ROOT; };
 		E068482BE58D4293AB7C541D /* MouseButtonHandler.h */ = {isa = PBXFileReference; explicitFileType = sourcecode.c.h; fileEncoding = 4; name = MouseButtonHandler.h; path = Control/MouseButtonHandler.h; sourceTree = SOURCE_ROOT; };
 		E386A6F70BA84735ACCAEDE9 /* SDL.h */ = {isa = PBXFileReference; explicitFileType = sourcecode.c.h; fileEncoding = 4; path = SDL.h; sourceTree = SOURCE_ROOT; };
 		E5DF8257912E4295A8F64804 /* ReloadableText.cpp */ = {isa = PBXFileReference; explicitFileType = sourcecode.cpp.cpp; fileEncoding = 4; name = ReloadableText.cpp; path = Graphics/Component/ReloadableText.cpp; sourceTree = SOURCE_ROOT; };
@@ -238,12 +238,12 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				DF010EFF2B4DDDAA0062DCCA /* SDL2.framework in Frameworks */,
-				DF010EFB2B4DDDAA0062DCCA /* SDL2_mixer.framework in Frameworks */,
+				DF010EFF2B4DDDAA0062DCCA /* SDL3.framework in Frameworks */,
+				DF010EFB2B4DDDAA0062DCCA /* SDL3_mixer.framework in Frameworks */,
 				DF07B3E52B2A14CE00B732CF /* GStreamer.framework in Frameworks */,
 				DFC83C8F2D5797A700AA7522 /* CoreFoundation.framework in Frameworks */,
-				DF010EF92B4DDDAA0062DCCA /* SDL2_image.framework in Frameworks */,
-				DF010EFD2B4DDDAA0062DCCA /* SDL2_ttf.framework in Frameworks */,
+				DF010EF92B4DDDAA0062DCCA /* SDL3_image.framework in Frameworks */,
+				DF010EFD2B4DDDAA0062DCCA /* SDL3_ttf.framework in Frameworks */,
 				DFC83C8D2D5797A200AA7522 /* IOKit.framework in Frameworks */,
 				DFC83C972D579B7800AA7522 /* libminizip.dylib in Frameworks */,
 				DFC83C902D579B1500AA7522 /* webp.framework in Frameworks */,
@@ -353,10 +353,10 @@
 				DFC83C8E2D5797A700AA7522 /* CoreFoundation.framework */,
 				DF07B3E42B2A14CE00B732CF /* GStreamer.framework */,
 				DFC83C8C2D5797A200AA7522 /* IOKit.framework */,
-				DFF91E9F2B260B5B00507957 /* SDL2_image.framework */,
-				DFF91E9B2B260B5B00507957 /* SDL2_mixer.framework */,
-				DFF91E9E2B260B5B00507957 /* SDL2_ttf.framework */,
-				DFF91E9C2B260B5B00507957 /* SDL2.framework */,
+				DFF91E9F2B260B5B00507957 /* SDL3_image.framework */,
+				DFF91E9B2B260B5B00507957 /* SDL3_mixer.framework */,
+				DFF91E9E2B260B5B00507957 /* SDL3_ttf.framework */,
+				DFF91E9C2B260B5B00507957 /* SDL3.framework */,
 				DFC83C882D57973600AA7522 /* webp.framework */,
 				DF010EF62B4DD80C0062DCCA /* libc++.1.tbd */,
 				DF010EF72B4DD8150062DCCA /* libSystem.B.tbd */,
