@@ -3442,6 +3442,10 @@ RetroFE::RETROFE_STATE RetroFE::processUserInput(Page* page) {
 		}
 
 		if (input_.newKeyPressed(UserInput::KeyCodeSelect) && !currentPage_->isMenuScrolling()) {
+			if (attractMode_ || attract_.isSet()) {
+				page->setSelectedItem();
+				page->onNewItemSelected();
+			}
 			attract_.reset();
 			nextPageItem_ = page->getSelectedItem();
 			if (nextPageItem_) {
