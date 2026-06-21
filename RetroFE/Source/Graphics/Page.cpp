@@ -196,14 +196,18 @@ void Page::onNewItemSelected() {
 
 
 void Page::returnToRememberSelectedItem() {
-	if (!getAnActiveMenu()) return;
+	if (!getAnActiveMenu())
+		return;
 
 	if (std::string name = getPlaylistName();
-		!name.empty() && name != "themes") {
-
+		!name.empty() && name != "themes")
+	{
 		auto it = lastPlaylistOffsets_.find(name);
-		if (it != lastPlaylistOffsets_.end() && it->second) {
+		if (it != lastPlaylistOffsets_.end())
+		{
 			setScrollOffsetIndex(it->second);
+			setSelectedItem();
+			onNewItemSelected();
 		}
 	}
 }

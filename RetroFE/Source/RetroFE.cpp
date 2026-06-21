@@ -526,10 +526,15 @@ void RetroFE::launchEnter() {
 
 // Return from the launch of a game/program
 void RetroFE::launchExit(bool userInitiated) {
+	if (!currentPage_)
+		return;
+
 	currentPage_->setIsLaunched(false);
 	VideoPool::shuttingDown_ = false;
+
 	bool unloadSDL = false;
 	config_.getProperty(OPTION_UNLOADSDL, unloadSDL);
+
 	if (unloadSDL)
 	{
 		allocateGraphicsMemory();
@@ -541,19 +546,16 @@ void RetroFE::launchExit(bool userInitiated) {
 	}
 
 #ifdef WIN32
-	// On Windows, SDL_RaiseWindow is not always enough to steal focus back from
-	// another application like Steam. We need to be more assertive using the native API.
 	SDL_SysWMinfo wminfo{};
 	SDL_VERSION(&wminfo.version);
-	if (SDL_GetWindowWMInfo(SDL::getWindow(0), &wminfo)) {
+
+	if (SDL_GetWindowWMInfo(SDL::getWindow(0), &wminfo))
+	{
 		HWND retroFeHWND = wminfo.info.win.window;
-		// This is a more forceful way to bring the window to the front.
 		SetForegroundWindow(retroFeHWND);
-		// It's also good practice to make sure it's not minimized.
 		ShowWindow(retroFeHWND, SW_RESTORE);
 	}
 #else
-	// For other platforms, the SDL way is usually sufficient.
 	SDL_RestoreWindow(SDL::getWindow(0));
 	SDL_RaiseWindow(SDL::getWindow(0));
 #endif
@@ -565,37 +567,43 @@ void RetroFE::launchExit(bool userInitiated) {
 	}
 	input_.resetStates();
 
-	if (userInitiated) {
-		attract_.reset(false); // Only reset if user-driven
+	if (userInitiated)
+	{
+		attract_.reset(false);
 	}
-	currentTime_ = static_cast<float>((SDL_GetPerformanceCounter() * 1.0 / freq_)); // currentTime_ in seconds
+
+	currentTime_ = static_cast<float>(SDL_GetPerformanceCounter() * 1.0 / freq_);
 	lastFrameTimePointMs_ = SDL_GetPerformanceCounter() * 1000.0 / freq_;
 	lastLaunchReturnTime_ = currentTime_;
-	//currentPage_->updateReloadables(0);
+
+	// Keep this. It synchronizes selected-item side effects after SDL/menu rebuild.
 	currentPage_->onNewItemSelected();
-	//currentPage_->reallocateMenuSpritePoints(false);
 
 #ifndef __APPLE__
 	SDL_WarpMouseInWindow(SDL::getWindow(0), SDL::getWindowWidth(0), 0);
 #endif
-	if (musicPlayer_) {
-		// Pass the final, correct state to the music player.
+
+	if (musicPlayer_)
+	{
 		musicPlayer_->onGameLaunchEnd(unloadSDL);
 	}
 
 #ifdef WIN32
 	Utils::postMessage("MediaplayerHiddenWindow", 0x8001, 76, 0);
 #endif
+
 #ifdef __APPLE__
 	SDL_SetRelativeMouseMode(SDL_TRUE);
 #endif
+
 	bool globalHiscoresEnabled = false;
 	config_.getProperty(OPTION_GLOBALHISCORESENABLED, globalHiscoresEnabled);
-	if (globalHiscoresEnabled) {
+
+	if (globalHiscoresEnabled)
+	{
 		HiScores::getInstance().refreshGlobalAllFromSingleCallAsync(
-			/*limit=*/0
-			// Optional finish hook:
-			, []() { LOG_INFO("HiScores", "Global refresh completed."); }
+			/*limit=*/0,
+			[]() { LOG_INFO("HiScores", "Global refresh completed."); }
 		);
 	}
 }
@@ -1441,8 +1449,11 @@ bool RetroFE::run() {
 						rememberMenu && lastMenuPlaylists_.find(nextPageItem_->name) != lastMenuPlaylists_.end();
 					if (returnToRememberedPlaylist)
 					{
-						currentPage_->selectPlaylist(
-							lastMenuPlaylists_[nextPageItem_->name]); // Switch to last playlist
+						currentPage_->selectPlaylist(lastMenuPlaylists_[nextPageItem_->name]);
+
+						auto offsetIt = lastMenuOffsets_.find(nextPageItem_->name);
+						if (offsetIt != lastMenuOffsets_.end())
+							currentPage_->setScrollOffsetIndex(offsetIt->second);
 					}
 					else
 					{
@@ -1451,14 +1462,7 @@ bool RetroFE::run() {
 							currentPage_->selectPlaylist("all");
 					}
 
-					if (returnToRememberedPlaylist)
-					{
-						if (lastMenuOffsets_.size() &&
-							lastMenuPlaylists_.find(nextPageItem_->name) != lastMenuPlaylists_.end())
-						{
-							currentPage_->setScrollOffsetIndex(lastMenuOffsets_[nextPageItem_->name]);
-						}
-					}
+					currentPage_->setSelectedItem();
 				}
 				break;
 			}
@@ -1511,8 +1515,11 @@ bool RetroFE::run() {
 						rememberMenu && lastMenuPlaylists_.find(nextPageItem_->name) != lastMenuPlaylists_.end();
 					if (returnToRememberedPlaylist)
 					{
-						currentPage_->selectPlaylist(
-							lastMenuPlaylists_[nextPageItem_->name]); // Switch to last playlist
+						currentPage_->selectPlaylist(lastMenuPlaylists_[nextPageItem_->name]);
+
+						auto offsetIt = lastMenuOffsets_.find(nextPageItem_->name);
+						if (offsetIt != lastMenuOffsets_.end())
+							currentPage_->setScrollOffsetIndex(offsetIt->second);
 					}
 					else
 					{
@@ -1521,14 +1528,7 @@ bool RetroFE::run() {
 							currentPage_->selectPlaylist("all");
 					}
 
-					if (returnToRememberedPlaylist)
-					{
-						if (lastMenuOffsets_.size() &&
-							lastMenuPlaylists_.find(nextPageItem_->name) != lastMenuPlaylists_.end())
-						{
-							currentPage_->setScrollOffsetIndex(lastMenuOffsets_[nextPageItem_->name]);
-						}
-					}
+					currentPage_->setSelectedItem();
 				}
 				break;
 			}
@@ -1971,8 +1971,9 @@ bool RetroFE::run() {
 						currentPage_->selectPlaylist("all");
 				}
 
+				currentPage_->setSelectedItem();
 				currentPage_->onNewItemSelected();
-				currentPage_->allocateGraphicsMemory(); // update playlist menu
+				currentPage_->allocateGraphicsMemory();
 				preparePageForFirstRender(currentPage_);
 				if (currentPage_->getCollectionSize() == 0)
 				{
@@ -2110,7 +2111,11 @@ bool RetroFE::run() {
 					rememberMenu && lastMenuPlaylists_.find(collectionName) != lastMenuPlaylists_.end();
 				if (returnToRememberedPlaylist)
 				{
-					currentPage_->selectPlaylist(lastMenuPlaylists_[collectionName]); // Switch to last playlist
+					currentPage_->selectPlaylist(lastMenuPlaylists_[collectionName]);
+
+					auto offsetIt = lastMenuOffsets_.find(collectionName);
+					if (offsetIt != lastMenuOffsets_.end())
+						currentPage_->setScrollOffsetIndex(offsetIt->second);
 				}
 				else
 				{
@@ -2119,14 +2124,7 @@ bool RetroFE::run() {
 						currentPage_->selectPlaylist("all");
 				}
 
-				if (returnToRememberedPlaylist)
-				{
-					if (lastMenuOffsets_.size() && lastMenuPlaylists_.find(collectionName) != lastMenuPlaylists_.end())
-					{
-						currentPage_->setScrollOffsetIndex(lastMenuOffsets_[collectionName]);
-					}
-				}
-
+				currentPage_->setSelectedItem();
 				currentPage_->onNewItemSelected();
 				currentPage_->reallocateMenuSpritePoints();
 				preparePageForFirstRender(currentPage_);
@@ -2316,7 +2314,11 @@ bool RetroFE::run() {
 					rememberMenu && lastMenuPlaylists_.find(collectionName) != lastMenuPlaylists_.end();
 				if (returnToRememberedPlaylist)
 				{
-					currentPage_->selectPlaylist(lastMenuPlaylists_[collectionName]); // Switch to last playlist
+					currentPage_->selectPlaylist(lastMenuPlaylists_[collectionName]);
+
+					auto offsetIt = lastMenuOffsets_.find(collectionName);
+					if (offsetIt != lastMenuOffsets_.end())
+						currentPage_->setScrollOffsetIndex(offsetIt->second);
 				}
 				else
 				{
@@ -2325,14 +2327,7 @@ bool RetroFE::run() {
 						currentPage_->selectPlaylist("all");
 				}
 
-				if (returnToRememberedPlaylist)
-				{
-					if (lastMenuOffsets_.size() && lastMenuPlaylists_.find(collectionName) != lastMenuPlaylists_.end())
-					{
-						currentPage_->setScrollOffsetIndex(lastMenuOffsets_[collectionName]);
-					}
-				}
-
+				currentPage_->setSelectedItem();
 				currentPage_->onNewItemSelected();
 				currentPage_->reallocateMenuSpritePoints();
 				preparePageForFirstRender(currentPage_);
@@ -2464,80 +2459,100 @@ bool RetroFE::run() {
 			{
 				bool unloadSDL = false;
 				config_.getProperty(OPTION_UNLOADSDL, unloadSDL);
+
+				// Capture the item once before mutating Last Played.
 				nextPageItem_ = currentPage_->getSelectedItem();
+				if (!nextPageItem_)
+				{
+					setState(RETROFE_IDLE);
+					break;
+				}
+
+				const bool wasLastPlayed = currentPage_->getPlaylistName() == "lastplayed";
+
 				launchEnter();
+
 				CollectionInfoBuilder cib(config_, *metadb_);
+
 				std::string lastPlayedSkipCollection = "";
 				int size = 0;
 				config_.getProperty(OPTION_LASTPLAYEDSKIPCOLLECTION, lastPlayedSkipCollection);
 				config_.getProperty(OPTION_LASTPLAYEDSIZE, size);
 
-				nextPageItem_ = currentPage_->getSelectedItem();
+				bool updateLastPlayed = true;
 
-				if (lastPlayedSkipCollection != "")
+				if (!lastPlayedSkipCollection.empty())
 				{
-					// Check if current collection is in the skip list
 					std::stringstream ss(lastPlayedSkipCollection);
-					std::string collection = "";
-					bool updateLastPlayed = true;
-					while (ss.good())
+					std::string collection;
+
+					while (std::getline(ss, collection, ','))
 					{
-						getline(ss, collection, ',');
 						if (nextPageItem_->collectionInfo->name == collection)
 						{
 							updateLastPlayed = false;
 							break;
 						}
 					}
-					if (updateLastPlayed)
-					{
-						cib.updateLastPlayedPlaylist(currentPage_->getCollection(), nextPageItem_, size);
-						if (!unloadSDL)
-							currentPage_->updateReloadables(0);
-					}
+				}
+
+				if (updateLastPlayed)
+				{
+					// This rewrites the Last Played playlist.
+					// Do NOT refresh reloadables here yet; selection/offset may still refer
+					// to the pre-launch playlist state.
+					cib.updateLastPlayedPlaylist(currentPage_->getCollection(), nextPageItem_, size);
 				}
 
 				l.LEDBlinky(3, nextPageItem_->collectionInfo->name, nextPageItem_);
-				// Run and check if we need to reboot
-					// Run the launcher and get the reboot status directly.
+
 				bool needsReboot = l.run(nextPageItem_->collectionInfo->name, nextPageItem_, currentPage_);
 
 				if (needsReboot)
 				{
-					// --- Reboot Path ---
 					attract_.reset();
-
-					// Call launchExit and tell it a reboot IS happening.
-					// This will perform cleanup but skip SDL re-initialization.
-					//launchExit(true, true);
-
 					reboot_ = true;
 					setState(RETROFE_QUIT_REQUEST);
 				}
 				else
 				{
-					// --- Normal Exit Path ---
 					attract_.reset();
 					l.LEDBlinky(4);
 
-					// If we're in "lastplayed", adjust position and reallocate BEFORE exit animation.
-					if (currentPage_->getPlaylistName() == "lastplayed")
+					const bool forceLastPlayedRefresh = wasLastPlayed && updateLastPlayed;
+
+					if (forceLastPlayedRefresh)
 					{
+						// Rebind to the rewritten Last Played playlist.
+						currentPage_->selectPlaylist("lastplayed");
+
+						// The game just launched should now be the newest Last Played entry.
 						currentPage_->setScrollOffsetIndex(0);
-						currentPage_->reallocateMenuSpritePoints(false);
+						currentPage_->setSelectedItem();
+						currentPage_->onNewItemSelected();
 					}
 
-					// Do all SDL / graphics / menu re-init first
+					// This already reallocates menu sprite points when unloadSDL is false,
+					// so do not manually call reallocateMenuSpritePoints() before it.
 					launchExit(true);
+
+					if (forceLastPlayedRefresh)
+					{
+						// launchExit() calls onNewItemSelected(), but updateReloadables()
+						// is commented out inside launchExit(), so force the art/media
+						// components to actually rebind now.
+						currentPage_->onNewItemSelected();
+						currentPage_->updateReloadables(0);
+					}
+
 					waitForAsyncAssets();
-					// NOW fire onGameExit so the animation lives on the final, post-launch menu state
+
 					currentPage_->exitGame();
 					currentPage_->update(0.0f);
 					setState(RETROFE_LAUNCH_EXIT);
 				}
 			}
 			break;
-
 			// Wait for onGameExit animation to finish
 			case RETROFE_LAUNCH_EXIT: {
 				// Only update `state` if `currentPage_` is idle
@@ -2643,23 +2658,22 @@ bool RetroFE::run() {
 					lastMenuPlaylists_.find(collectionName) != lastMenuPlaylists_.end();
 
 				// Set appropriate playlist
-				if (returnToRememberedPlaylist) {
+				if (returnToRememberedPlaylist)
+				{
 					currentPage_->selectPlaylist(lastMenuPlaylists_[collectionName]);
 
-					// Restore previous offset if available
-					if (lastMenuOffsets_.find(collectionName) != lastMenuOffsets_.end()) {
-						currentPage_->setScrollOffsetIndex(lastMenuOffsets_[collectionName]);
-					}
+					auto offsetIt = lastMenuOffsets_.find(collectionName);
+					if (offsetIt != lastMenuOffsets_.end())
+						currentPage_->setScrollOffsetIndex(offsetIt->second);
 				}
-				else {
-					// Use auto playlist with fallback to "all"
+				else
+				{
 					currentPage_->selectPlaylist(autoPlaylist);
-					if (currentPage_->getPlaylistName() != autoPlaylist) {
+					if (currentPage_->getPlaylistName() != autoPlaylist)
 						currentPage_->selectPlaylist("all");
-					}
 				}
 
-				// Update display
+				currentPage_->setSelectedItem();
 				currentPage_->onNewItemSelected();
 				currentPage_->reallocateMenuSpritePoints();
 				preparePageForFirstRender(currentPage_);
@@ -2807,9 +2821,11 @@ bool RetroFE::run() {
 				if (currentPage_)
 				{
 					currentPage_->pushCollection(collection);
+					currentPage_->setLastPlaylistOffsets(offsets);
 					currentPage_->selectPlaylist(playlist);
 					currentPage_->setScrollOffsetIndex(offset);
-					currentPage_->setLastPlaylistOffsets(offsets);
+					currentPage_->setSelectedItem();
+					currentPage_->onNewItemSelected();
 					currentPage_->setLocked(kioskLock_);
 					currentPage_->allocateGraphicsMemory();
 					preparePageForFirstRender(currentPage_);
