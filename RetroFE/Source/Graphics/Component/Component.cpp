@@ -274,14 +274,24 @@ bool Component::animate() {
             continue;
         }
 
-        maxDurationInSet = std::max(maxDurationInSet, (double)tween->duration);
+        // <-- MODIFIED: Total lifecycle duration of this tween is delay + duration
+        maxDurationInSet = std::max(maxDurationInSet, (double)(tween->delay + tween->duration));
 
         double elapsedTime = elapsedTweenTime_;
-        if (elapsedTime < tween->duration) {
-            currentDone = false;
+
+        // <-- MODIFIED: Check if the set delay window has elapsed
+        if (elapsedTime < tween->delay) {
+            elapsedTime = 0.0;     // Lock progress calculation to start position
+            currentDone = false;   // Mark set as not finished
         }
         else {
-            elapsedTime = tween->duration;
+            elapsedTime -= tween->delay; // Subtract delay to track active execution timeline
+            if (elapsedTime < tween->duration) {
+                currentDone = false;
+            }
+            else {
+                elapsedTime = tween->duration;
+            }
         }
 
         // Apply animation logic based on whether a start value is defined in the XML

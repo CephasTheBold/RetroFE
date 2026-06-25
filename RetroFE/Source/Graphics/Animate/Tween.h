@@ -27,7 +27,7 @@ class ViewInfo;
 class Tween {
 public:
 
-    Tween(TweenProperty property, TweenAlgorithm type, float start, float end, float duration, const std::string& playlistFilter = "");
+    Tween(TweenProperty property, TweenAlgorithm type, float start, float end, float duration, float delay = 0.0f, const std::string& playlistFilter = "");
 
     // Animate using high-precision elapsed time
     float animate(double elapsedTime) const;
@@ -46,6 +46,7 @@ public:
 
     TweenProperty property;
     float  duration;
+    float  delay{ 0.0f }; // <-- Holds the delay specified by the parent <set> tag
     bool   startDefined{ true };
     std::string playlistFilter;
     std::vector<std::string> playlistFilterTokens;

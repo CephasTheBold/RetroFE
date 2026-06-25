@@ -85,9 +85,10 @@ std::unordered_map<std::string, TweenProperty> Tween::tweenPropertyMap_ = {
     {"restart", TWEEN_PROPERTY_RESTART}
 };
 
-Tween::Tween(TweenProperty property, TweenAlgorithm type, float start, float end, float duration, const std::string& playlistFilter)
+Tween::Tween(TweenProperty property, TweenAlgorithm type, float start, float end, float duration, float delay, const std::string& playlistFilter)
     : property(property)
     , duration(duration)
+    , delay(delay)
     , playlistFilter(playlistFilter)
     , type(type)
     , start(start)

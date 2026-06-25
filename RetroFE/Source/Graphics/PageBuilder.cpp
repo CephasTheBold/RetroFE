@@ -1646,6 +1646,9 @@ void PageBuilder::getTweenSet(const xml_node<>* node, Animation* animation) {
 
 void PageBuilder::getAnimationEvents(const xml_node<>* node, TweenSet& tweens) {
 	xml_attribute<> const* durationXml = node->first_attribute("duration");
+	xml_attribute<> const* delayXml = node->first_attribute("delay"); // <-- ADDED: Extract the delay node
+	float delayValue = delayXml ? Utils::convertFloat(delayXml->value()) : 0.0f; // <-- ADDED: Convert value or default to 0.0f
+
 	std::string actionSetting;
 	config_.getProperty(OPTION_ACTION, actionSetting);
 
@@ -1807,8 +1810,8 @@ void PageBuilder::getAnimationEvents(const xml_node<>* node, TweenSet& tweens) {
 					// if in layout action has playlist="<current playlist name>" then perform action
 					std::string playlistFilter = playlist && playlist->value() ? playlist->value() : "";
 
-					// Create the Tween object on the stack
-					Tween t(property, algorithm, fromValue, toValue, durationValue, playlistFilter);
+					// MODIFIED: Create the Tween object using the clean signature including delayValue
+					Tween t(property, algorithm, fromValue, toValue, durationValue, delayValue, playlistFilter);
 
 					if (!fromDefined) {
 						t.startDefined = false;
