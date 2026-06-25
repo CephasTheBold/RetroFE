@@ -865,7 +865,7 @@ bool RetroFE::run() {
 	SDL_RaiseWindow(SDL::getWindow(0));
 	SDL_SetWindowGrab(SDL::getWindow(0), SDL_TRUE);
 
-	float preloadTime = 0;
+	double preloadTime = 0;
 
 	// Initialize video settings properties
 	bool videoEnable = true;
@@ -994,28 +994,74 @@ bool RetroFE::run() {
 
 	Launcher l(config_, *this);
 	Menu m(config_, input_);
-	preloadTime = static_cast<float>(SDL_GetPerformanceCounter() / freq_);
+	preloadTime = static_cast<double>(SDL_GetPerformanceCounter()) / static_cast<double>(freq_);
 
 	l.LEDBlinky(1);
 	l.startScript();
 
-	float deltaTime = 0;
+	float deltaTime = 0.0f;     // Compatibility alias for animationDt.
+	float animationDt = 0.0f;   // Smoothed visual delta used by Page::update().
+	float timerDt = 0.0f;       // Real/clamped timer delta used by AttractMode.
 
-	double initial_current_time_ms = SDL_GetPerformanceCounter() * 1000.0 / (double)freq_;
+	constexpr double GlobalScoreFetchIntervalMs = 5 * 60 * 1000.0;      // 5 minutes
+	constexpr double payloadSyncIntervalMs = 30.0 * 60.0 * 1000.0;      // 30 minutes
 
-	double nextFrameTime = initial_current_time_ms;
-	lastFrameTimePointMs_ = initial_current_time_ms;
+	constexpr float MIN_ANIMATION_DT = 1.0f / 240.0f;
+	constexpr float MAX_ANIMATION_DT = 1.0f / 15.0f;
+	constexpr float MAX_TIMER_DT = 0.1f;
+	constexpr float SMOOTH_FACTOR = 0.10f;
 
-	constexpr double GlobalScoreFetchIntervalMs = 5 * 60 * 1000.0; // 5 minutes
-	constexpr double payloadSyncIntervalMs = 30.0 * 60.0 * 1000.0; // 30 minutes
-	double nextFetchTimeMs = initial_current_time_ms + GlobalScoreFetchIntervalMs;
-	double nextPayloadSyncMs = initial_current_time_ms + payloadSyncIntervalMs;
+	constexpr double ACTIVE_FPS_HOLD_MS = 2000.0;
 
-	// --- Frame timing smoothing state (persistent across frames in this run) ---
-	float smoothedDt = static_cast<float>(fpsIdleTime / 1000.0f); // start smooth timer at idle rate
-	constexpr float MIN_DT = 1.0f / 240.0f;   // clamp to ~240 FPS
-	constexpr float MAX_DT = 1.0f / 15.0f;    // clamp to ~15 FPS
-	constexpr float SMOOTH_FACTOR = 0.10f;    // 10% smoothing factor (higher = faster adaptation)
+	float smoothedDt = static_cast<float>(fpsIdleTime / 1000.0);
+	double activeFpsHoldUntilMs = 0.0;
+	bool wasPacingActive = false;
+
+	auto perfTicksToMs = [&](uint64_t ticks) -> double
+		{
+			return static_cast<double>(ticks) * 1000.0 / static_cast<double>(freq_);
+		};
+
+	auto isActivelyAnimating = [&]() -> bool
+		{
+			return currentPage_ && (
+				currentPage_->isMenuScrolling()
+				|| !currentPage_->isIdle()
+				|| !currentPage_->isGraphicsIdle()
+				|| currentPage_->isPlaylistScrolling()
+				|| currentPage_->isGamesScrolling());
+		};
+
+	uint64_t frameStartTicks = SDL_GetPerformanceCounter();
+	double frameNowMs = perfTicksToMs(frameStartTicks);
+
+	double nextFrameTime = frameNowMs;
+	lastFrameTimePointMs_ = frameNowMs;
+
+	double nextFetchTimeMs = frameNowMs + GlobalScoreFetchIntervalMs;
+	double nextPayloadSyncMs = frameNowMs + payloadSyncIntervalMs;
+
+	auto resetFrameClockAfterBlockingWork = [&]()
+		{
+			frameStartTicks = SDL_GetPerformanceCounter();
+			frameNowMs = perfTicksToMs(frameStartTicks);
+
+			lastFrameTimePointMs_ = frameNowMs;
+			nextFrameTime = frameNowMs;
+			currentTime_ = frameNowMs / 1000.0;
+		};
+
+	auto primeActivePacingAfterBlockingWork = [&]()
+		{
+			resetFrameClockAfterBlockingWork();
+
+			activeFpsHoldUntilMs = frameNowMs + ACTIVE_FPS_HOLD_MS;
+			smoothedDt = static_cast<float>(fpsTime / 1000.0);
+
+			// Leave this false so the post-state block naturally sees a transition
+			// into pacingActive and hard-resets smoothing.
+			wasPacingActive = false;
+		};
 
 	int hardwareHz = SDL::getDisplayRefresh(0);
 	if (hardwareHz <= 0) hardwareHz = fps; // Fallback to config if HW query fails
@@ -1033,27 +1079,25 @@ bool RetroFE::run() {
 
 	while (running)
 	{
-		const uint64_t loopStart = SDL_GetPerformanceCounter();
-		const double nowMs_loopStart = (double)loopStart * 1000.0 / (double)freq_;
+		frameStartTicks = SDL_GetPerformanceCounter();
+		frameNowMs = perfTicksToMs(frameStartTicks);
 
-		if (psCfg.enabled && nowMs_loopStart >= nextPayloadSyncMs) {
+		if (psCfg.enabled && frameNowMs >= nextPayloadSyncMs) {
 			// avoid drift
-			do { nextPayloadSyncMs += payloadSyncIntervalMs; } while (nowMs_loopStart >= nextPayloadSyncMs);
+			do { nextPayloadSyncMs += payloadSyncIntervalMs; } while (frameNowMs >= nextPayloadSyncMs);
 
 			const bool ok = PayloadSync::RunWithConfig(psCfg, /*dryRun=*/false);
 			LOG_INFO("Payload", std::string("Periodic sync (5m): ") + (ok ? "OK" : "Errors (see log)"));
 
-			// consume dirty playlists for the active page/collection
-			if (auto* page = currentPage_) {
-				if (page)
-					page->consumeDirtyPlaylistsForActiveCollection();
-			}
+			if (auto* page = currentPage_)
+				page->consumeDirtyPlaylistsForActiveCollection();
+
+			resetFrameClockAfterBlockingWork();
 		}
 
 
-		if (globalHiscoresEnabled && nowMs_loopStart >= nextFetchTimeMs) {
-			// Advance by fixed steps to avoid drift if we were paused for a while
-			do { nextFetchTimeMs += GlobalScoreFetchIntervalMs; } while (nowMs_loopStart >= nextFetchTimeMs);
+		if (globalHiscoresEnabled && frameNowMs >= nextFetchTimeMs) {
+			do { nextFetchTimeMs += GlobalScoreFetchIntervalMs; } while (frameNowMs >= nextFetchTimeMs);
 
 			kickFetch();
 		}
@@ -1066,13 +1110,6 @@ bool RetroFE::run() {
 			mp->pump();
 		}
 		
-		bool activelyAnimating = (currentPage_ && (
-				currentPage_->isMenuScrolling()
-				|| !currentPage_->isIdle()
-				|| !currentPage_->isGraphicsIdle()
-				|| currentPage_->isPlaylistScrolling()
-				|| currentPage_->isGamesScrolling()));
-
 		// Check for pending hot-reload (SIGUSR1). Only act when safe: idle, at root depth.
 		if (!splashMode && reloadRequested_.exchange(false)
 			&& state_ == RETROFE_IDLE && pages_.empty()
@@ -1098,34 +1135,24 @@ bool RetroFE::run() {
 				setState(inputState);
 			}
 		}
-		if (nextFrameTime < nowMs_loopStart) {
-			nextFrameTime = nowMs_loopStart;
+
+		if (nextFrameTime < frameNowMs) {
+			nextFrameTime = frameNowMs;
 		}
 
-		// --- Frame timing with smoothing & adaptive reset ---
-		float rawDt = static_cast<float>((nowMs_loopStart - lastFrameTimePointMs_) / 1000.0f);
-		lastFrameTimePointMs_ = nowMs_loopStart;
+		float rawDt = static_cast<float>((frameNowMs - lastFrameTimePointMs_) / 1000.0);
+		lastFrameTimePointMs_ = frameNowMs;
 
-		// Convert target frame interval (ms → s)
-		float targetDt = static_cast<float>((activelyAnimating ? fpsTime : fpsIdleTime) / 1000.0f);
+		timerDt = std::clamp(rawDt, 0.0f, MAX_TIMER_DT);
 
-		// Clamp extremes
-		rawDt = std::clamp(rawDt, MIN_DT, MAX_DT);
+		float rawAnimationDt = std::clamp(rawDt, MIN_ANIMATION_DT, MAX_ANIMATION_DT);
 
-		// If our target frame pacing changes drastically, reset smoothing immediately
-		float ratio = smoothedDt / std::max(0.000001f, targetDt);
-		if (ratio < 0.5f || ratio > 2.0f)
-			smoothedDt = targetDt;
-
-		// Normal EMA smoothing otherwise
-		smoothedDt = smoothedDt * (1.0f - SMOOTH_FACTOR) + rawDt * SMOOTH_FACTOR;
-		deltaTime = smoothedDt;
-
-		currentTime_ = static_cast<float>(nowMs_loopStart / 1000.0f);
+		currentTime_ = frameNowMs / 1000.0;
 
 		if (!g_isRestrictorCheckDone) {
 			if (g_restrictorManager.isReady()) {
 				g_restrictorManager.waitForCompletion();
+				resetFrameClockAfterBlockingWork();
 				g_isRestrictorCheckDone = true;
 
 				IRestrictor* restrictor = RestrictorManager::getGlobalRestrictor();
@@ -1334,7 +1361,7 @@ bool RetroFE::run() {
 					}
 				}
 
-				currentTime_ = static_cast<float>(SDL_GetPerformanceCounter() * 1.0 / freq_);
+				resetFrameClockAfterBlockingWork();
 				lastLaunchReturnTime_ = currentTime_;
 
 				setState(RETROFE_LOAD_ART);
@@ -2433,6 +2460,9 @@ bool RetroFE::run() {
 					l.LEDBlinky(4);
 					currentPage_->exitGame();
 					currentPage_->update(0.0f);
+
+					primeActivePacingAfterBlockingWork();
+
 					setState(RETROFE_LAUNCH_EXIT);
 				}
 			}
@@ -2549,6 +2579,9 @@ bool RetroFE::run() {
 
 					currentPage_->exitGame();
 					currentPage_->update(0.0f);
+
+					primeActivePacingAfterBlockingWork();
+
 					setState(RETROFE_LAUNCH_EXIT);
 				}
 			}
@@ -2830,6 +2863,9 @@ bool RetroFE::run() {
 					currentPage_->allocateGraphicsMemory();
 					preparePageForFirstRender(currentPage_);
 					currentPage_->start();
+
+					primeActivePacingAfterBlockingWork();
+
 					LOG_INFO("RetroFE", "Layout hot-reload complete");
 				}
 				else
@@ -2844,6 +2880,38 @@ bool RetroFE::run() {
 		}
 
 
+		// The state machine may have started/stopped animations.
+	// Decide active/idle timing after state mutation, not before it.
+		const bool rawActivelyAnimating = isActivelyAnimating();
+
+		if (rawActivelyAnimating)
+		{
+			activeFpsHoldUntilMs = frameNowMs + ACTIVE_FPS_HOLD_MS;
+		}
+
+		const bool pacingActive =
+			rawActivelyAnimating || frameNowMs < activeFpsHoldUntilMs;
+
+		const float targetDt = static_cast<float>(
+			(pacingActive ? fpsTime : fpsIdleTime) / 1000.0
+			);
+
+		if (pacingActive != wasPacingActive)
+		{
+			smoothedDt = targetDt;
+		}
+		else
+		{
+			smoothedDt =
+				smoothedDt * (1.0f - SMOOTH_FACTOR)
+				+ rawAnimationDt * SMOOTH_FACTOR;
+		}
+
+		wasPacingActive = pacingActive;
+
+		animationDt = smoothedDt;
+		deltaTime = animationDt;
+
 		// Handle screen updates and attract mode
 		if (running)
 		{
@@ -2851,11 +2919,8 @@ bool RetroFE::run() {
 			{
 				if (!splashMode && !paused_)
 				{
-					float attract_dt = deltaTime;
-					const float MAX_REASONABLE_DELTA_TIME = 0.1f;
-					if (attract_dt > MAX_REASONABLE_DELTA_TIME) attract_dt = MAX_REASONABLE_DELTA_TIME;
+					int attractReturn = attract_.update(timerDt, *currentPage_);
 
-					int attractReturn = attract_.update(attract_dt, *currentPage_);
 					if (!kioskLock_ && attractReturn == 1) // Change playlist
 					{
 						attract_.reset(attract_.isSet());
@@ -2864,21 +2929,26 @@ bool RetroFE::run() {
 
 						setState(RETROFE_PLAYLIST_REQUEST);
 					}
+
 					if (!kioskLock_ && attractReturn == 2) // Change collection
 					{
 						attract_.reset(attract_.isSet());
 						setState(RETROFE_COLLECTION_DOWN_REQUEST);
 					}
-					if (attractModeLaunch && !kioskLock_ && attractReturn == 3) {
+
+					if (attractModeLaunch && !kioskLock_ && attractReturn == 3)
+					{
 						attract_.reset(attract_.isSet());
 						setState(RETROFE_ATTRACT_LAUNCH_ENTER);
 					}
 				}
+
 				if (menuMode_)
 				{
 					attract_.reset();
 				}
-				currentPage_->update(deltaTime);
+
+				currentPage_->update(animationDt);
 
 				if (!splashMode && !paused_)
 				{
@@ -2917,7 +2987,7 @@ bool RetroFE::run() {
 			// Only do custom frame pacing if vsync is OFF
 			if (!vSync)
 			{
-				const double currentFrameIntervalMs = activelyAnimating ? fpsTime : fpsIdleTime;
+				const double currentFrameIntervalMs = pacingActive ? fpsTime : fpsIdleTime;
 				const double frameInterval_s = currentFrameIntervalMs / 1000.0;
 
 				// 1. Calculate the STRICT DEADLINE for this frame.
@@ -2937,7 +3007,8 @@ bool RetroFE::run() {
 				const uint64_t sleepTargetTicks = (uint64_t)llround(nextFrameTime * (double)freq_ / 1000.0);
 
 				const uint64_t workEndTicks = SDL_GetPerformanceCounter();
-				lastWorkMs_ = (double)(workEndTicks - loopStart) * 1000.0 / (double)freq_;
+				lastWorkMs_ =
+					static_cast<double>(workEndTicks - frameStartTicks) * 1000.0 / static_cast<double>(freq_);
 
 				// 5. High-precision sleep
 				sleepUntilTicks(sleepTargetTicks, (uint64_t)freq_, frameInterval_s);
@@ -2950,13 +3021,14 @@ bool RetroFE::run() {
 					? (double)(afterSleepTicks - originalTargetTicks) * 1e6 / (double)freq_
 					: 0.0;
 
-				lastFrameTimeMs_ = (double)(afterSleepTicks - loopStart) * 1000.0 / (double)freq_;
+				lastFrameTimeMs_ =
+					static_cast<double>(afterSleepTicks - frameStartTicks) * 1000.0 / static_cast<double>(freq_);
 			}
 			else // vSync is ON
 			{
 				const uint64_t loopEnd = SDL_GetPerformanceCounter();
-				const double frameTimeMs = (double)(loopEnd - loopStart) * 1000.0 / (double)freq_;
-
+				const double frameTimeMs =
+					static_cast<double>(loopEnd - frameStartTicks) * 1000.0 / static_cast<double>(freq_);
 				// With V-Sync, "Work" includes the time spent waiting inside SDL_RenderPresent.
 				lastWorkMs_ = frameTimeMs;
 

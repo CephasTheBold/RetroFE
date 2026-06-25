@@ -213,8 +213,8 @@ private:
     
     std::stack<Page *> pages_;
     float              keyInputDisable_;
-    float              currentTime_;
-    float              lastLaunchReturnTime_;
+    double              currentTime_;
+    double              lastLaunchReturnTime_;
     Item              *nextPageItem_;
     FontCache          fontcache_;
     AttractMode        attract_;
