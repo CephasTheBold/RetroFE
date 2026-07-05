@@ -99,32 +99,6 @@ bool g_isRestrictorCheckDone = false;
 
 namespace fs = std::filesystem;
 
-#ifdef __linux
-
-bool InitializeServoStik() {
-	libusb_context* ctx = NULL;
-	int ret = libusb_init(&ctx);
-	if (ret < 0) {
-		fprintf(stderr, "libusb_init failed: %d\n", ret);
-		return false;
-	}
-
-	// Hardcoded Ultimarc ServoStik vendor/product IDs
-	libusb_device_handle* handle = libusb_open_device_with_vid_pid(ctx, 0xD209, 0x1700);
-	if (handle) {
-		// Device found, close and return true
-		libusb_close(handle);
-		libusb_exit(ctx);
-		return true;
-	}
-
-	// Device not found, exit libusb and return false
-	libusb_exit(ctx);
-	return false;
-}
-#endif
-
-
 static inline void sleepUntilTicks(uint64_t targetTicks, uint64_t freq, double frameInterval_s) {
 	if (freq == 0) return;
 
