@@ -650,12 +650,134 @@ static void collectWindowsForPid(DWORD pid, std::vector<HWND>& out) {
 // Politely ask each window to close (fast/non-blocking first; small bounded fallback)
 static void sendCloseToWindows(const std::vector<HWND>& windows) {
     for (HWND h : windows) {
-        PostMessage(h, WM_SYSCOMMAND, SC_CLOSE, 0);
-        PostMessage(h, WM_CLOSE, 0, 0);
+        if (!IsWindow(h)) {
+            continue;
+        }
 
-        SendMessageTimeout(h, WM_CLOSE, 0, 0,
-            SMTO_ABORTIFHUNG | SMTO_NORMAL, 250, nullptr);
+        char title[512] = {};
+        char className[256] = {};
+
+        GetWindowTextA(h, title, sizeof(title));
+        GetClassNameA(h, className, sizeof(className));
+
+        LOG_INFO("ProcessManager",
+            std::string("Posting SC_CLOSE to hwnd=") +
+            std::to_string(reinterpret_cast<uintptr_t>(h)) +
+            " class=\"" + className +
+            "\" title=\"" + title + "\"");
+
+        PostMessage(h, WM_SYSCOMMAND, SC_CLOSE, 0);
     }
+}
+
+static DWORD getJobActiveProcessCount(HANDLE hJob) {
+    if (!hJob) {
+        return MAXDWORD;
+    }
+
+    JOBOBJECT_BASIC_ACCOUNTING_INFORMATION info{};
+    if (!QueryInformationJobObject(
+        hJob,
+        JobObjectBasicAccountingInformation,
+        &info,
+        sizeof(info),
+        nullptr))
+    {
+        return MAXDWORD;
+    }
+
+    return info.ActiveProcesses;
+}
+
+static bool waitForJobEmptyBounded(HANDLE hJob, DWORD waitMsTotal) {
+    if (!hJob) {
+        return false;
+    }
+
+    const DWORD sliceMs = 100;
+    DWORD       waitedMs = 0;
+    DWORD       lastActive = MAXDWORD;
+
+    while (waitedMs < waitMsTotal) {
+        DWORD active = getJobActiveProcessCount(hJob);
+
+        if (active == 0) {
+            LOG_INFO("ProcessManager", "Job is empty.");
+            return true;
+        }
+
+        if (active != MAXDWORD && active != lastActive) {
+            LOG_INFO("ProcessManager",
+                "Waiting for job to empty; active process count = " +
+                std::to_string(active));
+            lastActive = active;
+        }
+
+        MsgWaitForMultipleObjects(0, nullptr, FALSE, sliceMs, QS_ALLINPUT);
+
+        MSG msg;
+        while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
+            DispatchMessage(&msg);
+        }
+
+        waitedMs += sliceMs;
+    }
+
+    DWORD active = getJobActiveProcessCount(hJob);
+    if (active != MAXDWORD) {
+        LOG_WARNING("ProcessManager",
+            "Timed out waiting for job to empty; active process count = " +
+            std::to_string(active));
+    }
+    else {
+        LOG_WARNING("ProcessManager",
+            "Timed out waiting for job to empty; active process count unavailable.");
+    }
+
+    return false;
+}
+
+static bool getJobProcessIds(HANDLE hJob, std::vector<DWORD>& outPids) {
+    outPids.clear();
+
+    if (!hJob) {
+        return false;
+    }
+
+    JOBOBJECT_BASIC_PROCESS_ID_LIST header{};
+    DWORD bytes = 0;
+
+    QueryInformationJobObject(
+        hJob,
+        JobObjectBasicProcessIdList,
+        &header,
+        sizeof(header),
+        &bytes);
+
+    if (bytes == 0) {
+        return false;
+    }
+
+    std::vector<BYTE> buffer(bytes);
+    auto* list = reinterpret_cast<JOBOBJECT_BASIC_PROCESS_ID_LIST*>(buffer.data());
+
+    if (!QueryInformationJobObject(
+        hJob,
+        JobObjectBasicProcessIdList,
+        list,
+        bytes,
+        &bytes))
+    {
+        return false;
+    }
+
+    outPids.reserve(list->NumberOfProcessIdsInList);
+
+    for (ULONG i = 0; i < list->NumberOfProcessIdsInList; ++i) {
+        outPids.push_back(static_cast<DWORD>(list->ProcessIdList[i]));
+    }
+
+    return true;
 }
 
 static bool forceForegroundForPid(DWORD pid) {
@@ -749,89 +871,103 @@ static bool waitForPidExitBounded(DWORD pid, DWORD waitMsTotal) {
 bool WindowsProcessManager::requestGracefulShutdownForPid(DWORD pid, DWORD waitMsTotal) {
     std::vector<HWND> hwnds;
     collectWindowsForPid(pid, hwnds);
-    if (!hwnds.empty()) {
-        LOG_INFO("ProcessManager", "Sending close to " + std::to_string(hwnds.size()) +
-            " window(s) for PID " + std::to_string(pid));
-        sendCloseToWindows(hwnds);
-        return waitForHandleExitBounded(OpenProcess(SYNCHRONIZE | PROCESS_QUERY_INFORMATION, FALSE, pid), waitMsTotal);
-    }
 
-    return false;
-}
-
-// Graceful ask for all processes in our Job.
-bool WindowsProcessManager::requestGracefulShutdownForJob(DWORD waitMsTotal) {
-    if (!hJob_) return false;
-
-    JOBOBJECT_BASIC_PROCESS_ID_LIST header{ 0 };
-    DWORD                           bytes = 0;
-    (void)QueryInformationJobObject(
-        hJob_,
-        JobObjectBasicProcessIdList,
-        &header,
-        sizeof(header),
-        &bytes);
-
-    if (bytes == 0) {
-        return false;
-    }
-
-    std::vector<BYTE> buf(bytes);
-    auto* list = reinterpret_cast<JOBOBJECT_BASIC_PROCESS_ID_LIST*>(buf.data());
-    if (!QueryInformationJobObject(hJob_, JobObjectBasicProcessIdList, list, bytes, &bytes)) {
+    if (hwnds.empty()) {
         return false;
     }
 
     LOG_INFO("ProcessManager",
-        "Job members: " + std::to_string(list->NumberOfProcessIdsInList) +
-        " (primary=" + std::to_string(processId_) + ")");
+        "Sending close to " + std::to_string(hwnds.size()) +
+        " window(s) for PID " + std::to_string(pid));
 
-    for (ULONG i = 0; i < list->NumberOfProcessIdsInList; ++i) {
-        DWORD pid = static_cast<DWORD>(list->ProcessIdList[i]);
+    sendCloseToWindows(hwnds);
+    return waitForPidExitBounded(pid, waitMsTotal);
+}
 
-        std::vector<HWND> hwnds;
-        collectWindowsForPid(pid, hwnds);
+// Graceful ask for all processes in our Job.
+bool WindowsProcessManager::requestGracefulShutdownForJob(DWORD waitMsTotal) {
+    if (!hJob_) {
+        return false;
+    }
 
-        if (!hwnds.empty()) {
+    const DWORD sliceMs = 100;
+    DWORD waitedMs = 0;
+    DWORD lastActive = MAXDWORD;
+
+    std::set<DWORD> pidsAlreadyClosed;
+    std::set<HWND>  hwndsAlreadyClosed;
+
+    while (waitedMs < waitMsTotal) {
+        DWORD active = getJobActiveProcessCount(hJob_);
+
+        if (active == 0) {
+            LOG_INFO("ProcessManager", "Graceful job shutdown succeeded; all job processes exited.");
+            return true;
+        }
+
+        if (active != MAXDWORD && active != lastActive) {
             LOG_INFO("ProcessManager",
-                "Requesting close for job member PID " + std::to_string(pid) +
-                " (" + std::to_string(hwnds.size()) + " window(s))");
-            sendCloseToWindows(hwnds);
+                "Waiting for job to empty; active process count = " +
+                std::to_string(active));
+            lastActive = active;
         }
-        else {
-            LOG_DEBUG("ProcessManager",
-                "Job member PID " + std::to_string(pid) +
-                " has no visible top-level windows; skipping WM_CLOSE.");
-        }
-    }
 
-    if (processId_ == 0) {
-        LOG_WARNING("ProcessManager", "requestGracefulShutdownForJob: primary PID is 0; cannot wait.");
-        return false;
-    }
+        std::vector<DWORD> pids;
+        if (getJobProcessIds(hJob_, pids)) {
+            for (DWORD pid : pids) {
+                std::vector<HWND> hwnds;
+                collectWindowsForPid(pid, hwnds);
 
-    if (hProcess_) {
-        const DWORD slice = 100;
-        DWORD       waited = 0;
+                if (hwnds.empty()) {
+                    if (pidsAlreadyClosed.insert(pid).second) {
+                        LOG_DEBUG("ProcessManager",
+                            "Job member PID " + std::to_string(pid) +
+                            " has no visible top-level windows.");
+                    }
+                    continue;
+                }
 
-        while (waited < waitMsTotal) {
-            if (WaitForSingleObject(hProcess_, 0) == WAIT_OBJECT_0) {
-                return true;
+                std::vector<HWND> newHwnds;
+                for (HWND hwnd : hwnds) {
+                    if (hwndsAlreadyClosed.insert(hwnd).second) {
+                        newHwnds.push_back(hwnd);
+                    }
+                }
+
+                if (!newHwnds.empty()) {
+                    LOG_INFO("ProcessManager",
+                        "Requesting close for job member PID " +
+                        std::to_string(pid) +
+                        " (" + std::to_string(newHwnds.size()) +
+                        " new window(s))");
+
+                    sendCloseToWindows(newHwnds);
+                }
             }
-
-            MsgWaitForMultipleObjects(0, nullptr, FALSE, slice, QS_ALLINPUT);
-            MSG msg;
-            while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
-                DispatchMessage(&msg);
-            }
-
-            waited += slice;
         }
 
-        return false;
+        MsgWaitForMultipleObjects(0, nullptr, FALSE, sliceMs, QS_ALLINPUT);
+
+        MSG msg;
+        while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
+            DispatchMessage(&msg);
+        }
+
+        waitedMs += sliceMs;
     }
 
-    return waitForPidExitBounded(processId_, waitMsTotal);
+    DWORD active = getJobActiveProcessCount(hJob_);
+    if (active != MAXDWORD) {
+        LOG_WARNING("ProcessManager",
+            "Graceful job shutdown timed out; active process count = " +
+            std::to_string(active));
+    }
+    else {
+        LOG_WARNING("ProcessManager",
+            "Graceful job shutdown timed out; active process count unavailable.");
+    }
+
+    return false;
 }
 
 // -----------------------------------------------------------------------------
@@ -1462,58 +1598,79 @@ WaitResult WindowsProcessManager::wait(
 
 
 void WindowsProcessManager::terminate() {
-    // General grace vs MAME grace
-    constexpr DWORD kGraceWaitMsGeneral = 3000;
-    constexpr DWORD kGraceWaitMsMame = 8000;
+    // General grace vs MAME grace.
+    // Kept separate because MAME may need a different value later.
+    constexpr DWORD kGraceWaitMsGeneral = 15000;
+    constexpr DWORD kGraceWaitMsMame = 15000;
 
-    if (!isRunning()) {
-        LOG_WARNING("ProcessManager", "Terminate called but no process was running; checking Steam/Epic folder fallback.");
+    // If there is no running primary process AND no assigned job, fall back to
+    // Steam/Epic folder-based cleanup. If a job still exists, do not bail here:
+    // the primary process may have exited while helper processes remain in the job.
+    if (!isRunning() && !(jobAssigned_ && hJob_)) {
+        LOG_WARNING("ProcessManager",
+            "Terminate called but no process was running; checking Steam/Epic folder fallback.");
 
         // Steam fallback: if we know the game root, kill processes in that folder.
         if (g_hasSteamGameRoot) {
             LOG_INFO("ProcessManager",
                 "Attempting Steam-folder based termination for " + g_steamGameRoot);
+
             std::set<DWORD> processedIds;
             HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+
             if (hSnap != INVALID_HANDLE_VALUE) {
                 PROCESSENTRY32 pe32{};
                 pe32.dwSize = sizeof(pe32);
+
                 if (Process32First(hSnap, &pe32)) {
                     DWORD selfPid = GetCurrentProcessId();
+
                     do {
                         DWORD pid = pe32.th32ProcessID;
-                        if (pid == 0 || pid == selfPid) continue;
+                        if (pid == 0 || pid == selfPid) {
+                            continue;
+                        }
+
                         if (isProcessInFolder(pid, g_steamGameRoot)) {
                             terminateProcessTree(pid, processedIds);
                         }
                     } while (Process32Next(hSnap, &pe32));
                 }
+
                 CloseHandle(hSnap);
             }
         }
+
         // Epic fallback: if we know the game root, kill processes in that folder.
         if (g_hasEpicGameRoot) {
             LOG_INFO("ProcessManager",
                 "Attempting Epic-folder based termination for " + g_epicGameRoot);
+
             std::set<DWORD> processedIds;
             HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+
             if (hSnap != INVALID_HANDLE_VALUE) {
                 PROCESSENTRY32 pe32{};
                 pe32.dwSize = sizeof(pe32);
+
                 if (Process32First(hSnap, &pe32)) {
                     DWORD selfPid = GetCurrentProcessId();
+
                     do {
                         DWORD pid = pe32.th32ProcessID;
-                        if (pid == 0 || pid == selfPid) continue;
+                        if (pid == 0 || pid == selfPid) {
+                            continue;
+                        }
+
                         if (isProcessInFolder(pid, g_epicGameRoot)) {
                             terminateProcessTree(pid, processedIds);
                         }
                     } while (Process32Next(hSnap, &pe32));
                 }
+
                 CloseHandle(hSnap);
             }
         }
-
 
         cleanupHandles();
         return;
@@ -1526,16 +1683,24 @@ void WindowsProcessManager::terminate() {
     std::filesystem::path mameTriggerPath;
 
     auto removeTriggerIfNeeded = [&]() {
-        if (!createdMameTrigger) return;
+        if (!createdMameTrigger) {
+            return;
+        }
+
         std::error_code ec;
         std::filesystem::remove(mameTriggerPath, ec);
         };
 
     const auto t0 = std::chrono::steady_clock::now();
-    auto       remainingMs = [&]() -> DWORD {
+
+    auto remainingMs = [&]() -> DWORD {
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - t0).count();
-        if (elapsed >= static_cast<long long>(graceBudget)) return 0;
+
+        if (elapsed >= static_cast<long long>(graceBudget)) {
+            return 0;
+        }
+
         return static_cast<DWORD>(graceBudget - elapsed);
         };
 
@@ -1547,52 +1712,70 @@ void WindowsProcessManager::terminate() {
         if (out.good()) {
             out.close();
             createdMameTrigger = true;
-            LOG_INFO("ProcessManager", "MAME detected - wrote exit trigger: " + mameTriggerPath.string());
+
+            LOG_INFO("ProcessManager",
+                "MAME detected - wrote exit trigger: " + mameTriggerPath.string());
 
             DWORD rem = remainingMs();
-            if (rem > 0 && waitForPidExitBounded(processId_, rem)) {
+
+            bool mameExited = false;
+            if (rem > 0) {
+                if (jobAssigned_ && hJob_) {
+                    // Passive wait. The trigger file is the shutdown request.
+                    // Do not use primary PID exit as success while a job exists.
+                    mameExited = waitForJobEmptyBounded(hJob_, rem);
+                }
+                else {
+                    mameExited = waitForPidExitBounded(processId_, rem);
+                }
+            }
+
+            if (mameExited) {
                 LOG_INFO("ProcessManager", "MAME exited cleanly after trigger.");
                 removeTriggerIfNeeded();
                 cleanupHandles();
                 return;
             }
 
-            {
-                std::error_code ec;
-                std::filesystem::remove(mameTriggerPath, ec);
-                if (ec) {
-                    LOG_WARNING("ProcessManager", "Failed to remove MAME exit trigger (" + mameTriggerPath.string() + "): " + ec.message());
-                }
-                else {
-                    LOG_INFO("ProcessManager", "MAME did not exit in time; removed exit trigger and escalating.");
-                }
+            std::error_code ec;
+            std::filesystem::remove(mameTriggerPath, ec);
+
+            if (ec) {
+                LOG_WARNING("ProcessManager",
+                    "Failed to remove MAME exit trigger (" +
+                    mameTriggerPath.string() + "): " + ec.message());
             }
+            else {
+                LOG_INFO("ProcessManager",
+                    "MAME did not exit in time; removed exit trigger and escalating.");
+            }
+
+            createdMameTrigger = false;
         }
         else {
-            LOG_WARNING("ProcessManager", "MAME detected but could not write exit trigger: " + mameTriggerPath.string());
+            LOG_WARNING("ProcessManager",
+                "MAME detected but could not write exit trigger: " +
+                mameTriggerPath.string());
         }
     }
 
     // --- If we have a job, prefer job-based graceful shutdown ---
     if (jobAssigned_ && hJob_) {
-        LOG_INFO("ProcessManager", "Attempting graceful shutdown for job (primary PID " + std::to_string(processId_) + ")...");
+        LOG_INFO("ProcessManager",
+            "Attempting graceful shutdown for job (primary PID " +
+            std::to_string(processId_) + ")...");
 
         DWORD rem = remainingMs();
+
         if (rem > 0 && requestGracefulShutdownForJob(rem)) {
-            LOG_INFO("ProcessManager", "Graceful job shutdown succeeded (primary exited).");
             removeTriggerIfNeeded();
             cleanupHandles();
             return;
         }
 
-        if (!isRunning()) {
-            LOG_INFO("ProcessManager", "Primary process already exited; treating as graceful success.");
-            removeTriggerIfNeeded();
-            cleanupHandles();
-            return;
-        }
+        LOG_WARNING("ProcessManager",
+            "Graceful job shutdown failed; escalating to TerminateJobObject.");
 
-        LOG_WARNING("ProcessManager", "Graceful job shutdown failed; escalating to TerminateJobObject.");
         removeTriggerIfNeeded();
         TerminateJobObject(hJob_, 1);
         cleanupHandles();
@@ -1600,9 +1783,12 @@ void WindowsProcessManager::terminate() {
     }
 
     // --- No job: graceful shutdown for the single PID ---
-    LOG_INFO("ProcessManager", "Attempting graceful shutdown for PID " + std::to_string(processId_) + "...");
+    LOG_INFO("ProcessManager",
+        "Attempting graceful shutdown for PID " + std::to_string(processId_) + "...");
+
     {
         DWORD rem = remainingMs();
+
         if (rem > 0 && requestGracefulShutdownForPid(processId_, rem)) {
             LOG_INFO("ProcessManager", "Graceful shutdown succeeded.");
             removeTriggerIfNeeded();
@@ -1611,18 +1797,24 @@ void WindowsProcessManager::terminate() {
         }
     }
 
+    // This check is valid only in the non-job path.
     if (!isRunning()) {
-        LOG_INFO("ProcessManager", "Primary process already exited; treating as graceful success.");
+        LOG_INFO("ProcessManager",
+            "Primary process already exited; treating as graceful success.");
+
         removeTriggerIfNeeded();
         cleanupHandles();
         return;
     }
 
-    LOG_WARNING("ProcessManager", "Graceful shutdown failed; terminating process tree.");
+    LOG_WARNING("ProcessManager",
+        "Graceful shutdown failed; terminating process tree.");
+
     removeTriggerIfNeeded();
 
     std::set<DWORD> processedIds;
     terminateProcessTree(processId_, processedIds);
+
     cleanupHandles();
 }
 
