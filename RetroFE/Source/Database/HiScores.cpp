@@ -617,33 +617,47 @@ void HiScores::loadHighScores(const std::string& zipPath, const std::string& ove
 	hiFilesDirectory_ = Utils::combinePath(Configuration::absolutePath, "emulators", "mame", "hiscore");
 	scoresDirectory_ = Utils::combinePath(Configuration::absolutePath, "hi2txt", "scores");
 
-	// Load defaults from the ZIP file
 	loadFromZip(zipPath);
 
-	// Check if the override directory exists
 	if (std::filesystem::exists(overridePath) && std::filesystem::is_directory(overridePath)) {
-		// Load override XML files from the directory
-		for (const auto& file : std::filesystem::directory_iterator(overridePath)) {
-			if (file.path().extension() == ".xml") {
-				std::string gameName = file.path().stem().string();
-				std::ifstream fileStream(file.path(), std::ios::binary);
-				std::vector<char> buffer((std::istreambuf_iterator<char>(fileStream)), std::istreambuf_iterator<char>());
-				buffer.push_back('\0');
-
-				// Deobfuscate the buffer if necessary
-				std::string deobfuscatedContent = Utils::deobfuscate(std::string(buffer.begin(), buffer.end()));
-				std::vector<char> deobfuscatedBuffer(deobfuscatedContent.begin(), deobfuscatedContent.end());
-				deobfuscatedBuffer.push_back('\0');  // Null-terminate for parsing
-
-				loadFromFile(gameName, file.path().string(), deobfuscatedBuffer);
+		for (const auto& entry : std::filesystem::directory_iterator(overridePath)) {
+			if (entry.path().extension() != ".xml") {
+				continue;
 			}
+
+			std::string gameName = entry.path().stem().string();
+
+			std::ifstream fileStream(entry.path(), std::ios::binary);
+			if (!fileStream) {
+				LOG_ERROR("HiScores", "Failed to open override XML file: " + entry.path().string());
+				continue;
+			}
+
+			std::istreambuf_iterator<char> begin(fileStream);
+			std::istreambuf_iterator<char> end;
+
+			std::vector<char> buffer(begin, end);
+
+			if (buffer.empty()) {
+				LOG_ERROR("HiScores", "Override XML file is empty: " + entry.path().string());
+				continue;
+			}
+
+			std::string rawContent(buffer.begin(), buffer.end());
+			std::string deobfuscatedContent = Utils::deobfuscate(rawContent);
+
+			std::vector<char> deobfuscatedBuffer(
+				deobfuscatedContent.begin(),
+				deobfuscatedContent.end()
+			);
+
+			loadFromFile(gameName, entry.path().string(), deobfuscatedBuffer);
 		}
 	}
 	else {
 		LOG_ERROR("HiScores", "Override directory does not exist or is not accessible: " + overridePath);
 	}
 }
-
 
 // Load high scores from XML files within the ZIP archive
 void HiScores::loadFromZip(const std::string& zipPath) {
@@ -653,34 +667,95 @@ void HiScores::loadFromZip(const std::string& zipPath) {
 		return;
 	}
 
-	if (unzGoToFirstFile(zipFile) == UNZ_OK) {
-		do {
-			unz_file_info fileInfo;
-			char fileName[256];
-			unzGetCurrentFileInfo(zipFile, &fileInfo, fileName, sizeof(fileName), nullptr, 0, nullptr, 0);
+	auto closeZip = [&]() {
+		unzClose(zipFile);
+		};
 
-			if (std::string(fileName).find(".xml") != std::string::npos) {
-				unzOpenCurrentFile(zipFile);
-
-				// Read file content into buffer
-				std::vector<char> buffer(fileInfo.uncompressed_size);
-				unzReadCurrentFile(zipFile, buffer.data(), fileInfo.uncompressed_size);
-				unzCloseCurrentFile(zipFile);
-
-				// Deobfuscate content before parsing
-				std::string deobfuscatedContent = Utils::removeNullCharacters(Utils::deobfuscate(std::string(buffer.begin(), buffer.end())));
-
-				// Load deobfuscated data into rapidxml
-				std::vector<char> xmlBuffer(deobfuscatedContent.begin(), deobfuscatedContent.end());
-				xmlBuffer.push_back('\0');  // Null-terminate for rapidxml
-
-				std::string gameName = std::filesystem::path(fileName).stem().string();
-				loadFromFile(gameName, fileName, xmlBuffer);  // Parse and load XML
-			}
-		} while (unzGoToNextFile(zipFile) == UNZ_OK);
+	if (unzGoToFirstFile(zipFile) != UNZ_OK) {
+		LOG_ERROR("HiScores", "ZIP file contains no readable entries: " + zipPath);
+		closeZip();
+		return;
 	}
 
-	unzClose(zipFile);
+	do {
+		unz_file_info fileInfo{};
+
+		if (unzGetCurrentFileInfo(zipFile, &fileInfo, nullptr, 0, nullptr, 0, nullptr, 0) != UNZ_OK) {
+			LOG_ERROR("HiScores", "Failed to get ZIP file entry info");
+			continue;
+		}
+
+		std::string fileName(fileInfo.size_filename, '\0');
+
+		if (unzGetCurrentFileInfo(
+			zipFile,
+			&fileInfo,
+			fileName.data(),
+			static_cast<uLong>(fileName.size() + 1),
+			nullptr,
+			0,
+			nullptr,
+			0) != UNZ_OK) {
+			LOG_ERROR("HiScores", "Failed to get ZIP file entry name");
+			continue;
+		}
+
+		std::filesystem::path entryPath(fileName);
+
+		if (entryPath.extension() != ".xml") {
+			continue;
+		}
+
+		if (unzOpenCurrentFile(zipFile) != UNZ_OK) {
+			LOG_ERROR("HiScores", "Failed to open ZIP entry: " + fileName);
+			continue;
+		}
+
+		std::vector<char> buffer;
+		buffer.reserve(static_cast<size_t>(fileInfo.uncompressed_size));
+
+		char temp[4096];
+
+		while (true) {
+			int bytesRead = unzReadCurrentFile(zipFile, temp, sizeof(temp));
+
+			if (bytesRead < 0) {
+				LOG_ERROR("HiScores", "Failed while reading ZIP entry: " + fileName);
+				buffer.clear();
+				break;
+			}
+
+			if (bytesRead == 0) {
+				break;
+			}
+
+			buffer.insert(buffer.end(), temp, temp + bytesRead);
+		}
+
+		unzCloseCurrentFile(zipFile);
+
+		if (buffer.empty()) {
+			LOG_ERROR("HiScores", "ZIP XML entry is empty or unreadable: " + fileName);
+			continue;
+		}
+
+		std::string rawContent(buffer.begin(), buffer.end());
+
+		std::string deobfuscatedContent =
+			Utils::removeNullCharacters(Utils::deobfuscate(rawContent));
+
+		std::vector<char> xmlBuffer(
+			deobfuscatedContent.begin(),
+			deobfuscatedContent.end()
+		);
+
+		std::string gameName = entryPath.stem().string();
+
+		loadFromFile(gameName, fileName, xmlBuffer);
+
+	} while (unzGoToNextFile(zipFile) == UNZ_OK);
+
+	closeZip();
 }
 
 // Parse a single XML file for high score data with dynamic columns
