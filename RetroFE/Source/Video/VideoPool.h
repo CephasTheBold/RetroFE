@@ -63,6 +63,7 @@ private:
         size_t currentActive = 0;
         size_t requiredInstanceCount = 0;
         size_t observedMaxActive = 0;
+        size_t purgeOnReleaseCount = 0;
         bool initialCountLatched = false;
         bool markedForCleanup = false;
     };

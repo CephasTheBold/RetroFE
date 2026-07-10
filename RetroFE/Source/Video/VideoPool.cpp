@@ -105,6 +105,13 @@ void VideoPool::releaseVideo(VideoPtr vid, int monitor, int listId) {
 
     if (pool.currentActive > 0) pool.currentActive--;
 
+    // --- FIX: Allow pre-reset videos to destroy themselves completely ---
+    if (pool.purgeOnReleaseCount > 0) {
+        pool.purgeOnReleaseCount--;
+        LOG_DEBUG("VideoPool", "Release (Purging video for GStreamer cleanup) " + poolStateStr(monitor, listId, pool));
+        return; // Early exit: reference drops to 0 and the pipeline is instantly destroyed
+    }
+
     // Eviction ceiling — destroy without unloading, stop() handles cleanup
     if (pool.initialCountLatched) {
         size_t totalCached = pool.ready.size() + pool.draining.size();
@@ -214,20 +221,14 @@ void VideoPool::reset(int monitor, int listId) {
     auto lit = mit->second.find(listId);
     if (lit == mit->second.end()) return;
 
-    LOG_INFO("VideoPool", "Resetting pool cache for Mon:" + std::to_string(monitor) 
+    LOG_INFO("VideoPool", "Resetting pool cache for Mon:" + std::to_string(monitor)
         + " List:" + std::to_string(listId));
 
     auto& pool = lit->second;
 
-    // Videos in draining have unload() tasks running on the thread pool.
-    // Those tasks hold gst_object_ref(p) so destruction is safe here —
-    // the weak.lock() in the task will return null and Idle is never stored,
-    // which is correct since these instances are being discarded.
     pool.ready.clear();
     pool.draining.clear();
 
-    // currentActive represents videos still held by VideoComponents.
-    // Do NOT reset it — those components will call releaseVideo() normally.
-    // Do NOT reset initialCountLatched or requiredInstanceCount —
-    // pool size is constant once learned.
+    // Mark all currently active videos to be completely destroyed when released
+    pool.purgeOnReleaseCount = pool.currentActive;
 }
