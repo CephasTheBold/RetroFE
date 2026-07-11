@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.12)
 
+if(POLICY CMP0091)
+    cmake_policy(SET CMP0091 NEW)
+endif()
+
 project (retrofe)
 
 set(CMAKE_CXX_STANDARD 20) # Upgraded from 17 to support coroutines
@@ -8,6 +12,20 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(RETROFE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/..)
 set(RETROFE_THIRD_PARTY_DIR "${RETROFE_DIR}/ThirdParty")
 list(APPEND CMAKE_MODULE_PATH "${RETROFE_DIR}/CMake")
+
+set(OPENHI2TXT_BUILD_CLI OFF CACHE BOOL "Build the OpenHi2txt command-line executable" FORCE)
+if(MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+endif()
+add_subdirectory(
+    "${RETROFE_THIRD_PARTY_DIR}/openhi2txt"
+    "${CMAKE_BINARY_DIR}/openhi2txt"
+)
+if(MSVC)
+    set_target_properties(openhi2txt PROPERTIES
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL"
+    )
+endif()
 
 ##############################################################
 # Versioning
@@ -88,7 +106,6 @@ else()
     pkg_search_module(SDL2_MIXER REQUIRED SDL2_mixer)
     pkg_search_module(SDL2_TTF REQUIRED SDL2_ttf)
     pkg_search_module(ZLIB REQUIRED zlib)
-    pkg_search_module(MINIZIP REQUIRED minizip)
     pkg_check_modules(GSTREAMER REQUIRED gstreamer-1.0 gstreamer-video-1.0 gstreamer-audio-1.0 gstreamer-app-1.0)
     pkg_check_modules(Glib2 REQUIRED glib-2.0 gobject-2.0 gthread-2.0 gmodule-2.0)
     pkg_search_module(LIBUSB REQUIRED libusb-1.0)
@@ -105,7 +122,6 @@ else()
         ${SDL2_MIXER_INCLUDE_DIRS}
         ${SDL2_TTF_INCLUDE_DIRS}
         ${ZLIB_INCLUDE_DIRS}
-        ${MINIZIP_INCLUDE_DIRS}
         ${GSTREAMER_INCLUDE_DIRS}
         ${GLIB2_INCLUDE_DIRS}
         ${Threads_INCLUDE_DIRS}
@@ -124,7 +140,6 @@ else()
         ${SDL2_MIXER_LIBRARY_DIRS}
         ${SDL2_TTF_LIBRARY_DIRS}
         ${ZLIB_LIBRARY_DIRS}
-        ${MINIZIP_LIBRARY_DIRS}
         ${GSTREAMER_LIBRARY_DIRS}
         ${GLIB2_LIBRARY_DIRS}
         ${LIBUSB_LIBRARY_DIRS}
@@ -141,7 +156,6 @@ else()
         ${SDL2_MIXER_LIBRARIES}
         ${SDL2_TTF_LIBRARIES}
         ${ZLIB_LIBRARIES}
-        ${MINIZIP_LIBRARIES}
         ${GSTREAMER_LIBRARIES}
         ${GLIB2_LIBRARIES}
         ${CMAKE_DL_LIBS}
@@ -188,7 +202,6 @@ if(WIN32)
 )
     list(APPEND RETROFE_LIBRARIES "${LIBUSB_ROOT}/dll/libusb-1.0.lib")
     list(APPEND RETROFE_LIBRARIES 
-        "${ZLIB_ROOT}/lib/minizip.lib"
         "${LIBSERIALPORT_ROOT}/lib/libserialport.lib"
         "dxgi.lib"
         "${CURL_ROOT}/lib/libcurl.lib"
@@ -373,24 +386,8 @@ set_source_files_properties("${SQLITE3_ROOT}/sqlite3.c" PROPERTIES COMPILE_FLAGS
 add_executable(retrofe  ${RETROFE_SOURCES} ${RETROFE_HEADERS})
 add_dependencies(retrofe GenerateVersioningHeader)
 
-find_library(MINIZIP_LIBRARY
-    NAMES minizip
-    HINTS /opt/homebrew/lib /usr/lib /usr/local/lib
-)
-
-if(MINIZIP_LIBRARY)
-    message(STATUS "Found minizip: ${MINIZIP_LIBRARY}")
-    set(HAVE_MINIZIP TRUE)
-else()
-    message(WARNING "minizip not found")
-    set(HAVE_MINIZIP FALSE)
-endif()
-
-if(HAVE_MINIZIP)
-    target_link_libraries(retrofe ${MINIZIP_LIBRARY})
-endif()
-
 target_link_libraries(retrofe ${RETROFE_LIBRARIES})
+target_link_libraries(retrofe openhi2txt::openhi2txt)
 
 if(APPLE)
     target_link_libraries(retrofe

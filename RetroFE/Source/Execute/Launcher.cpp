@@ -20,7 +20,6 @@
 #include "../Collection/Item.h"
 #include "../Database/Configuration.h"
 #include "../Database/GlobalOpts.h"
-#include "../Database/HiScores.h"
 #include "../Graphics/Page.h"
 #include "../RetroFE.h"
 #include "../SDL.h"
@@ -523,13 +522,11 @@ bool Launcher::run(std::string collection, Item* collectionItem, Page* currentPa
         // 6e) Update stats (time tracking)
         double gameplayDuration = 0.0;
         bool trackTime = false;
-        bool shouldRunHi2Txt = false;
 
         if (!isAttractMode) {
             if (!inputMonitor.wasQuitFirstInput()) {
                 trackTime = true;
                 gameplayDuration = std::chrono::duration<double>(endTime - startTime).count();
-                shouldRunHi2Txt = true;
             }
             else {
                 LOG_INFO("Launcher", "Immediate quit combo detected; not tracking gameplay time.");
@@ -539,7 +536,6 @@ bool Launcher::run(std::string collection, Item* collectionItem, Page* currentPa
             if (!inputMonitor.wasQuitFirstInput()) {
                 trackTime = true;
                 gameplayDuration = std::chrono::duration<double>(endTime - interruptionTime).count();
-                shouldRunHi2Txt = true;
                 LOG_INFO("Launcher", "Attract mode interrupted to play; tracking gameplay time.");
             }
             else {
@@ -551,10 +547,6 @@ bool Launcher::run(std::string collection, Item* collectionItem, Page* currentPa
             LOG_INFO("Launcher", "Gameplay time recorded: " + std::to_string(gameplayDuration) + " seconds.");
             CollectionInfoBuilder cib(config_, *retroFeInstance_.getMetaDb());
             cib.updateTimeSpent(collectionItem, gameplayDuration);
-        }
-
-        if (shouldRunHi2Txt && executablePath.find("mame") != std::string::npos && collectionItem != nullptr) {
-            HiScores::getInstance().runHi2Txt(collectionItem->name);
         }
     }
 

@@ -116,6 +116,13 @@ namespace {
 
 		return std::max(0.0f, maxX - minX);
 	}
+
+	static bool hasForceRedraw(const HighScoreData& data) {
+		for (const auto& table : data.tables) {
+			if (table.forceRedraw) return true;
+		}
+		return false;
+	}
 	static void renderTextOutlined(
 		SDL_Renderer* r,
 		FontManager* f,
@@ -273,6 +280,20 @@ ReloadableHiscores::~ReloadableHiscores(){
 
 
 bool ReloadableHiscores::update(float dt) {
+	Item* selectedItem = page.getSelectedItem(displayOffset_);
+	if (selectedItem && selectedItem == lastSelectedItem_ &&
+		!(newItemSelected || (newScrollItemSelected && getMenuScrollReload()))) {
+		HighScoreData latestTable = HiScores::getInstance().getHighScoreTable(selectedItem->name, true);
+		if (hasForceRedraw(latestTable)) {
+			LOG_INFO("ReloadableHiscores", "High score redraw requested for " + selectedItem->name + ".");
+			highScoreTable_ = latestTable;
+			currentTableIndex_ = 0;
+			tableDisplayTimer_ = 0.0f;
+			cacheValid_ = false;
+			reloadTexture(true);
+		}
+	}
+
 	if (waitEndTime_ > 0.0f) {
 		waitEndTime_ -= dt;
 		if (waitEndTime_ <= 0.0f) {

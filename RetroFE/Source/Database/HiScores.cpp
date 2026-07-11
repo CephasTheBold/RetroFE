@@ -11,10 +11,7 @@
 #include "../Collection/Item.h" 
 #include "SDL.h"
 #include "SDL_image.h"
-#include "minizip/unzip.h"
 #include "qrcodegen.hpp"
-#include "rapidxml.hpp"
-#include "rapidxml_utils.hpp"
 #include <sstream>
 #include <iomanip>
 #include <iostream>
@@ -45,6 +42,30 @@ using qrcodegen::QrCode;
 
 // --- Single-flight guard so we don't run multiple QR passes concurrently ---
 static std::atomic<bool> gQrEnsureRunning{ false };
+
+namespace {
+	constexpr const char* kOpenHi2txtObfuscationKey = "s3cReT123!";
+
+	HighScoreData toRetroFeHighScoreData_(const openhi2txt::HiScoreResult& result) {
+		HighScoreData data;
+		data.tables.reserve(result.tables.size());
+
+		for (const auto& libTable : result.tables) {
+			HighScoreTable table;
+			table.id = libTable.id;
+			table.columns = libTable.columns;
+			table.rows = libTable.rows;
+			table.isPlaceholder.assign(
+				table.rows.size(),
+				std::vector<bool>(table.columns.size(), false)
+			);
+			table.forceRedraw = true;
+			data.tables.push_back(std::move(table));
+		}
+
+		return data;
+	}
+}
 
 
 enum class GlobalSort {
@@ -605,6 +626,7 @@ void HiScores::deinitialize() {
 		scoresCache_.clear();  // Clear all loaded high score data
 	}
 
+	openhi2txtContext_.reset();
 	hiFilesDirectory_.clear();
 	scoresDirectory_.clear();
 
@@ -615,376 +637,134 @@ void HiScores::deinitialize() {
 void HiScores::loadHighScores(const std::string& zipPath, const std::string& overridePath) {
 
 	hiFilesDirectory_ = Utils::combinePath(Configuration::absolutePath, "emulators", "mame", "hiscore");
-	scoresDirectory_ = Utils::combinePath(Configuration::absolutePath, "hi2txt", "scores");
+	scoresDirectory_ = overridePath;
 
-	loadFromZip(zipPath);
-
-	if (std::filesystem::exists(overridePath) && std::filesystem::is_directory(overridePath)) {
-		for (const auto& entry : std::filesystem::directory_iterator(overridePath)) {
-			if (entry.path().extension() != ".xml") {
-				continue;
-			}
-
-			std::string gameName = entry.path().stem().string();
-
-			std::ifstream fileStream(entry.path(), std::ios::binary);
-			if (!fileStream) {
-				LOG_ERROR("HiScores", "Failed to open override XML file: " + entry.path().string());
-				continue;
-			}
-
-			std::istreambuf_iterator<char> begin(fileStream);
-			std::istreambuf_iterator<char> end;
-
-			std::vector<char> buffer(begin, end);
-
-			if (buffer.empty()) {
-				LOG_ERROR("HiScores", "Override XML file is empty: " + entry.path().string());
-				continue;
-			}
-
-			std::string rawContent(buffer.begin(), buffer.end());
-			std::string deobfuscatedContent = Utils::deobfuscate(rawContent);
-
-			std::vector<char> deobfuscatedBuffer(
-				deobfuscatedContent.begin(),
-				deobfuscatedContent.end()
-			);
-
-			loadFromFile(gameName, entry.path().string(), deobfuscatedBuffer);
-		}
-	}
-	else {
-		LOG_ERROR("HiScores", "Override directory does not exist or is not accessible: " + overridePath);
-	}
-}
-
-// Load high scores from XML files within the ZIP archive
-void HiScores::loadFromZip(const std::string& zipPath) {
-	unzFile zipFile = unzOpen(zipPath.c_str());
-	if (zipFile == nullptr) {
-		LOG_ERROR("HiScores", "Failed to open ZIP file: " + zipPath);
-		return;
-	}
-
-	auto closeZip = [&]() {
-		unzClose(zipFile);
-		};
-
-	if (unzGoToFirstFile(zipFile) != UNZ_OK) {
-		LOG_ERROR("HiScores", "ZIP file contains no readable entries: " + zipPath);
-		closeZip();
-		return;
-	}
-
-	do {
-		unz_file_info fileInfo{};
-
-		if (unzGetCurrentFileInfo(zipFile, &fileInfo, nullptr, 0, nullptr, 0, nullptr, 0) != UNZ_OK) {
-			LOG_ERROR("HiScores", "Failed to get ZIP file entry info");
-			continue;
-		}
-
-		std::string fileName(fileInfo.size_filename, '\0');
-
-		if (unzGetCurrentFileInfo(
-			zipFile,
-			&fileInfo,
-			fileName.data(),
-			static_cast<uLong>(fileName.size() + 1),
-			nullptr,
-			0,
-			nullptr,
-			0) != UNZ_OK) {
-			LOG_ERROR("HiScores", "Failed to get ZIP file entry name");
-			continue;
-		}
-
-		std::filesystem::path entryPath(fileName);
-
-		if (entryPath.extension() != ".xml") {
-			continue;
-		}
-
-		if (unzOpenCurrentFile(zipFile) != UNZ_OK) {
-			LOG_ERROR("HiScores", "Failed to open ZIP entry: " + fileName);
-			continue;
-		}
-
-		std::vector<char> buffer;
-		buffer.reserve(static_cast<size_t>(fileInfo.uncompressed_size));
-
-		char temp[4096];
-
-		while (true) {
-			int bytesRead = unzReadCurrentFile(zipFile, temp, sizeof(temp));
-
-			if (bytesRead < 0) {
-				LOG_ERROR("HiScores", "Failed while reading ZIP entry: " + fileName);
-				buffer.clear();
-				break;
-			}
-
-			if (bytesRead == 0) {
-				break;
-			}
-
-			buffer.insert(buffer.end(), temp, temp + bytesRead);
-		}
-
-		unzCloseCurrentFile(zipFile);
-
-		if (buffer.empty()) {
-			LOG_ERROR("HiScores", "ZIP XML entry is empty or unreadable: " + fileName);
-			continue;
-		}
-
-		std::string rawContent(buffer.begin(), buffer.end());
-
-		std::string deobfuscatedContent =
-			Utils::removeNullCharacters(Utils::deobfuscate(rawContent));
-
-		std::vector<char> xmlBuffer(
-			deobfuscatedContent.begin(),
-			deobfuscatedContent.end()
-		);
-
-		std::string gameName = entryPath.stem().string();
-
-		loadFromFile(gameName, fileName, xmlBuffer);
-
-	} while (unzGoToNextFile(zipFile) == UNZ_OK);
-
-	closeZip();
-}
-
-// Parse a single XML file for high score data with dynamic columns
-void HiScores::loadFromFile(const std::string& gameName, const std::string& filePath, std::vector<char>& buffer) {
-
-	// Ensure the buffer is null-terminated
-	buffer.push_back('\0');
-
-	rapidxml::xml_document<> doc;
+	openhi2txt::ContextOptions options;
+	options.definitionsZip = Utils::combinePath(Configuration::absolutePath, "hi2txt", "hi2txt.zip");
+	options.defaultsZip = zipPath;
+	options.scoresDirectory = scoresDirectory_;
+	options.mameRoot = Utils::combinePath(Configuration::absolutePath, "emulators", "mame");
+	options.defaults.obfuscation = openhi2txt::ObfuscationMode::Xor;
+	options.defaults.key = kOpenHi2txtObfuscationKey;
+	options.scoreCache.obfuscation = openhi2txt::ObfuscationMode::Xor;
+	options.scoreCache.key = kOpenHi2txtObfuscationKey;
 
 	try {
-		doc.parse<0>(buffer.data());
+		openhi2txtContext_ = std::make_unique<openhi2txt::Context>(std::move(options));
 	}
-	catch (const rapidxml::parse_error& e) {
-		LOG_ERROR("HiScores", "Parse error in file " + filePath + ": " + e.what());
+	catch (const std::exception& e) {
+		LOG_ERROR("HiScores", std::string("Failed to initialize OpenHi2txt: ") + e.what());
 		return;
 	}
 
-	rapidxml::xml_node<> const* rootNode = doc.first_node("hi2txt");
-	if (!rootNode) {
-		LOG_ERROR("HiScores", "Root node <hi2txt> not found in file " + filePath);
-		return;
+	if (!std::filesystem::exists(overridePath) || !std::filesystem::is_directory(overridePath)) {
+		LOG_INFO("HiScores", "Score override directory does not exist yet: " + overridePath);
 	}
 
-	HighScoreData highScoreData;
-
-	for (rapidxml::xml_node<> const* tableNode = rootNode->first_node("table"); tableNode; tableNode = tableNode->next_sibling("table")) {
-		HighScoreTable highScoreTable;
-
-		// Assign ID if present
-		if (tableNode->first_attribute("id")) {
-			highScoreTable.id = tableNode->first_attribute("id")->value();
-		}
-
-		// Parse columns
-		for (rapidxml::xml_node<> const* colNode = tableNode->first_node("col"); colNode; colNode = colNode->next_sibling("col")) {
-			highScoreTable.columns.push_back(Utils::trimEnds(colNode->value()));
-		}
-
-		// Parse rows
-		for (rapidxml::xml_node<> const* rowNode = tableNode->first_node("row"); rowNode; rowNode = rowNode->next_sibling("row")) {
-			std::vector<std::string> rowData;
-			for (rapidxml::xml_node<> const* cellNode = rowNode->first_node("cell"); cellNode; cellNode = cellNode->next_sibling("cell")) {
-				rowData.push_back(Utils::trimEnds(cellNode->value()));
-			}
-			highScoreTable.rows.push_back(rowData);
-		}
-
-		highScoreTable.forceRedraw = true;  // Mark this table for redraw
-
-		highScoreData.tables.push_back(highScoreTable);  // Add the table to the list
-	}
-	// Lock mutex only for updating the cache
+	const auto persistedScores = openhi2txtContext_->readAllPersistedGames();
+	int loaded = 0;
 	{
-		std::unique_lock<std::shared_mutex> lock(scoresCacheMutex_);  // Exclusive lock for writing
-		scoresCache_[gameName] = std::move(highScoreData);  // Update the cache
+		std::unique_lock<std::shared_mutex> lock(scoresCacheMutex_);
+		scoresCache_.clear();
+
+		for (const auto& persistedScore : persistedScores) {
+			HighScoreData highScoreData = toRetroFeHighScoreData_(persistedScore.second);
+			if (highScoreData.tables.empty()) {
+				continue;
+			}
+
+			scoresCache_[persistedScore.first] = std::move(highScoreData);
+			++loaded;
+		}
 	}
+
+	LOG_INFO("HiScores", "OpenHi2txt local cache bulk-loaded " + std::to_string(loaded) + " games.");
 }
 
 HighScoreData HiScores::getHighScoreTable(const std::string& gameName) {
-	std::shared_lock<std::shared_mutex> lock(scoresCacheMutex_);
+	return getHighScoreTable(gameName, false);
+}
+
+HighScoreData HiScores::getHighScoreTable(const std::string& gameName, bool consumeForceRedraw) {
+	std::unique_lock<std::shared_mutex> lock(scoresCacheMutex_);
 	auto it = scoresCache_.find(gameName);
 	if (it != scoresCache_.end()) {
-		// Return a copy by value. This is safe even if the map is 
+		// Return a copy by value. This is safe even if the map is
 		// later updated by a background hi2txt thread.
-		return it->second;
+		HighScoreData result = it->second;
+		if (consumeForceRedraw) {
+			for (auto& table : it->second.tables) {
+				table.forceRedraw = false;
+			}
+		}
+		return result;
 	}
 	return {}; // Return empty object if not found
 }
 
 // Check if a .hi file exists for the given game
 bool HiScores::hasHiFile(const std::string& gameName) const {
+	if (openhi2txtContext_) {
+		return openhi2txtContext_->hasInputForGame(gameName);
+	}
+
 	std::string hiFilePath = Utils::combinePath(hiFilesDirectory_, gameName + ".hi");
 	return std::filesystem::exists(hiFilePath);
 }
 
 // Run hi2txt to process the .hi file, generate XML output, save to scores directory, and update cache
 bool HiScores::runHi2Txt(const std::string& gameName) {
-	// Set up paths
-	std::string hi2txtPath;
-	std::string hiFilePath = Utils::combinePath(hiFilesDirectory_, gameName + ".hi");
-
-	if (!hasHiFile(gameName)) {
-		LOG_INFO("HiScores", ".hi file does not exist for " + gameName + ", skipping async hi2txt.");
+	if (!openhi2txtContext_) {
+		LOG_ERROR("HiScores", "OpenHi2txt context is not initialized; cannot refresh " + gameName);
 		return false;
 	}
 
-	// Create the command string
-	std::string command;
-
-#ifdef WIN32
-	// Windows-specific implementation
-	hi2txtPath = Utils::combinePath(Configuration::absolutePath, "hi2txt", "hi2txt");
-	command = "\"" + hi2txtPath + "\" -r -xml \"" + hiFilePath + "\"";
-	// Initialize structures for the process
-	STARTUPINFOA startupInfo;
-	PROCESS_INFORMATION processInfo;
-	ZeroMemory(&startupInfo, sizeof(startupInfo));
-	startupInfo.cb = sizeof(startupInfo);
-	startupInfo.dwFlags |= STARTF_USESTDHANDLES;
-	ZeroMemory(&processInfo, sizeof(processInfo));
-
-	// Redirect output to capture it into a buffer
-	HANDLE hRead, hWrite;
-	SECURITY_ATTRIBUTES saAttr;
-	saAttr.nLength = sizeof(SECURITY_ATTRIBUTES);
-	saAttr.bInheritHandle = TRUE;
-	saAttr.lpSecurityDescriptor = nullptr;
-
-	if (!CreatePipe(&hRead, &hWrite, &saAttr, 0)) {
-		LOG_ERROR("HiScores", "Failed to create pipe.");
-		return false;
-	}
-	startupInfo.hStdOutput = hWrite;
-	startupInfo.hStdError = hWrite;
-
-	// Start the process with CREATE_NO_WINDOW to prevent CMD from appearing
-	if (!CreateProcessA(
-		nullptr,
-		const_cast<char*>(command.c_str()),  // Command line
-		nullptr, nullptr, TRUE,              // Inherit handles
-		CREATE_NO_WINDOW,                    // No window
-		nullptr, nullptr, &startupInfo, &processInfo)) {
-		LOG_ERROR("HiScores", "Failed to launch hi2txt for game " + gameName);
-		CloseHandle(hRead);
-		CloseHandle(hWrite);
+	if (!openhi2txtContext_->hasInputForGame(gameName)) {
+		LOG_INFO("HiScores", "No hi/nvram input exists for " + gameName + ", skipping OpenHi2txt refresh.");
 		return false;
 	}
 
-	// Close the write handle and read from the pipe
-	CloseHandle(hWrite);
-	std::vector<char> buffer;
-	char tempBuffer[128];
-	DWORD bytesRead;
-	while (ReadFile(hRead, tempBuffer, sizeof(tempBuffer), &bytesRead, nullptr) && bytesRead > 0) {
-		buffer.insert(buffer.end(), tempBuffer, tempBuffer + bytesRead);
-	}
-	CloseHandle(hRead);
-
-	// Wait for the process to complete
-	DWORD waitResult = WaitForSingleObject(processInfo.hProcess, 5000); // 5 seconds
-	if (waitResult == WAIT_TIMEOUT) {
-		LOG_ERROR("HiScores", "hi2txt hung for game " + gameName + ", terminating process.");
-		TerminateProcess(processInfo.hProcess, 1);
-		CloseHandle(processInfo.hProcess);
-		CloseHandle(processInfo.hThread);
-		return false;
-	}
-	CloseHandle(processInfo.hProcess);
-	CloseHandle(processInfo.hThread);
-
-#else
-	// Unix-based implementation
-	hi2txtPath = Utils::combinePath(Configuration::absolutePath, "hi2txt", "hi2txt.jar");
-	command = "java -jar \"" + hi2txtPath + "\" -r -xml \"" + hiFilePath + "\"";
-	// Using popen() to execute the command and capture output
-	std::vector<char> buffer;
-	FILE* pipe = popen(command.c_str(), "r");
-	if (!pipe) {
-		LOG_ERROR("HiScores", "Failed to run hi2txt command for game " + gameName);
+	openhi2txt::HiScoreResult result = openhi2txtContext_->refreshGame(gameName);
+	if (!result.ok) {
+		LOG_WARNING("HiScores", "OpenHi2txt refresh failed for " + gameName + ": " + result.error);
 		return false;
 	}
 
-	char tempBuffer[128];
-	while (fgets(tempBuffer, sizeof(tempBuffer), pipe) != nullptr) {
-		buffer.insert(buffer.end(), tempBuffer, tempBuffer + strlen(tempBuffer));
-	}
-
-	int returnCode = pclose(pipe);
-	if (returnCode != 0) {
-		LOG_ERROR("HiScores", "hi2txt process failed with return code " + std::to_string(returnCode));
+	HighScoreData highScoreData = toRetroFeHighScoreData_(result);
+	if (highScoreData.tables.empty()) {
+		LOG_WARNING("HiScores", "OpenHi2txt produced no display tables for " + gameName);
 		return false;
 	}
-#endif
 
-	// Null-terminate and process the buffer
-	buffer.push_back('\0');
-	std::string xmlContent(buffer.begin(), buffer.end());
-
-	xmlContent = Utils::removeNullCharacters(xmlContent);
-	xmlContent.push_back('\0');  // Ensure null-termination
-
-	// Check if xmlContent starts with <hi2txt>
-	if (xmlContent.find("<hi2txt>") != 0) {
-		LOG_WARNING("HiScores", "Invalid XML content received from hi2txt for game " + gameName);
-		return false;
+	{
+		std::unique_lock<std::shared_mutex> lock(scoresCacheMutex_);
+		scoresCache_[gameName] = std::move(highScoreData);
 	}
-	// Parse the XML content to update the cache
-	std::vector<char> xmlBuffer(xmlContent.begin(), xmlContent.end());
-	xmlBuffer.push_back('\0');  // Null-terminate for rapidxml
-	loadFromFile(gameName, gameName + ".xml", xmlBuffer);
 
-	// Obfuscate the XML content before saving
-	std::string obfuscatedContent = Utils::obfuscate(xmlContent);
-
-	// Save obfuscated XML to the scores directory
-	std::string xmlFilePath = Utils::combinePath(scoresDirectory_, gameName + ".xml");
-	std::ofstream outFile(xmlFilePath, std::ios::binary);
-	if (!outFile) {
-		LOG_ERROR("HiScores", "Error: Could not create XML file " + xmlFilePath);
-		return false;
-	}
-	outFile.write(obfuscatedContent.c_str(), obfuscatedContent.size());
-	outFile.close();
-
-	LOG_INFO("HiScores", "Scores updated for " + gameName + " and saved to " + xmlFilePath);
+	LOG_INFO("HiScores", "Scores updated for " + gameName + " using OpenHi2txt.");
 	return true;
 }
 
 // Wrapper function to run hi2txt asynchronously
 void HiScores::runHi2TxtAsync(const std::string& gameName) {
 	if (!hasHiFile(gameName)) {
-		LOG_INFO("HiScores", ".hi file does not exist for " + gameName + ", skipping async hi2txt.");
+		LOG_INFO("HiScores", "No hi/nvram input exists for " + gameName + ", skipping async OpenHi2txt refresh.");
 		return;
 	}
 	std::thread([this, gameName]() {
 		try {
 			if (runHi2Txt(gameName)) {
-				LOG_INFO("HiScores", "runHi2Txt executed successfully in the background for game " + gameName);
+				LOG_INFO("HiScores", "OpenHi2txt refresh executed successfully in the background for game " + gameName);
 			}
 			else {
-				LOG_ERROR("HiScores", "runHi2Txt failed in the background for game " + gameName);
+				LOG_ERROR("HiScores", "OpenHi2txt refresh failed in the background for game " + gameName);
 			}
 		}
 		catch (const std::exception& e) {
-			LOG_ERROR("HiScores", "Exception in runHi2TxtAsync for game " + gameName + ": " + e.what());
+			LOG_ERROR("HiScores", "Exception in async OpenHi2txt refresh for game " + gameName + ": " + e.what());
 		}
 		catch (...) {
-			LOG_ERROR("HiScores", "Unknown exception in runHi2TxtAsync for game " + gameName);
+			LOG_ERROR("HiScores", "Unknown exception in async OpenHi2txt refresh for game " + gameName);
 		}
 		}).detach();
 }

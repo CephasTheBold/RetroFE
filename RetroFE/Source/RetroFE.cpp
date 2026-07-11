@@ -570,6 +570,18 @@ void RetroFE::launchExit(bool userInitiated) {
 	SDL_SetRelativeMouseMode(SDL_TRUE);
 #endif
 
+	const std::string launchedGame = pendingLocalHiscoreGame_;
+	pendingLocalHiscoreGame_.clear();
+
+	if (userInitiated && !launchedGame.empty())
+	{
+		if (HiScores::getInstance().hasHiFile(launchedGame))
+		{
+			LOG_INFO("RetroFE", "Refreshing local high scores for " + launchedGame + " after game exit.");
+			HiScores::getInstance().runHi2TxtAsync(launchedGame);
+		}
+	}
+
 	bool globalHiscoresEnabled = false;
 	config_.getProperty(OPTION_GLOBALHISCORESENABLED, globalHiscoresEnabled);
 
@@ -2410,6 +2422,13 @@ bool RetroFE::run() {
 			if (currentPage_ && currentPage_->isIdle())
 			{
 				nextPageItem_ = currentPage_->getSelectedItem();
+				if (!nextPageItem_)
+				{
+					pendingLocalHiscoreGame_.clear();
+					setState(RETROFE_IDLE);
+					break;
+				}
+				pendingLocalHiscoreGame_ = nextPageItem_->name;
 				launchEnter();
 
 				l.LEDBlinky(3, nextPageItem_->collectionInfo->name, nextPageItem_);
@@ -2468,9 +2487,11 @@ bool RetroFE::run() {
 				nextPageItem_ = currentPage_->getSelectedItem();
 				if (!nextPageItem_)
 				{
+					pendingLocalHiscoreGame_.clear();
 					setState(RETROFE_IDLE);
 					break;
 				}
+				pendingLocalHiscoreGame_ = nextPageItem_->name;
 
 				const bool wasLastPlayed = currentPage_->getPlaylistName() == "lastplayed";
 

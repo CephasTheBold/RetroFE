@@ -6,6 +6,9 @@
 #include <shared_mutex>
 #include <functional>
 #include <atomic>
+#include <memory>
+
+#include <openhi2txt/openhi2txt.h>
 
 // Local utils/config (used by .cpp; harmless to keep here)
 #include "../Utility/Utils.h"
@@ -51,6 +54,7 @@ public:
     // -------- Local (hi2txt) --------
     void loadHighScores(const std::string& zipPath, const std::string& overridePath);
     HighScoreData getHighScoreTable(const std::string& gameName);
+    HighScoreData getHighScoreTable(const std::string& gameName, bool consumeForceRedraw);
     bool hasHiFile(const std::string& gameName) const;
     bool runHi2Txt(const std::string& gameName);
     void runHi2TxtAsync(const std::string& gameName);
@@ -86,11 +90,9 @@ private:
     HiScores() = default;
 
     // -------- Local internals --------
-    void loadFromZip(const std::string& zipPath);
-    void loadFromFile(const std::string& gameName, const std::string& filePath, std::vector<char>& buffer);
-
     std::string hiFilesDirectory_;
     std::string scoresDirectory_;
+    std::unique_ptr<openhi2txt::Context> openhi2txtContext_;
     std::unordered_map<std::string, HighScoreData> scoresCache_;
     std::shared_mutex scoresCacheMutex_;
 
