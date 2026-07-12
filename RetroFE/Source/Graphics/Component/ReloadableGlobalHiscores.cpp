@@ -736,7 +736,9 @@ void ReloadableGlobalHiscores::computeGridBaseline_(
             std::vector<float> tableAspect(firstPageCount, 1.0f);
 
             // Estimate per-table fit scale using the same basic model used in reloadTexture
-            const float drawableH0 = asc * baseScale;
+            // Use the full glyph height for fitting. Ascent alone can
+            // underestimate the rendered line box and clip the tenth row.
+            const float drawableH0 = (float)font->getMaxHeight() * baseScale;
             const float lineH0 = drawableH0 * (1.0f + baseRowPadding_);
             const float colPad0 = baseColumnPadding_ * drawableH0;
 
@@ -1123,7 +1125,9 @@ void ReloadableGlobalHiscores::reloadTexture() {
     const float baseScale = baseViewInfo.FontSize / (float)font->getMaxHeight();
     const float asc = (float)font->getMaxAscent();
 
-    const float drawableH0 = asc * baseScale;
+    // Keep the fit model identical to the rendered geometry: title, header,
+    // and ten data rows each consume a full glyph-height line box.
+    const float drawableH0 = (float)font->getMaxHeight() * baseScale;
     const float lineH0 = drawableH0 * (1.0f + baseRowPadding_);
     const float colPad0 = baseColumnPadding_ * drawableH0;
 
@@ -1408,7 +1412,7 @@ void ReloadableGlobalHiscores::reloadTexture() {
             const float finalScale = baseScale * rowScale[std::min(slotRow, rows - 1)];
             const float ratio = (baseScale > 0.f) ? (finalScale / baseScale) : 1.0f;
 
-            const float drawableH = asc * finalScale;
+            const float drawableH = (float)font->getMaxHeight() * finalScale;
             const float lineH = drawableH * (1.0f + baseRowPadding_);
             const float colPad = sharedPad0 * ratio;
 

@@ -28,6 +28,7 @@
 #include <vector>
 #include <iostream>
 #include <algorithm>
+#include <numeric>
 #include <string_view>
 #include <cmath>
 
@@ -233,6 +234,9 @@ ReloadableHiscores::ReloadableHiscores(Configuration& config, std::string textFo
 	, currentTableDisplayTime_(0.0f)
 	, displayTime_(5.0f)
 	, needsRedraw_(true)
+	, tableCrossfading_(false)
+	, tableCrossfadeTimer_(0.0f)
+	, tableCrossfadeDuration_(0.35f)
 	, lastScale_(0.0f)
 	, lastPaddingBetweenColumns_(0.0f)
 	, cacheValid_(false)
@@ -248,6 +252,7 @@ ReloadableHiscores::ReloadableHiscores(Configuration& config, std::string textFo
 	, highScoreTable_()
 	, headerTexture_(nullptr)
 	, tableRowsTexture_(nullptr)
+	, previousTableTexture_(nullptr)
 	, tableRowsTextureHeight_(0)
 	, headerTextureHeight_(0) {
 	// Parse the excluded columns
@@ -275,11 +280,18 @@ ReloadableHiscores::~ReloadableHiscores(){
 
 
 bool ReloadableHiscores::update(float dt) {
+	if (tableCrossfading_) {
+		tableCrossfadeTimer_ += dt;
+		needsRedraw_ = true;
+		if (tableCrossfadeTimer_ >= tableCrossfadeDuration_) cancelTableTransition_();
+	}
+
 	Item* selectedItem = page.getSelectedItem(displayOffset_);
 	if (selectedItem && selectedItem == lastSelectedItem_ &&
 		!(newItemSelected || (newScrollItemSelected && getMenuScrollReload()))) {
 		const uint64_t revision = LocalHiScores::getInstance().getRevision(selectedItem->name);
 		if (revision != lastRenderedRevision_) {
+			cancelTableTransition_();
 			HighScoreSnapshot snapshot = LocalHiScores::getInstance().getTable({ selectedItem->name });
 			LOG_INFO("ReloadableHiscores", "High score redraw requested for " + selectedItem->name + ".");
 			highScoreTable_ = std::move(snapshot.view);
@@ -385,7 +397,9 @@ bool ReloadableHiscores::update(float dt) {
 				// 3. Define the Completion Target
 				// We keep the trailing padding here so the scroll finishes 
 				// cleanly by moving the entire block (including its bottom margin) out of view.
-				float scrollCompletionTarget = (drawableHeight + rowPadding) * totalRows;
+				float scrollCompletionTarget = std::max(0.0f,
+					static_cast<float>(tableRowsTextureHeight_) -
+					std::max(0.0f, baseViewInfo.ScaledHeight() - headerTextureHeight_));
 
 				// Trigger scrolling ONLY if the ink/text footprint exceeds the view
 				bool needsScrolling = (visibleFootprint > baseViewInfo.Height);
@@ -396,6 +410,7 @@ bool ReloadableHiscores::update(float dt) {
 
 					if (currentPosition_ >= scrollCompletionTarget) {
 						if (highScoreTable_.tables.size() > 1) {
+							beginTableTransition_();
 							currentTableIndex_ = (currentTableIndex_ + 1) % highScoreTable_.tables.size();
 							waitEndTime_ = startTime_;
 							currentPosition_ = 0.0f;
@@ -426,6 +441,7 @@ bool ReloadableHiscores::update(float dt) {
 						// LOG_DEBUG("ReloadableHiscores", "Static Table Display Timer: " + std::to_string(tableDisplayTimer_) + " / " + std::to_string(currentTableDisplayTime_));
 
 						if (tableDisplayTimer_ >= currentTableDisplayTime_) {
+							beginTableTransition_();
 							currentTableIndex_ = (currentTableIndex_ + 1) % highScoreTable_.tables.size();
 							tableDisplayTimer_ = 0.0f;
 							waitEndTime_ = startTime_; // Optional: Add a pause before showing next static table
@@ -464,6 +480,7 @@ bool ReloadableHiscores::update(float dt) {
 
 	// --- 3. Handle New Item Selection (takes precedence and re-initializes) ---
 	if (newItemSelected || (newScrollItemSelected && getMenuScrollReload())) {
+		cancelTableTransition_();
 		LOG_INFO("ReloadableHiscores", "New item selected. Resetting and reloading.");
 		currentTableIndex_ = 0;      // Always start with the first table for a new item
 		tableDisplayTimer_ = 0.0f;   // Reset display timer
@@ -489,6 +506,8 @@ void ReloadableHiscores::freeGraphicsMemory() {
 	lastSelectedItem_ = nullptr;
 	if (headerTexture_) { SDL_DestroyTexture(headerTexture_); headerTexture_ = nullptr; }
 	if (tableRowsTexture_) { SDL_DestroyTexture(tableRowsTexture_); tableRowsTexture_ = nullptr; }
+	if (previousTableTexture_) { SDL_DestroyTexture(previousTableTexture_); previousTableTexture_ = nullptr; }
+	tableCrossfading_ = false;
 }
 
 
@@ -550,7 +569,7 @@ void ReloadableHiscores::reloadTexture(bool resetScroll) {
 
 	float finalScale = computeTableScaleAndWidths(
 		font, table, drawableHeight, rowPadding, paddingBetweenColumns,
-		colWidths, totalTableWidth, effectiveViewWidth);
+		colWidths, totalTableWidth, effectiveViewWidth, baseViewInfo.ScaledHeight());
 
 	// Update authoritative cache
 	cachedColumnWidths_ = colWidths;
@@ -622,7 +641,10 @@ void ReloadableHiscores::reloadTexture(bool resetScroll) {
 				y += drawableHeight + rowPadding;
 			}
 
-			float x = 0.0f;
+			float columnsWidth = std::accumulate(cachedColumnWidths_.begin(), cachedColumnWidths_.end(), 0.0f);
+			if (cachedColumnWidths_.size() > 1)
+				columnsWidth += paddingBetweenColumns * static_cast<float>(cachedColumnWidths_.size() - 1);
+			float x = std::max(0.0f, (totalTableWidth - columnsWidth) * 0.5f);
 			for (size_t i = 0; i < visibleColumnIndices_.size(); ++i) {
 				const std::string& hText = table.columns[visibleColumnIndices_[i]];
 				float hW = measureTextWidthExact(font, hText, finalScale);
@@ -639,7 +661,10 @@ void ReloadableHiscores::reloadTexture(bool resetScroll) {
 
 			for (size_t r = 0; r < rowsToRender; ++r) {
 				float y = (drawableHeight + rowPadding) * r;
-				float x = 0.0f;
+				float columnsWidth = std::accumulate(cachedColumnWidths_.begin(), cachedColumnWidths_.end(), 0.0f);
+				if (cachedColumnWidths_.size() > 1)
+					columnsWidth += paddingBetweenColumns * static_cast<float>(cachedColumnWidths_.size() - 1);
+				float x = std::max(0.0f, (totalTableWidth - columnsWidth) * 0.5f);
 				for (size_t i = 0; i < visibleColumnIndices_.size(); ++i) {
 					size_t colIdx = visibleColumnIndices_[i];
 					if (colIdx < table.rows[r].size()) {
@@ -743,6 +768,66 @@ void ReloadableHiscores::renderNoDataMessage(SDL_Renderer* renderer, FontManager
 	needsRedraw_ = true;
 }
 
+void ReloadableHiscores::cancelTableTransition_() {
+	tableCrossfading_ = false;
+	tableCrossfadeTimer_ = 0.0f;
+	if (previousTableTexture_) {
+		SDL_DestroyTexture(previousTableTexture_);
+		previousTableTexture_ = nullptr;
+	}
+}
+
+void ReloadableHiscores::renderCurrentTable_(SDL_Renderer* renderer, float originX, float originY, Uint8 alpha) const {
+	if (!renderer || !headerTexture_) return;
+
+	float effectiveViewWidth = baseViewInfo.MaxWidth;
+	if (baseViewInfo.Width > 0 && baseViewInfo.Width < baseViewInfo.MaxWidth)
+		effectiveViewWidth = baseViewInfo.Width;
+
+	const float x = originX + (effectiveViewWidth - cachedTotalTableWidth_) * 0.5f;
+	SDL_SetTextureAlphaMod(headerTexture_, alpha);
+	SDL_FRect headerDst{ x, originY, cachedTotalTableWidth_, static_cast<float>(headerTextureHeight_) };
+	SDL_RenderCopyF(renderer, headerTexture_, nullptr, &headerDst);
+
+	const float rowsAreaHeight = baseViewInfo.ScaledHeight() - headerTextureHeight_;
+	if (!tableRowsTexture_ || tableRowsTextureHeight_ <= 0 || rowsAreaHeight <= 0.0f) return;
+
+	SDL_SetTextureAlphaMod(tableRowsTexture_, alpha);
+	const float scrollY = currentPosition_;
+	const int visibleH = static_cast<int>(std::min(rowsAreaHeight,
+		std::max(0.0f, static_cast<float>(tableRowsTextureHeight_) - scrollY)));
+	if (visibleH <= 0) return;
+
+	SDL_Rect src{ 0, static_cast<int>(scrollY), static_cast<int>(cachedTotalTableWidth_), visibleH };
+	SDL_FRect dst{ x, originY + headerTextureHeight_, cachedTotalTableWidth_, static_cast<float>(visibleH) };
+	SDL_RenderCopyF(renderer, tableRowsTexture_, &src, &dst);
+}
+
+void ReloadableHiscores::beginTableTransition_() {
+	if (highScoreTable_.tables.size() <= 1) return;
+	SDL_Renderer* renderer = SDL::getRenderer(baseViewInfo.Monitor);
+	if (!renderer || !headerTexture_) return;
+
+	cancelTableTransition_();
+	const int w = std::max(1, static_cast<int>(std::ceil(
+		(baseViewInfo.Width > 0 && baseViewInfo.Width < baseViewInfo.MaxWidth) ? baseViewInfo.Width : baseViewInfo.MaxWidth)));
+	const int h = std::max(1, static_cast<int>(std::ceil(baseViewInfo.ScaledHeight())));
+	previousTableTexture_ = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888,
+		SDL_TEXTUREACCESS_TARGET, w, h);
+	if (!previousTableTexture_) return;
+	SDL_SetTextureBlendMode(previousTableTexture_, SDL_BLENDMODE_BLEND);
+
+	SDL_Texture* oldTarget = SDL_GetRenderTarget(renderer);
+	SDL_SetRenderTarget(renderer, previousTableTexture_);
+	SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
+	SDL_RenderClear(renderer);
+	renderCurrentTable_(renderer, 0.0f, 0.0f, 255);
+	SDL_SetRenderTarget(renderer, oldTarget);
+
+	tableCrossfading_ = true;
+	tableCrossfadeTimer_ = 0.0f;
+}
+
 void ReloadableHiscores::draw() {
 	Component::draw();
 
@@ -759,66 +844,23 @@ void ReloadableHiscores::draw() {
 	SDL_Renderer* renderer = SDL::getRenderer(baseViewInfo.Monitor);
 	if (!renderer) return;
 
-	float effectiveViewWidth = baseViewInfo.MaxWidth;
-	if (baseViewInfo.Width > 0 && baseViewInfo.Width < baseViewInfo.MaxWidth)
-		effectiveViewWidth = baseViewInfo.Width;
-
-	// Calculate actual screen coordinates based on Component Origin
-	float screenX = baseViewInfo.XRelativeToOrigin() + ((effectiveViewWidth - cachedTotalTableWidth_) / 2.0f);
-	float screenY = baseViewInfo.YRelativeToOrigin();
-
-	// Set alpha mod directly on the cached textures
-	SDL_SetTextureAlphaMod(headerTexture_, static_cast<Uint8>(baseViewInfo.Alpha * 255.0f));
-
-	// -- Draw header directly to screen --
-	SDL_FRect destHeader = {
-		screenX,
-		screenY,
-		cachedTotalTableWidth_,
-		static_cast<float>(headerTextureHeight_)
-	};
-	SDL_RenderCopyF(renderer, headerTexture_, nullptr, &destHeader);
-
-	// -- Draw table body directly to screen --
-	float compositeHeight = baseViewInfo.ScaledHeight();
-	float rowsAreaHeight = compositeHeight - headerTextureHeight_;
-	float scrollY = currentPosition_;
-
-	if (tableRowsTexture_ && tableRowsTextureHeight_ > 0 && rowsAreaHeight > 0.0f) {
-		SDL_SetTextureAlphaMod(tableRowsTexture_, static_cast<Uint8>(baseViewInfo.Alpha * 255.0f));
-
-		if (tableRowsTextureHeight_ <= rowsAreaHeight) {
-			// NON-SCROLLING
-			SDL_Rect srcRows = { 0, 0, static_cast<int>(cachedTotalTableWidth_), tableRowsTextureHeight_ };
-			SDL_FRect destRows = { screenX, screenY + headerTextureHeight_, cachedTotalTableWidth_, static_cast<float>(tableRowsTextureHeight_) };
-			SDL_RenderCopyF(renderer, tableRowsTexture_, &srcRows, &destRows);
-		}
-		else {
-			// SCROLLING
-			if (scrollY < tableRowsTextureHeight_) {
-				int visibleSrcHeight = static_cast<int>(std::min(rowsAreaHeight, tableRowsTextureHeight_ - scrollY));
-				if (visibleSrcHeight > 0) {
-					SDL_Rect srcRows = {
-						0,
-						static_cast<int>(scrollY),
-						static_cast<int>(cachedTotalTableWidth_),
-						visibleSrcHeight
-					};
-					SDL_FRect destRows = {
-						screenX,
-						screenY + headerTextureHeight_,
-						cachedTotalTableWidth_,
-						static_cast<float>(visibleSrcHeight)
-					};
-					SDL_RenderCopyF(renderer, tableRowsTexture_, &srcRows, &destRows);
-				}
-			}
-		}
+	const Uint8 baseAlpha = static_cast<Uint8>(std::clamp(baseViewInfo.Alpha, 0.0f, 1.0f) * 255.0f);
+	float fade = tableCrossfading_ && tableCrossfadeDuration_ > 0.0f
+		? std::clamp(tableCrossfadeTimer_ / tableCrossfadeDuration_, 0.0f, 1.0f) : 1.0f;
+	if (tableCrossfading_ && previousTableTexture_) {
+		SDL_SetTextureAlphaMod(previousTableTexture_, static_cast<Uint8>(baseAlpha * (1.0f - fade)));
+		SDL_FRect oldDst{ baseViewInfo.XRelativeToOrigin(), baseViewInfo.YRelativeToOrigin(),
+			static_cast<float>(std::max(1, static_cast<int>(std::ceil((baseViewInfo.Width > 0 && baseViewInfo.Width < baseViewInfo.MaxWidth) ? baseViewInfo.Width : baseViewInfo.MaxWidth)))),
+			baseViewInfo.ScaledHeight() };
+		SDL_RenderCopyF(renderer, previousTableTexture_, nullptr, &oldDst);
 	}
+	renderCurrentTable_(renderer, baseViewInfo.XRelativeToOrigin(), baseViewInfo.YRelativeToOrigin(),
+		static_cast<Uint8>(baseAlpha * fade));
 
 #ifndef NDEBUG
 	SDL_SetRenderDrawColor(renderer, 0, 255, 0, 255);
-	SDL_FRect outlineRect = { baseViewInfo.XRelativeToOrigin(), baseViewInfo.YRelativeToOrigin(), effectiveViewWidth, compositeHeight };
+	float effectiveViewWidth = (baseViewInfo.Width > 0 && baseViewInfo.Width < baseViewInfo.MaxWidth) ? baseViewInfo.Width : baseViewInfo.MaxWidth;
+	SDL_FRect outlineRect = { baseViewInfo.XRelativeToOrigin(), baseViewInfo.YRelativeToOrigin(), effectiveViewWidth, baseViewInfo.ScaledHeight() };
 	SDL_RenderDrawRectF(renderer, &outlineRect);
 #endif
 }
@@ -832,66 +874,53 @@ float ReloadableHiscores::computeTableScaleAndWidths(
 	float& outPaddingBetweenColumns,
 	std::vector<float>& outColumnWidths,
 	float& outTotalTableWidth,
-	float widthConstraint) {
+	float widthConstraint,
+	float heightConstraint) {
 
-	// MODIFIED: Use max-resolution metrics for a stable, high-precision baseline.
-	float initialScale = baseViewInfo.FontSize / static_cast<float>(font->getMaxHeight());
-	float drawableHeight = font->getMaxAscent() * initialScale;
-	float rowPadding = baseRowPadding_ * drawableHeight;
-	float paddingBetweenColumns = baseColumnPadding_ * drawableHeight;
+	const float baseScale = baseViewInfo.FontSize / static_cast<float>(font->getMaxHeight());
+	const float baseDrawableHeight = font->getMaxAscent() * baseScale;
+	const float baseRowPadding = baseRowPadding_ * baseDrawableHeight;
+	const float baseColumnPadding = baseColumnPadding_ * baseDrawableHeight;
 
-	// Measure column widths using the high-res font data (font->getWidth now does this automatically)
-	outColumnWidths.clear();
-	outTotalTableWidth = 0.0f;
-	for (size_t visibleIndex = 0; visibleIndex < visibleColumnIndices_.size(); ++visibleIndex) {
-		size_t colIndex = visibleColumnIndices_[visibleIndex];
-		float maxColumnWidth = 0.0f;
-		// Header
-		if (colIndex < table.columns.size())
-			maxColumnWidth = std::max(maxColumnWidth, measureTextWidthExact(font, table.columns[colIndex], initialScale));
-		// Rows
-		for (const auto& row : table.rows) {
-			if (colIndex < row.size())
-				maxColumnWidth = std::max(maxColumnWidth, measureTextWidthExact(font, row[colIndex], initialScale));
-		}
-		outColumnWidths.push_back(maxColumnWidth);
-		outTotalTableWidth += maxColumnWidth + paddingBetweenColumns;
-	}
-	if (!outColumnWidths.empty())
-		outTotalTableWidth -= paddingBetweenColumns; // Remove last extra padding
-
-	// If the table is too wide, calculate a downscale factor
-	float scale = initialScale;
-	if (outTotalTableWidth > widthConstraint && outTotalTableWidth > 0) {
-		float downScaleFactor = widthConstraint / outTotalTableWidth;
-		scale = initialScale * downScaleFactor;
-
-		// Re-calculate all metrics using the final, downscaled value
-		drawableHeight = font->getMaxAscent() * scale; // MODIFIED: Use getMaxAscent
-		rowPadding = baseRowPadding_ * drawableHeight;
-		paddingBetweenColumns = baseColumnPadding_ * drawableHeight;
-		outColumnWidths.clear();
-		outTotalTableWidth = 0.0f;
+	auto measureWidth = [&](float scale, float columnPadding, std::vector<float>* widths) {
+		float total = 0.0f;
+		if (widths) widths->clear();
 		for (size_t visibleIndex = 0; visibleIndex < visibleColumnIndices_.size(); ++visibleIndex) {
-			size_t colIndex = visibleColumnIndices_[visibleIndex];
-			float maxColumnWidth = 0.0f;
+			const size_t colIndex = visibleColumnIndices_[visibleIndex];
+			float widest = 0.0f;
 			if (colIndex < table.columns.size())
-				maxColumnWidth = std::max(maxColumnWidth, measureTextWidthExact(font, table.columns[colIndex], scale));
+				widest = measureTextWidthExact(font, table.columns[colIndex], scale);
 			for (const auto& row : table.rows) {
 				if (colIndex < row.size())
-					maxColumnWidth = std::max(maxColumnWidth, measureTextWidthExact(font, row[colIndex], scale));
+					widest = std::max(widest, measureTextWidthExact(font, row[colIndex], scale));
 			}
-			outColumnWidths.push_back(maxColumnWidth);
-			outTotalTableWidth += maxColumnWidth + paddingBetweenColumns;
+			if (widths) widths->push_back(widest);
+			total += widest;
+			if (visibleIndex + 1 < visibleColumnIndices_.size()) total += columnPadding;
 		}
-		if (!outColumnWidths.empty())
-			outTotalTableWidth -= paddingBetweenColumns;
-	}
+		if (!table.id.empty()) total = std::max(total, measureTextWidthExact(font, table.id, scale));
+		return total;
+	};
 
-	// Output the final calculated values
+	const float baseWidth = measureWidth(baseScale, baseColumnPadding, nullptr);
+	const size_t targetDataRows = std::min<size_t>(10, std::min(table.rows.size(), maxRows_));
+	const size_t targetLines = 1 + (table.id.empty() ? 0 : 1) + targetDataRows;
+	const float baseHeight = (baseDrawableHeight + baseRowPadding) * static_cast<float>(targetLines);
+
+	const float widthFit = baseWidth > 0.0f ? widthConstraint / baseWidth : 1.0f;
+	const float heightFit = baseHeight > 0.0f ? heightConstraint / baseHeight : 1.0f;
+	float ratio = std::clamp(std::min({ 1.0f, widthFit, heightFit }), 0.0f, 1.0f);
+	ratio = std::floor(ratio * 64.0f) / 64.0f;
+	if (ratio <= 0.0f) ratio = 1.0f / 64.0f;
+
+	const float scale = baseScale * ratio;
+	const float drawableHeight = font->getMaxAscent() * scale;
+	const float rowPadding = baseRowPadding_ * drawableHeight;
+	const float columnPadding = baseColumnPadding_ * drawableHeight;
+	outTotalTableWidth = measureWidth(scale, columnPadding, &outColumnWidths);
 	outDrawableHeight = drawableHeight;
 	outRowPadding = rowPadding;
-	outPaddingBetweenColumns = paddingBetweenColumns;
+	outPaddingBetweenColumns = columnPadding;
 	return scale;
 }
 

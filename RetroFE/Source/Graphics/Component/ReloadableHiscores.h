@@ -42,8 +42,11 @@ public:
 
 private:
     void reloadTexture(bool resetScroll = true);
+    void beginTableTransition_();
+    void cancelTableTransition_();
+    void renderCurrentTable_(SDL_Renderer* renderer, float originX, float originY, Uint8 alpha) const;
     void renderNoDataMessage(SDL_Renderer* renderer, FontManager* font);
-    float computeTableScaleAndWidths(FontManager* font, const HighScoreTableView& table, float& outDrawableHeight, float& outRowPadding, float& outPaddingBetweenColumns, std::vector<float>& outColumnWidths, float& outTotalTableWidth, float widthConstraint);
+    float computeTableScaleAndWidths(FontManager* font, const HighScoreTableView& table, float& outDrawableHeight, float& outRowPadding, float& outPaddingBetweenColumns, std::vector<float>& outColumnWidths, float& outTotalTableWidth, float widthConstraint, float heightConstraint);
     void updateVisibleColumns(const HighScoreTableView& table);
 
     void renderHeaderTexture(FontManager* font, const HighScoreTableView& table, float scale, float drawableHeight, float rowPadding, float paddingBetweenColumns, float totalTableWidth);
@@ -72,6 +75,9 @@ private:
     float currentTableDisplayTime_;
     float displayTime_;
     bool needsRedraw_;
+    bool tableCrossfading_;
+    float tableCrossfadeTimer_;
+    float tableCrossfadeDuration_;
 
     // Cached Data
     float lastScale_;
@@ -96,6 +102,7 @@ private:
     HighScoreView highScoreTable_;
 	SDL_Texture* headerTexture_;
 	SDL_Texture* tableRowsTexture_;
+    SDL_Texture* previousTableTexture_;
 	int tableRowsTextureHeight_;
 	int headerTextureHeight_;
 };
