@@ -1,6 +1,6 @@
 #pragma once
 
-#include "HighScoreData.h"
+#include "HighScoreView.h"
 
 #include <string>
 #include <vector>
@@ -8,11 +8,12 @@
 #include <shared_mutex>
 #include <functional>
 #include <atomic>
+#include <optional>
 
-// Local utils/config (used by .cpp; harmless to keep here)
-#include "../Utility/Utils.h"
-#include "../Database/Configuration.h"
-#include "../Collection/Item.h"
+struct GlobalScoreQuery {
+    std::string gameIds;
+    std::string scoreTypes;
+};
 
 // ---------------- Global (iScored) model ----------------
 // Storage-only, minimal: gameId ? { gameName, [ {player,score,date} ] }
@@ -43,10 +44,10 @@ public:
     bool loadGlobalCacheFromDisk();                               // reads compact V3 schema
     bool saveGlobalCacheToDisk() const;
 
-    HighScoreData getGlobalHiScoreTable(Item* item) const;
+    HighScoreView getTable(const GlobalScoreQuery& query) const;
 
     // Accessors (storage-only)
-    const GlobalGame* getGlobalGameById(const std::string& gameId) const;   // nullptr if missing
+    std::optional<GlobalGame> getGameById(const std::string& gameId) const;
     std::vector<std::string> listGlobalIds() const;                          // convenience
 
 

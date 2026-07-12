@@ -1,4 +1,4 @@
-﻿/* This file is part of RetroFE.
+/* This file is part of RetroFE.
  *
  * RetroFE is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -108,7 +108,7 @@ void ReloadableGlobalHiscores::beginContext_(bool resetQr) {
     // rebuilds the table set for the new item. During that window, update()'s page-rotation
     // logic must not compute a new grid baseline from the previous item's table set.
     // Nulling this pointer prevents stale baselines (e.g., multi-table -> single-table).
-    highScoreTable_ = HighScoreData();
+    highScoreTable_ = HighScoreView();
 
     if (resetQr) {
         qrPhase_ = QrPhase::Hidden;
@@ -421,7 +421,7 @@ bool ReloadableGlobalHiscores::update(float dt) {
 
         // Compare content hashes
         for (const auto& id : cachedIds_) {
-            const auto* gg = GlobalHiScores::getInstance().getGlobalGameById(id);
+            const auto gg = GlobalHiScores::getInstance().getGameById(id);
             if (!gg) continue;
 
             auto it = lastSeenHashes_.find(id);
@@ -1063,7 +1063,7 @@ void ReloadableGlobalHiscores::reloadTexture() {
 
     Item* selectedItem = page.getSelectedItem(displayOffset_);
     if (!selectedItem || !renderer) {
-        highScoreTable_ = HighScoreData();
+        highScoreTable_ = HighScoreView();
 
         if (prevCompositeTexture_) {
             SDL_DestroyTexture(prevCompositeTexture_);
@@ -1086,7 +1086,7 @@ void ReloadableGlobalHiscores::reloadTexture() {
         return;
     }
 
-    highScoreTable_ = GlobalHiScores::getInstance().getGlobalHiScoreTable(selectedItem);
+    highScoreTable_ = GlobalHiScores::getInstance().getTable({ selectedItem->iscoredId, selectedItem->iscoredType });
     if (highScoreTable_.tables.empty()) {
         if (prevCompositeTexture_) {
             SDL_DestroyTexture(prevCompositeTexture_);

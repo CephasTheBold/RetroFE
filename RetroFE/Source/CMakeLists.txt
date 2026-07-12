@@ -238,7 +238,7 @@ set(RETROFE_HEADERS
 	"${RETROFE_DIR}/Source/Database/DB.h"
 	"${RETROFE_DIR}/Source/Database/GlobalOpts.h"
     "${RETROFE_DIR}/Source/Database/GlobalHiScores.h"
-    "${RETROFE_DIR}/Source/Database/HighScoreData.h"
+    "${RETROFE_DIR}/Source/Database/HighScoreView.h"
     "${RETROFE_DIR}/Source/Database/LocalHiScores.h"
     "${RETROFE_DIR}/Source/Execute/AttractMode.h"
     "${RETROFE_DIR}/Source/Execute/Input/InputMonitor.h"

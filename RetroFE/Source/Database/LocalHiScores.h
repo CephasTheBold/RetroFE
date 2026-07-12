@@ -1,6 +1,6 @@
 #pragma once
 
-#include "HighScoreData.h"
+#include "HighScoreView.h"
 
 #include <memory>
 #include <shared_mutex>
@@ -9,13 +9,17 @@
 
 #include <openhi2txt/openhi2txt.h>
 
+struct LocalScoreQuery {
+    std::string gameName;
+    bool consumeForceRedraw = false;
+};
+
 class LocalHiScores {
 public:
     static LocalHiScores& getInstance();
 
     void loadHighScores(const std::string& zipPath, const std::string& overridePath);
-    HighScoreData getHighScoreTable(const std::string& gameName);
-    HighScoreData getHighScoreTable(const std::string& gameName, bool consumeForceRedraw);
+    HighScoreView getTable(const LocalScoreQuery& query);
     bool hasHiFile(const std::string& gameName) const;
     bool runHi2Txt(const std::string& gameName);
     void runHi2TxtAsync(const std::string& gameName);
@@ -27,6 +31,6 @@ private:
     std::string hiFilesDirectory_;
     std::string scoresDirectory_;
     std::unique_ptr<openhi2txt::Context> openhi2txtContext_;
-    std::unordered_map<std::string, HighScoreData> scoresCache_;
+    std::unordered_map<std::string, HighScoreView> scoresCache_;
     mutable std::shared_mutex scoresCacheMutex_;
 };

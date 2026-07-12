@@ -12,11 +12,11 @@
 namespace {
 constexpr const char* kOpenHi2txtObfuscationKey = "s3cReT123!";
 
-HighScoreData toRetroFeHighScoreData(const openhi2txt::HiScoreResult& result) {
-    HighScoreData data;
+HighScoreView toHighScoreView(const openhi2txt::HiScoreResult& result) {
+    HighScoreView data;
     data.tables.reserve(result.tables.size());
     for (const auto& sourceTable : result.tables) {
-        HighScoreTable table;
+        HighScoreTableView table;
         table.id = sourceTable.id;
         table.columns = sourceTable.columns;
         table.rows = sourceTable.rows;
@@ -76,7 +76,7 @@ void LocalHiScores::loadHighScores(const std::string& zipPath, const std::string
         std::unique_lock<std::shared_mutex> lock(scoresCacheMutex_);
         scoresCache_.clear();
         for (const auto& persistedScore : persistedScores) {
-            HighScoreData data = toRetroFeHighScoreData(persistedScore.second);
+            HighScoreView data = toHighScoreView(persistedScore.second);
             if (data.tables.empty()) continue;
             scoresCache_[persistedScore.first] = std::move(data);
             ++loaded;
@@ -85,16 +85,12 @@ void LocalHiScores::loadHighScores(const std::string& zipPath, const std::string
     LOG_INFO("LocalHiScores", "OpenHi2txt local cache bulk-loaded " + std::to_string(loaded) + " games.");
 }
 
-HighScoreData LocalHiScores::getHighScoreTable(const std::string& gameName) {
-    return getHighScoreTable(gameName, false);
-}
-
-HighScoreData LocalHiScores::getHighScoreTable(const std::string& gameName, bool consumeForceRedraw) {
+HighScoreView LocalHiScores::getTable(const LocalScoreQuery& query) {
     std::unique_lock<std::shared_mutex> lock(scoresCacheMutex_);
-    auto it = scoresCache_.find(gameName);
+    auto it = scoresCache_.find(query.gameName);
     if (it == scoresCache_.end()) return {};
-    HighScoreData result = it->second;
-    if (consumeForceRedraw) {
+    HighScoreView result = it->second;
+    if (query.consumeForceRedraw) {
         for (auto& table : it->second.tables) table.forceRedraw = false;
     }
     return result;
@@ -121,7 +117,7 @@ bool LocalHiScores::runHi2Txt(const std::string& gameName) {
         return false;
     }
 
-    HighScoreData data = toRetroFeHighScoreData(result);
+    HighScoreView data = toHighScoreView(result);
     if (data.tables.empty()) {
         LOG_WARNING("LocalHiScores", "OpenHi2txt produced no display tables for " + gameName);
         return false;

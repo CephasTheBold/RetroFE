@@ -26,7 +26,7 @@
  // Forward declarations
 class Configuration;
 class FontManager;
-struct HighScoreData;
+struct HighScoreView;
 
 class ReloadableGlobalHiscores : public Component {
 public:
@@ -142,7 +142,7 @@ private:
 
     bool           tablesNeedRedraw_;    // Tables need re-rendering (data/geometry changed)
     bool           needsRedraw_;
-    HighScoreData highScoreTable_;
+    HighScoreView highScoreTable_;
 
     // Composite textures
     SDL_Texture* tableTexture_;             // Tables only (cached until data/geometry changes)

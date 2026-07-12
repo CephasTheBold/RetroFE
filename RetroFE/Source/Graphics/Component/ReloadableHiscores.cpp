@@ -117,7 +117,7 @@ namespace {
 		return std::max(0.0f, maxX - minX);
 	}
 
-	static bool hasForceRedraw(const HighScoreData& data) {
+	static bool hasForceRedraw(const HighScoreView& data) {
 		for (const auto& table : data.tables) {
 			if (table.forceRedraw) return true;
 		}
@@ -283,7 +283,7 @@ bool ReloadableHiscores::update(float dt) {
 	Item* selectedItem = page.getSelectedItem(displayOffset_);
 	if (selectedItem && selectedItem == lastSelectedItem_ &&
 		!(newItemSelected || (newScrollItemSelected && getMenuScrollReload()))) {
-		HighScoreData latestTable = LocalHiScores::getInstance().getHighScoreTable(selectedItem->name, true);
+		HighScoreView latestTable = LocalHiScores::getInstance().getTable({ selectedItem->name, true });
 		if (hasForceRedraw(latestTable)) {
 			LOG_INFO("ReloadableHiscores", "High score redraw requested for " + selectedItem->name + ".");
 			highScoreTable_ = latestTable;
@@ -365,7 +365,7 @@ bool ReloadableHiscores::update(float dt) {
 			// Proceed only if cache is valid for the current table
 			// (reloadTexture above, or from a previous frame, should have made it valid)
 			if (cacheValid_ && cachedTableIndex_ == currentTableIndex_) {
-				const HighScoreTable& table = highScoreTable_.tables[currentTableIndex_];
+				const HighScoreTableView& table = highScoreTable_.tables[currentTableIndex_];
 
 				// Use authoritative geometric values from cache
 				float drawableHeight = lastComputedDrawableHeight_;
@@ -518,7 +518,7 @@ void ReloadableHiscores::reloadTexture(bool resetScroll) {
 	if (itemChanged) {
 		lastSelectedItem_ = selectedItem;
 		if (selectedItem) {
-			highScoreTable_ = LocalHiScores::getInstance().getHighScoreTable(selectedItem->name);
+			highScoreTable_ = LocalHiScores::getInstance().getTable({ selectedItem->name });
 			if (!highScoreTable_.tables.empty()) currentTableIndex_ = 0;
 		}
 		else {
@@ -537,7 +537,7 @@ void ReloadableHiscores::reloadTexture(bool resetScroll) {
 	}
 
 	// --- Path B: Normal Rendering ---
-	const HighScoreTable& table = highScoreTable_.tables[currentTableIndex_];
+	const HighScoreTableView& table = highScoreTable_.tables[currentTableIndex_];
 	if (itemChanged || cachedTableIndex_ != currentTableIndex_) {
 		updateVisibleColumns(table);
 	}
@@ -826,7 +826,7 @@ void ReloadableHiscores::draw() {
 // Returns final scale and updates column widths and total width
 float ReloadableHiscores::computeTableScaleAndWidths(
 	FontManager* font,
-	const HighScoreTable& table,
+	const HighScoreTableView& table,
 	float& outDrawableHeight,
 	float& outRowPadding,
 	float& outPaddingBetweenColumns,
@@ -896,7 +896,7 @@ float ReloadableHiscores::computeTableScaleAndWidths(
 }
 
 
-void ReloadableHiscores::updateVisibleColumns(const HighScoreTable& table) {
+void ReloadableHiscores::updateVisibleColumns(const HighScoreTableView& table) {
 	visibleColumnIndices_.clear();
 
 	for (size_t colIndex = 0; colIndex < table.columns.size(); ++colIndex) {
@@ -919,7 +919,7 @@ void ReloadableHiscores::updateVisibleColumns(const HighScoreTable& table) {
 }
 
 void ReloadableHiscores::renderHeaderTexture(
-	FontManager* font, const HighScoreTable& table, float scale, float drawableHeight, float rowPadding, float paddingBetweenColumns, float totalTableWidth) {
+	FontManager* font, const HighScoreTableView& table, float scale, float drawableHeight, float rowPadding, float paddingBetweenColumns, float totalTableWidth) {
 	if (headerTexture_) SDL_DestroyTexture(headerTexture_);
 	headerTexture_ = nullptr;
 
@@ -980,7 +980,7 @@ void ReloadableHiscores::renderHeaderTexture(
 }
 
 void ReloadableHiscores::renderTableRowsTexture(
-	FontManager* font, const HighScoreTable& table, float scale, float drawableHeight, float rowPadding, float paddingBetweenColumns, float totalTableWidth) {
+	FontManager* font, const HighScoreTableView& table, float scale, float drawableHeight, float rowPadding, float paddingBetweenColumns, float totalTableWidth) {
 	if (tableRowsTexture_) SDL_DestroyTexture(tableRowsTexture_);
 	tableRowsTexture_ = nullptr;
 

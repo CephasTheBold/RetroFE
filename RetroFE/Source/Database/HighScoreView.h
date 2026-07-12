@@ -3,7 +3,7 @@
 #include <string>
 #include <vector>
 
-struct HighScoreTable {
+struct HighScoreTableView {
     std::string id;
     std::vector<std::string> columns;
     std::vector<std::vector<std::string>> rows;
@@ -11,6 +11,6 @@ struct HighScoreTable {
     bool forceRedraw = false;
 };
 
-struct HighScoreData {
-    std::vector<HighScoreTable> tables;
+struct HighScoreView {
+    std::vector<HighScoreTableView> tables;
 };

@@ -25,7 +25,6 @@
 #include "Database/GlobalOpts.h"
 #include "Database/GlobalHiScores.h"
 #include "Database/LocalHiScores.h"
-#include "Database/IScoredProvider.h"
 #include "Execute/Launcher.h"
 #include "Graphics/Component/ScrollingList.h"
 #include "Graphics/Page.h"

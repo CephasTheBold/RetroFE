@@ -43,12 +43,12 @@ public:
 private:
     void reloadTexture(bool resetScroll = true);
     void renderNoDataMessage(SDL_Renderer* renderer, FontManager* font);
-    float computeTableScaleAndWidths(FontManager* font, const HighScoreTable& table, float& outDrawableHeight, float& outRowPadding, float& outPaddingBetweenColumns, std::vector<float>& outColumnWidths, float& outTotalTableWidth, float widthConstraint);
-    void updateVisibleColumns(const HighScoreTable& table);
+    float computeTableScaleAndWidths(FontManager* font, const HighScoreTableView& table, float& outDrawableHeight, float& outRowPadding, float& outPaddingBetweenColumns, std::vector<float>& outColumnWidths, float& outTotalTableWidth, float widthConstraint);
+    void updateVisibleColumns(const HighScoreTableView& table);
 
-    void renderHeaderTexture(FontManager* font, const HighScoreTable& table, float scale, float drawableHeight, float rowPadding, float paddingBetweenColumns, float totalTableWidth);
+    void renderHeaderTexture(FontManager* font, const HighScoreTableView& table, float scale, float drawableHeight, float rowPadding, float paddingBetweenColumns, float totalTableWidth);
 
-    void renderTableRowsTexture(FontManager* font, const HighScoreTable& table, float scale, float drawableHeight, float rowPadding, float paddingBetweenColumns, float totalTableWidth);
+    void renderTableRowsTexture(FontManager* font, const HighScoreTableView& table, float scale, float drawableHeight, float rowPadding, float paddingBetweenColumns, float totalTableWidth);
     
     // Configuration Parameters
     Configuration& config_;
@@ -92,7 +92,7 @@ private:
 
     // Resources
     Item* lastSelectedItem_;
-    HighScoreData highScoreTable_;
+    HighScoreView highScoreTable_;
 	SDL_Texture* headerTexture_;
 	SDL_Texture* tableRowsTexture_;
 	int tableRowsTextureHeight_;

@@ -8,7 +8,6 @@
 #include "GlobalHiScores.h"
 #include "../Utility/Utils.h"
 #include "../Utility/Log.h"
-#include "../Collection/Item.h" 
 #include "SDL.h"
 #include "SDL_image.h"
 #include "qrcodegen.hpp"
@@ -1673,14 +1672,12 @@ static inline std::string prettyDateNumericDots_(const std::string& ymd_hms) {
 	return formatDateDotsLocale_(y, m, d, /*twoDigitYear=*/true);
 }
 
-HighScoreData GlobalHiScores::getGlobalHiScoreTable(Item* item) const {
+HighScoreView GlobalHiScores::getTable(const GlobalScoreQuery& query) const {
 	// 1. Return by value to ensure ownership isolation.
 	// This prevents the "Data Aliasing Hazard" during mass component reallocation.
-	HighScoreData result;
-	if (!item) return result;
-
-	const std::string idsCsv = item->iscoredId;
-	const std::string typesCsv = item->iscoredType;
+	HighScoreView result;
+	const std::string& idsCsv = query.gameIds;
+	const std::string& typesCsv = query.scoreTypes;
 
 	const auto ids = splitCSV_(idsCsv);
 	if (ids.empty()) return result;
@@ -1866,7 +1863,7 @@ HighScoreData GlobalHiScores::getGlobalHiScoreTable(Item* item) const {
 		}
 
 		// 3) Emit top 10 with formatting
-		HighScoreTable t;
+		HighScoreTableView t;
 		t.id = pg.title;
 		t.columns = { "Rank", "Name", scoreHeader, "Date" };
 
@@ -1922,11 +1919,11 @@ HighScoreData GlobalHiScores::getGlobalHiScoreTable(Item* item) const {
 	return result; // 2. Return local object by value
 }
 
-const GlobalGame* GlobalHiScores::getGlobalGameById(const std::string& gameId) const {
+std::optional<GlobalGame> GlobalHiScores::getGameById(const std::string& gameId) const {
 	std::shared_lock<std::shared_mutex> lk(globalMutex_);
 	auto it = global_.byId.find(gameId);
-	if (it == global_.byId.end()) return nullptr;
-	return &it->second;
+	if (it == global_.byId.end()) return std::nullopt;
+	return it->second;
 }
 
 std::vector<std::string> GlobalHiScores::listGlobalIds() const {
