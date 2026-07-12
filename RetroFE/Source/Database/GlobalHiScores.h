@@ -1,32 +1,18 @@
 #pragma once
 
+#include "HighScoreData.h"
+
 #include <string>
 #include <vector>
 #include <unordered_map>
 #include <shared_mutex>
 #include <functional>
 #include <atomic>
-#include <memory>
-
-#include <openhi2txt/openhi2txt.h>
 
 // Local utils/config (used by .cpp; harmless to keep here)
 #include "../Utility/Utils.h"
 #include "../Database/Configuration.h"
 #include "../Collection/Item.h"
-
-// ---------------- Local (hi2txt) model ----------------
-struct HighScoreTable {
-    std::string id;                                 // table/page title
-    std::vector<std::string> columns;               // column names
-    std::vector<std::vector<std::string>> rows;     // cell rows
-    std::vector<std::vector<bool>> isPlaceholder;  // parallel to rows
-    bool forceRedraw = false;
-};
-
-struct HighScoreData {
-    std::vector<HighScoreTable> tables;             // multi-page for a game
-};
 
 // ---------------- Global (iScored) model ----------------
 // Storage-only, minimal: gameId ? { gameName, [ {player,score,date} ] }
@@ -47,18 +33,9 @@ struct GlobalHiScoreData {
     std::unordered_map<std::string, GlobalGame> byId;  // key = gameId
 };
 
-class HiScores {
+class GlobalHiScores {
 public:
-    static HiScores& getInstance();
-
-    // -------- Local (hi2txt) --------
-    void loadHighScores(const std::string& zipPath, const std::string& overridePath);
-    HighScoreData getHighScoreTable(const std::string& gameName);
-    HighScoreData getHighScoreTable(const std::string& gameName, bool consumeForceRedraw);
-    bool hasHiFile(const std::string& gameName) const;
-    bool runHi2Txt(const std::string& gameName);
-    void runHi2TxtAsync(const std::string& gameName);
-    bool loadFileToBuffer(const std::string& filePath, std::vector<char>& buffer);
+    static GlobalHiScores& getInstance();
 
     // -------- Global (iScored) storage/IO --------
     void setGlobalGameroom(const std::string& gameroom);         // e.g. "myArcadeRoom"
@@ -81,20 +58,13 @@ public:
     // Direct upsert (if caller already has rows for an id)
     void upsertIScoredGame(const std::string& gameId,
         const std::string& gameName,
-        const std::vector<GlobalRow>& rows);              // replaces that id’s rows
+        const std::vector<GlobalRow>& rows);              // replaces that idï¿½s rows
 
     // Shutdown cleanup (persist if you want, then clear)
     void deinitialize();
 
 private:
-    HiScores() = default;
-
-    // -------- Local internals --------
-    std::string hiFilesDirectory_;
-    std::string scoresDirectory_;
-    std::unique_ptr<openhi2txt::Context> openhi2txtContext_;
-    std::unordered_map<std::string, HighScoreData> scoresCache_;
-    std::shared_mutex scoresCacheMutex_;
+    GlobalHiScores() = default;
 
     // -------- Global internals --------
     std::string iscoredGameroom_;

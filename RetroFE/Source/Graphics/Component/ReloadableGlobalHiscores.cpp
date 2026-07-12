@@ -18,7 +18,7 @@
 #include "../ViewInfo.h"
 #include "../../Database/Configuration.h"
 #include "../../Database/GlobalOpts.h"
-#include "../../Database/HiScores.h"
+#include "../../Database/GlobalHiScores.h"
 #include "../../Utility/Log.h"
 #include "../../Utility/Utils.h"
 #include "../../SDL.h"
@@ -421,7 +421,7 @@ bool ReloadableGlobalHiscores::update(float dt) {
 
         // Compare content hashes
         for (const auto& id : cachedIds_) {
-            const auto* gg = HiScores::getInstance().getGlobalGameById(id);
+            const auto* gg = GlobalHiScores::getInstance().getGlobalGameById(id);
             if (!gg) continue;
 
             auto it = lastSeenHashes_.find(id);
@@ -1086,7 +1086,7 @@ void ReloadableGlobalHiscores::reloadTexture() {
         return;
     }
 
-    highScoreTable_ = HiScores::getInstance().getGlobalHiScoreTable(selectedItem);
+    highScoreTable_ = GlobalHiScores::getInstance().getGlobalHiScoreTable(selectedItem);
     if (highScoreTable_.tables.empty()) {
         if (prevCompositeTexture_) {
             SDL_DestroyTexture(prevCompositeTexture_);

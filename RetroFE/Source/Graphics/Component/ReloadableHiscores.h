@@ -23,7 +23,7 @@
 
 #include "Component.h"
 #include "../../Collection/Item.h"
-#include "../../Database/HiScores.h"
+#include "../../Database/LocalHiScores.h"
 
 
 class ReloadableHiscores : public Component

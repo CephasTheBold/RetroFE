@@ -21,7 +21,7 @@
 #include <SDL.h>
 
 #include "Component.h"
-#include "../../Database/HiScores.h"
+#include "../../Database/GlobalHiScores.h"
 
  // Forward declarations
 class Configuration;

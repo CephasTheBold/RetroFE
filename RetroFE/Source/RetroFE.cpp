@@ -23,7 +23,8 @@
 #include "Control/UserInput.h"
 #include "Database/Configuration.h"
 #include "Database/GlobalOpts.h"
-#include "Database/HiScores.h"
+#include "Database/GlobalHiScores.h"
+#include "Database/LocalHiScores.h"
 #include "Database/IScoredProvider.h"
 #include "Execute/Launcher.h"
 #include "Graphics/Component/ScrollingList.h"
@@ -415,21 +416,21 @@ int RetroFE::initialize(void* context) {
 	std::string zipPath = Utils::combinePath(Configuration::absolutePath, "hi2txt", "hi2txt_defaults.zip");
 	std::string overridePath = Utils::combinePath(Configuration::absolutePath, "hi2txt", "scores");
 
-	HiScores::getInstance().loadHighScores(zipPath, overridePath);
+	LocalHiScores::getInstance().loadHighScores(zipPath, overridePath);
 
 	if (globalHiscoresEnabled) {
 		LOG_INFO("RetroFE", "Global HiScores enabled; initializing iScored integration.");
 
-		HiScores::getInstance().setGlobalGameroom("Pipmick");
+		GlobalHiScores::getInstance().setGlobalGameroom("Pipmick");
 
-		HiScores::getInstance().setGlobalPersistPath(Utils::combinePath(Configuration::absolutePath,
+		GlobalHiScores::getInstance().setGlobalPersistPath(Utils::combinePath(Configuration::absolutePath,
 			"iScored", "global_cache.json"));
 
-		HiScores::getInstance().loadGlobalCacheFromDisk();
+		GlobalHiScores::getInstance().loadGlobalCacheFromDisk();
 
-		HiScores::getInstance().refreshGlobalAllFromSingleCallAsync(
+		GlobalHiScores::getInstance().refreshGlobalAllFromSingleCallAsync(
 			/*limit=*/0,
-			[]() { LOG_INFO("HiScores", "Global refresh completed."); }
+			[]() { LOG_INFO("GlobalHiScores", "Global refresh completed."); }
 		);
 	}
 
@@ -575,10 +576,10 @@ void RetroFE::launchExit(bool userInitiated) {
 
 	if (userInitiated && !launchedGame.empty())
 	{
-		if (HiScores::getInstance().hasHiFile(launchedGame))
+		if (LocalHiScores::getInstance().hasHiFile(launchedGame))
 		{
 			LOG_INFO("RetroFE", "Refreshing local high scores for " + launchedGame + " after game exit.");
-			HiScores::getInstance().runHi2TxtAsync(launchedGame);
+			LocalHiScores::getInstance().runHi2TxtAsync(launchedGame);
 		}
 	}
 
@@ -587,9 +588,9 @@ void RetroFE::launchExit(bool userInitiated) {
 
 	if (globalHiscoresEnabled)
 	{
-		HiScores::getInstance().refreshGlobalAllFromSingleCallAsync(
+		GlobalHiScores::getInstance().refreshGlobalAllFromSingleCallAsync(
 			/*limit=*/0,
-			[]() { LOG_INFO("HiScores", "Global refresh completed."); }
+			[]() { LOG_INFO("GlobalHiScores", "Global refresh completed."); }
 		);
 	}
 }
@@ -697,7 +698,7 @@ bool RetroFE::deInitialize() {
 	Component::clearSharedTextures();
 	VideoPool::shutdown();
 	ThreadPool::getInstance().wait();
-	HiScores::getInstance().saveGlobalCacheToDisk();
+	GlobalHiScores::getInstance().saveGlobalCacheToDisk();
 
 	if (musicPlayer_) {
 		musicPlayer_->shutdown();
@@ -1055,9 +1056,9 @@ bool RetroFE::run() {
 	double hardwareFrameMs = 1000.0 / static_cast<double>(hardwareHz);
 
 	auto kickFetch = [&]() {
-		HiScores::getInstance().refreshGlobalAllFromSingleCallAsync(
+		GlobalHiScores::getInstance().refreshGlobalAllFromSingleCallAsync(
 			/*limit=*/0,
-			[]() { LOG_INFO("HiScores", "Global refresh completed."); }
+			[]() { LOG_INFO("GlobalHiScores", "Global refresh completed."); }
 		);
 		};
 

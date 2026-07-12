@@ -1,7 +1,7 @@
-#include "HiScores.h"
+#include "GlobalHiScores.h"
 #include <unordered_map>
 
-// Minimal provider interface expected by HiScores.cpp:
+// Minimal provider interface expected by GlobalHiScores.cpp:
 class IScoredProvider {
 public:
     virtual ~IScoredProvider() = default;

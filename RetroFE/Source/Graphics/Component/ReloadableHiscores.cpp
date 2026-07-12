@@ -18,7 +18,7 @@
 #include "../ViewInfo.h"
 #include "../../Database/Configuration.h"
 #include "../../Database/GlobalOpts.h"
-#include "../../Database/HiScores.h"
+#include "../../Database/LocalHiScores.h"
 #include "../../Utility/Log.h"
 #include "../../Utility/Utils.h"
 #include "../../SDL.h"
@@ -283,7 +283,7 @@ bool ReloadableHiscores::update(float dt) {
 	Item* selectedItem = page.getSelectedItem(displayOffset_);
 	if (selectedItem && selectedItem == lastSelectedItem_ &&
 		!(newItemSelected || (newScrollItemSelected && getMenuScrollReload()))) {
-		HighScoreData latestTable = HiScores::getInstance().getHighScoreTable(selectedItem->name, true);
+		HighScoreData latestTable = LocalHiScores::getInstance().getHighScoreTable(selectedItem->name, true);
 		if (hasForceRedraw(latestTable)) {
 			LOG_INFO("ReloadableHiscores", "High score redraw requested for " + selectedItem->name + ".");
 			highScoreTable_ = latestTable;
@@ -518,7 +518,7 @@ void ReloadableHiscores::reloadTexture(bool resetScroll) {
 	if (itemChanged) {
 		lastSelectedItem_ = selectedItem;
 		if (selectedItem) {
-			highScoreTable_ = HiScores::getInstance().getHighScoreTable(selectedItem->name);
+			highScoreTable_ = LocalHiScores::getInstance().getHighScoreTable(selectedItem->name);
 			if (!highScoreTable_.tables.empty()) currentTableIndex_ = 0;
 		}
 		else {

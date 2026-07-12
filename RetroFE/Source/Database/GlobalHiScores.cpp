@@ -5,7 +5,7 @@
 #include <cstring>
 #endif
 
-#include "HiScores.h"
+#include "GlobalHiScores.h"
 #include "../Utility/Utils.h"
 #include "../Utility/Log.h"
 #include "../Collection/Item.h" 
@@ -44,29 +44,7 @@ using qrcodegen::QrCode;
 static std::atomic<bool> gQrEnsureRunning{ false };
 
 namespace {
-	constexpr const char* kOpenHi2txtObfuscationKey = "s3cReT123!";
-
-	HighScoreData toRetroFeHighScoreData_(const openhi2txt::HiScoreResult& result) {
-		HighScoreData data;
-		data.tables.reserve(result.tables.size());
-
-		for (const auto& libTable : result.tables) {
-			HighScoreTable table;
-			table.id = libTable.id;
-			table.columns = libTable.columns;
-			table.rows = libTable.rows;
-			table.isPlaceholder.assign(
-				table.rows.size(),
-				std::vector<bool>(table.columns.size(), false)
-			);
-			table.forceRedraw = true;
-			data.tables.push_back(std::move(table));
-		}
-
-		return data;
-	}
 }
-
 
 enum class GlobalSort {
 	ScoreDesc, ScoreAsc, TimeAsc, TimeDesc, MoneyDesc, MoneyAsc,
@@ -171,7 +149,7 @@ static void bakeAlphaMaskFromPNG_(SDL_Surface* qr, const std::string& maskPath) 
 
 	SDL_Surface* raw = IMG_Load(maskPath.c_str());
 	if (!raw) {
-		LOG_WARNING("HiScores", std::string("QR mask load failed: ") + IMG_GetError());
+		LOG_WARNING("GlobalHiScores", std::string("QR mask load failed: ") + IMG_GetError());
 		return;
 	}
 	SDL_Surface* mask = SDL_ConvertSurfaceFormat(raw, SDL_PIXELFORMAT_ARGB8888, 0);
@@ -372,7 +350,7 @@ static void ensureImgPngInit_() {
 	static std::once_flag once;
 	std::call_once(once, []() {
 		if ((IMG_Init(IMG_INIT_PNG) & IMG_INIT_PNG) == 0) {
-			LOG_WARNING("HiScores", std::string("IMG_Init PNG failed: ") + IMG_GetError());
+			LOG_WARNING("GlobalHiScores", std::string("IMG_Init PNG failed: ") + IMG_GetError());
 		}
 		});
 }
@@ -507,7 +485,7 @@ static bool isgdShorten_(const std::string& longUrl, const std::string& /*gameId
 
 static void ensureAllQrPngsAsync_(std::vector<std::string> ids) {
 	if (gQrEnsureRunning.exchange(true)) {
-		LOG_INFO("HiScores", "QR ensure already running; skip new request.");
+		LOG_INFO("GlobalHiScores", "QR ensure already running; skip new request.");
 		return;
 	}
 	std::thread([ids = std::move(ids)]() {
@@ -528,7 +506,7 @@ static void ensureAllQrPngsAsync_(std::vector<std::string> ids) {
 				std::string shortUrl;
 				if (!isgdShorten_(longUrl, gid, shortUrl)) {
 					++failed;
-					LOG_WARNING("HiScores", "QR: shorten failed for " + gid);
+					LOG_WARNING("GlobalHiScores", "QR: shorten failed for " + gid);
 					continue;
 				}
 
@@ -536,7 +514,7 @@ static void ensureAllQrPngsAsync_(std::vector<std::string> ids) {
 					/*bg*/0xFF, 0xFF, 0xFF, /*fg*/0x00, 0x00, 0x00);
 				if (!surf) {
 					++failed;
-					LOG_WARNING("HiScores", "QR: surface build failed for " + gid);
+					LOG_WARNING("GlobalHiScores", "QR: surface build failed for " + gid);
 					continue;
 				}
 
@@ -552,7 +530,7 @@ static void ensureAllQrPngsAsync_(std::vector<std::string> ids) {
 				// 3) save to PNG
 				if (IMG_SavePNG(surf, outPath.c_str()) != 0) {
 					++failed;
-					LOG_WARNING("HiScores", std::string("QR: IMG_SavePNG failed for ")
+					LOG_WARNING("GlobalHiScores", std::string("QR: IMG_SavePNG failed for ")
 						+ gid + " : " + IMG_GetError());
 					SDL_FreeSurface(surf);
 					continue;
@@ -562,12 +540,12 @@ static void ensureAllQrPngsAsync_(std::vector<std::string> ids) {
 				++made;
 			}
 
-			LOG_INFO("HiScores", "QR ensure: made=" + std::to_string(made) +
+			LOG_INFO("GlobalHiScores", "QR ensure: made=" + std::to_string(made) +
 				" skipped=" + std::to_string(skipped) +
 				" failed=" + std::to_string(failed));
 		}
 		catch (const std::exception& e) {
-			LOG_ERROR("HiScores", std::string("QR ensure exception: ") + e.what());
+			LOG_ERROR("GlobalHiScores", std::string("QR ensure exception: ") + e.what());
 		}
 		gQrEnsureRunning.store(false);
 		}).detach();
@@ -608,190 +586,20 @@ static inline std::string rowKey_(const GlobalRow& r) {
 	return ka == kb;
 }
 
-void HiScores::capRows_(std::vector<GlobalRow>& rows, int limit) {
+void GlobalHiScores::capRows_(std::vector<GlobalRow>& rows, int limit) {
 	if (limit > 0 && rows.size() > static_cast<size_t>(limit)) {
 		rows.resize(static_cast<size_t>(limit));
 	}
 }
 
 // Get the singleton instance
-HiScores& HiScores::getInstance() {
-	static HiScores instance;
+GlobalHiScores& GlobalHiScores::getInstance() {
+	static GlobalHiScores instance;
 	return instance;
 }
 
-void HiScores::deinitialize() {
-	{
-		std::unique_lock<std::shared_mutex> lock(scoresCacheMutex_);
-		scoresCache_.clear();  // Clear all loaded high score data
-	}
-
-	openhi2txtContext_.reset();
-	hiFilesDirectory_.clear();
-	scoresDirectory_.clear();
-
-	LOG_INFO("HiScores", "HiScores deinitialized and cache cleared.");
-}
-
-// Load all high scores, first from ZIP, then overriding with external XMLs
-void HiScores::loadHighScores(const std::string& zipPath, const std::string& overridePath) {
-
-	hiFilesDirectory_ = Utils::combinePath(Configuration::absolutePath, "emulators", "mame", "hiscore");
-	scoresDirectory_ = overridePath;
-
-	openhi2txt::ContextOptions options;
-	options.definitionsZip = Utils::combinePath(Configuration::absolutePath, "hi2txt", "hi2txt.zip");
-	options.defaultsZip = zipPath;
-	options.scoresDirectory = scoresDirectory_;
-	options.mameRoot = Utils::combinePath(Configuration::absolutePath, "emulators", "mame");
-	options.defaults.obfuscation = openhi2txt::ObfuscationMode::Xor;
-	options.defaults.key = kOpenHi2txtObfuscationKey;
-	options.scoreCache.obfuscation = openhi2txt::ObfuscationMode::Xor;
-	options.scoreCache.key = kOpenHi2txtObfuscationKey;
-
-	try {
-		openhi2txtContext_ = std::make_unique<openhi2txt::Context>(std::move(options));
-	}
-	catch (const std::exception& e) {
-		LOG_ERROR("HiScores", std::string("Failed to initialize OpenHi2txt: ") + e.what());
-		return;
-	}
-
-	if (!std::filesystem::exists(overridePath) || !std::filesystem::is_directory(overridePath)) {
-		LOG_INFO("HiScores", "Score override directory does not exist yet: " + overridePath);
-	}
-
-	const auto persistedScores = openhi2txtContext_->readAllPersistedGames();
-	int loaded = 0;
-	{
-		std::unique_lock<std::shared_mutex> lock(scoresCacheMutex_);
-		scoresCache_.clear();
-
-		for (const auto& persistedScore : persistedScores) {
-			HighScoreData highScoreData = toRetroFeHighScoreData_(persistedScore.second);
-			if (highScoreData.tables.empty()) {
-				continue;
-			}
-
-			scoresCache_[persistedScore.first] = std::move(highScoreData);
-			++loaded;
-		}
-	}
-
-	LOG_INFO("HiScores", "OpenHi2txt local cache bulk-loaded " + std::to_string(loaded) + " games.");
-}
-
-HighScoreData HiScores::getHighScoreTable(const std::string& gameName) {
-	return getHighScoreTable(gameName, false);
-}
-
-HighScoreData HiScores::getHighScoreTable(const std::string& gameName, bool consumeForceRedraw) {
-	std::unique_lock<std::shared_mutex> lock(scoresCacheMutex_);
-	auto it = scoresCache_.find(gameName);
-	if (it != scoresCache_.end()) {
-		// Return a copy by value. This is safe even if the map is
-		// later updated by a background hi2txt thread.
-		HighScoreData result = it->second;
-		if (consumeForceRedraw) {
-			for (auto& table : it->second.tables) {
-				table.forceRedraw = false;
-			}
-		}
-		return result;
-	}
-	return {}; // Return empty object if not found
-}
-
-// Check if a .hi file exists for the given game
-bool HiScores::hasHiFile(const std::string& gameName) const {
-	if (openhi2txtContext_) {
-		return openhi2txtContext_->hasInputForGame(gameName);
-	}
-
-	std::string hiFilePath = Utils::combinePath(hiFilesDirectory_, gameName + ".hi");
-	return std::filesystem::exists(hiFilePath);
-}
-
-// Run hi2txt to process the .hi file, generate XML output, save to scores directory, and update cache
-bool HiScores::runHi2Txt(const std::string& gameName) {
-	if (!openhi2txtContext_) {
-		LOG_ERROR("HiScores", "OpenHi2txt context is not initialized; cannot refresh " + gameName);
-		return false;
-	}
-
-	if (!openhi2txtContext_->hasInputForGame(gameName)) {
-		LOG_INFO("HiScores", "No hi/nvram input exists for " + gameName + ", skipping OpenHi2txt refresh.");
-		return false;
-	}
-
-	openhi2txt::HiScoreResult result = openhi2txtContext_->refreshGame(gameName);
-	if (!result.ok) {
-		LOG_WARNING("HiScores", "OpenHi2txt refresh failed for " + gameName + ": " + result.error);
-		return false;
-	}
-
-	HighScoreData highScoreData = toRetroFeHighScoreData_(result);
-	if (highScoreData.tables.empty()) {
-		LOG_WARNING("HiScores", "OpenHi2txt produced no display tables for " + gameName);
-		return false;
-	}
-
-	{
-		std::unique_lock<std::shared_mutex> lock(scoresCacheMutex_);
-		scoresCache_[gameName] = std::move(highScoreData);
-	}
-
-	LOG_INFO("HiScores", "Scores updated for " + gameName + " using OpenHi2txt.");
-	return true;
-}
-
-// Wrapper function to run hi2txt asynchronously
-void HiScores::runHi2TxtAsync(const std::string& gameName) {
-	if (!hasHiFile(gameName)) {
-		LOG_INFO("HiScores", "No hi/nvram input exists for " + gameName + ", skipping async OpenHi2txt refresh.");
-		return;
-	}
-	std::thread([this, gameName]() {
-		try {
-			if (runHi2Txt(gameName)) {
-				LOG_INFO("HiScores", "OpenHi2txt refresh executed successfully in the background for game " + gameName);
-			}
-			else {
-				LOG_ERROR("HiScores", "OpenHi2txt refresh failed in the background for game " + gameName);
-			}
-		}
-		catch (const std::exception& e) {
-			LOG_ERROR("HiScores", "Exception in async OpenHi2txt refresh for game " + gameName + ": " + e.what());
-		}
-		catch (...) {
-			LOG_ERROR("HiScores", "Unknown exception in async OpenHi2txt refresh for game " + gameName);
-		}
-		}).detach();
-}
-
-// Helper function to load the XML file content into a buffer
-bool HiScores::loadFileToBuffer(const std::string& filePath, std::vector<char>& buffer) {
-	std::ifstream file(filePath, std::ios::binary);
-	if (!file) {
-		LOG_ERROR("HiScores", "Error: Could not open file " + filePath);
-		return false;
-	}
-
-	// Get the file size
-	file.seekg(0, std::ios::end);
-	std::streamsize size = file.tellg();
-	file.seekg(0, std::ios::beg);
-
-	// Resize the buffer to hold the file content
-	buffer.resize(size);
-
-	// Read the file content into the buffer
-	if (!file.read(buffer.data(), size)) {
-		LOG_ERROR("HiScores", "Error: Could not read file content for " + filePath);
-		return false;
-	}
-
-	return true;
+void GlobalHiScores::deinitialize() {
+	LOG_INFO("GlobalHiScores", "Global high scores deinitialized.");
 }
 
 static size_t curlWriteCB_(char* ptr, size_t size, size_t nmemb, void* userdata) {
@@ -800,13 +608,13 @@ static size_t curlWriteCB_(char* ptr, size_t size, size_t nmemb, void* userdata)
 	return size * nmemb;
 }
 
-bool HiScores::httpGet_(const std::string& url, std::string& body, std::string& err) {
+bool GlobalHiScores::httpGet_(const std::string& url, std::string& body, std::string& err) {
 	CURL* curl = curl_easy_init();
 	if (!curl) { err = "curl_easy_init failed"; return false; }
 
 	curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
 	curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-	curl_easy_setopt(curl, CURLOPT_USERAGENT, "RetroFE-HiScores/1.0");
+	curl_easy_setopt(curl, CURLOPT_USERAGENT, "RetroFE-GlobalHiScores/1.0");
 	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curlWriteCB_);
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
 	curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
@@ -822,7 +630,7 @@ bool HiScores::httpGet_(const std::string& url, std::string& body, std::string& 
 	return true;
 }
 
-std::string HiScores::urlEncode_(const std::string& s) {
+std::string GlobalHiScores::urlEncode_(const std::string& s) {
 	std::ostringstream oss;
 	for (unsigned char c : s) {
 		if (std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') oss << c;
@@ -831,23 +639,23 @@ std::string HiScores::urlEncode_(const std::string& s) {
 	return oss.str();
 }
 
-void HiScores::setGlobalGameroom(const std::string& gameroom) {
+void GlobalHiScores::setGlobalGameroom(const std::string& gameroom) {
 	iscoredGameroom_ = gameroom;
 }
 
-void HiScores::setGlobalPersistPath(const std::string& path) {
+void GlobalHiScores::setGlobalPersistPath(const std::string& path) {
 	globalPersistPath_ = path;
 }
 
 
-void HiScores::refreshGlobalAllFromSingleCallAsync(int limit, std::function<void()> onFinish) {
+void GlobalHiScores::refreshGlobalAllFromSingleCallAsync(int limit, std::function<void()> onFinish) {
 	// Single-flight guard
 	if (globalRefreshInFlight_.exchange(true)) {
-		LOG_INFO("HiScores", "Global refresh already running; skipping.");
+		LOG_INFO("GlobalHiScores", "Global refresh already running; skipping.");
 		return;
 	}
 
-	// If HiScores is a true process-lifetime singleton, you can keep using std::thread.
+	// If GlobalHiScores is a true process-lifetime singleton, you can keep using std::thread.
 	// If it's reference-counted, prefer shared_from_this() (enable_shared_from_this) and capture a shared_ptr.
 	std::thread([this, limit, onFinish]() {
 		// Always clear the flag when we leave this scope
@@ -861,7 +669,7 @@ void HiScores::refreshGlobalAllFromSingleCallAsync(int limit, std::function<void
 			std::vector<std::pair<std::string, std::string>> allIds;
 			std::string errIndex;
 			if (!fetchAllGameIds_(allIds, errIndex)) {
-				LOG_WARNING("HiScores", "Aborting refresh: failed to fetch catalog: " + errIndex);
+				LOG_WARNING("GlobalHiScores", "Aborting refresh: failed to fetch catalog: " + errIndex);
 				return;
 			}
 
@@ -890,11 +698,11 @@ void HiScores::refreshGlobalAllFromSingleCallAsync(int limit, std::function<void
 				ingestIScoredAll_(body, limit);  // bumps globalEpoch_ internally
 				// --- Step 5: persist (only after successful ingest) ---
 				if (!saveGlobalCacheToDisk()) {
-					LOG_WARNING("HiScores", "saveGlobalCacheToDisk failed after global update.");
+					LOG_WARNING("GlobalHiScores", "saveGlobalCacheToDisk failed after global update.");
 				}
 			}
 			else {
-				LOG_WARNING("HiScores", "Scores fetch failed: " + err + " (catalog still synced).");
+				LOG_WARNING("GlobalHiScores", "Scores fetch failed: " + err + " (catalog still synced).");
 				// IMPORTANT: Do NOT save here. We might have empty rows in memory on a cold start.
 			}
 
@@ -915,22 +723,22 @@ void HiScores::refreshGlobalAllFromSingleCallAsync(int limit, std::function<void
 					}
 				}
 				if (!missing.empty()) ensureAllQrPngsAsync_(std::move(missing));
-				else LOG_INFO("HiScores", "QR ensure: nothing missing.");
+				else LOG_INFO("GlobalHiScores", "QR ensure: nothing missing.");
 			}
 			catch (const std::exception& e) {
-				LOG_ERROR("HiScores", std::string("QR ensure exception: ") + e.what());
+				LOG_ERROR("GlobalHiScores", std::string("QR ensure exception: ") + e.what());
 			}
 		}
 		catch (const std::exception& e) {
-			LOG_ERROR("HiScores", std::string("refreshGlobalAllFromSingleCallAsync exception: ") + e.what());
+			LOG_ERROR("GlobalHiScores", std::string("refreshGlobalAllFromSingleCallAsync exception: ") + e.what());
 		}
 		catch (...) {
-			LOG_ERROR("HiScores", "refreshGlobalAllFromSingleCallAsync: unknown exception");
+			LOG_ERROR("GlobalHiScores", "refreshGlobalAllFromSingleCallAsync: unknown exception");
 		}
 		}).detach();
 }
 
-bool HiScores::fetchAllGameIds_(std::vector<std::pair<std::string, std::string>>& out, std::string& err) {
+bool GlobalHiScores::fetchAllGameIds_(std::vector<std::pair<std::string, std::string>>& out, std::string& err) {
 	out.clear();
 	if (iscoredGameroom_.empty()) { err = "gameroom not set"; return false; }
 
@@ -1015,7 +823,7 @@ bool HiScores::fetchAllGameIds_(std::vector<std::pair<std::string, std::string>>
 }
 
 // Ensure entries exist for all ids (even with zero rows).
-void HiScores::ensureEmptyGames_(const std::vector<std::pair<std::string, std::string>>& all) {
+void GlobalHiScores::ensureEmptyGames_(const std::vector<std::pair<std::string, std::string>>& all) {
 	std::unique_lock<std::shared_mutex> lk(globalMutex_);
 	for (const auto& kv : all) {
 		const std::string& gid = kv.first;
@@ -1033,7 +841,7 @@ void HiScores::ensureEmptyGames_(const std::vector<std::pair<std::string, std::s
 	}
 }
 
-void HiScores::ingestIScoredAll_(const std::string& jsonText, int capPerGame) {
+void GlobalHiScores::ingestIScoredAll_(const std::string& jsonText, int capPerGame) {
 	using nlohmann::json;
 
 	json j;
@@ -1041,7 +849,7 @@ void HiScores::ingestIScoredAll_(const std::string& jsonText, int capPerGame) {
 		j = json::parse(jsonText);
 	}
 	catch (const std::exception& e) {
-		LOG_ERROR("HiScores", std::string("ingestIScoredAll_: JSON parse error: ") + e.what());
+		LOG_ERROR("GlobalHiScores", std::string("ingestIScoredAll_: JSON parse error: ") + e.what());
 		return;
 	}
 
@@ -1113,7 +921,7 @@ void HiScores::ingestIScoredAll_(const std::string& jsonText, int capPerGame) {
 		}
 	}
 	else {
-		LOG_WARNING("HiScores", "ingestIScoredAll_: Unrecognized JSON shape");
+		LOG_WARNING("GlobalHiScores", "ingestIScoredAll_: Unrecognized JSON shape");
 	}
 	// Cap rows and compute hashes for each game
 	for (auto& kv : global_.byId) {
@@ -1124,7 +932,7 @@ void HiScores::ingestIScoredAll_(const std::string& jsonText, int capPerGame) {
 	}
 }
 
-bool HiScores::loadGlobalCacheFromDisk() {
+bool GlobalHiScores::loadGlobalCacheFromDisk() {
 	if (globalPersistPath_.empty()) return false;
 
 	std::ifstream in(globalPersistPath_);
@@ -1135,7 +943,7 @@ bool HiScores::loadGlobalCacheFromDisk() {
 		in >> root;
 
 		if (!root.contains("games") || !root["games"].is_array()) {
-			LOG_WARNING("HiScores", "loadGlobalCacheFromDisk: no 'games' array.");
+			LOG_WARNING("GlobalHiScores", "loadGlobalCacheFromDisk: no 'games' array.");
 			return false;
 		}
 
@@ -1178,7 +986,7 @@ bool HiScores::loadGlobalCacheFromDisk() {
 		return true;
 	}
 	catch (const std::exception& e) {
-		LOG_ERROR("HiScores", std::string("loadGlobalCacheFromDisk: parse error: ") + e.what());
+		LOG_ERROR("GlobalHiScores", std::string("loadGlobalCacheFromDisk: parse error: ") + e.what());
 		return false;
 	}
 	catch (...) {
@@ -1186,7 +994,7 @@ bool HiScores::loadGlobalCacheFromDisk() {
 	}
 }
 
-bool HiScores::saveGlobalCacheToDisk() const {
+bool GlobalHiScores::saveGlobalCacheToDisk() const {
 	if (globalPersistPath_.empty()) return false;
 
 	namespace fs = std::filesystem;
@@ -1299,7 +1107,7 @@ static inline std::string normName_(std::string s) {
 
 
 
-// strict integer parse (±digits only)
+// strict integer parse (ï¿½digits only)
 static inline bool parseLongLongStrict_(const std::string& s, long long& out) {
 	if (s.empty()) return false;
 	char* end = nullptr;
@@ -1705,7 +1513,7 @@ static inline std::string monthName_(int m) {
 	return (m >= 1 && m <= 12) ? M[m - 1] : std::string();
 }
 static inline std::string prettyDate_(const std::string& ymd_hms) {
-	// Expect "YYYY-MM-DD HH:MM:SS" – be forgiving if not exact
+	// Expect "YYYY-MM-DD HH:MM:SS" ï¿½ be forgiving if not exact
 	if (ymd_hms.size() < 10) return ymd_hms;
 	int y = 0, m = 0, d = 0;
 	try {
@@ -1865,7 +1673,7 @@ static inline std::string prettyDateNumericDots_(const std::string& ymd_hms) {
 	return formatDateDotsLocale_(y, m, d, /*twoDigitYear=*/true);
 }
 
-HighScoreData HiScores::getGlobalHiScoreTable(Item* item) const {
+HighScoreData GlobalHiScores::getGlobalHiScoreTable(Item* item) const {
 	// 1. Return by value to ensure ownership isolation.
 	// This prevents the "Data Aliasing Hazard" during mass component reallocation.
 	HighScoreData result;
@@ -2114,14 +1922,14 @@ HighScoreData HiScores::getGlobalHiScoreTable(Item* item) const {
 	return result; // 2. Return local object by value
 }
 
-const GlobalGame* HiScores::getGlobalGameById(const std::string& gameId) const {
+const GlobalGame* GlobalHiScores::getGlobalGameById(const std::string& gameId) const {
 	std::shared_lock<std::shared_mutex> lk(globalMutex_);
 	auto it = global_.byId.find(gameId);
 	if (it == global_.byId.end()) return nullptr;
 	return &it->second;
 }
 
-std::vector<std::string> HiScores::listGlobalIds() const {
+std::vector<std::string> GlobalHiScores::listGlobalIds() const {
 	std::vector<std::string> out;
 	std::shared_lock<std::shared_mutex> lk(globalMutex_);
 	out.reserve(global_.byId.size());
