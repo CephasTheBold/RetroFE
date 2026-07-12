@@ -1912,7 +1912,6 @@ HighScoreView GlobalHiScores::getTable(const GlobalScoreQuery& query) const {
 			t.isPlaceholder.push_back({ false, true, true, true });
 		}
 
-		t.forceRedraw = true;
 		result.tables.push_back(std::move(t));
 	}
 

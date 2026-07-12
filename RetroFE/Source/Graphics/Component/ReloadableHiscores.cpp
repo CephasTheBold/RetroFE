@@ -117,12 +117,6 @@ namespace {
 		return std::max(0.0f, maxX - minX);
 	}
 
-	static bool hasForceRedraw(const HighScoreView& data) {
-		for (const auto& table : data.tables) {
-			if (table.forceRedraw) return true;
-		}
-		return false;
-	}
 	static void renderTextOutlined(
 		SDL_Renderer* r,
 		FontManager* f,
@@ -250,6 +244,7 @@ ReloadableHiscores::ReloadableHiscores(Configuration& config, std::string textFo
 	, lastComputedDrawableHeight_(0.0f)
 	, lastComputedRowPadding_(0.0f)
 	, lastSelectedItem_(nullptr)
+	, lastRenderedRevision_(0)
 	, highScoreTable_()
 	, headerTexture_(nullptr)
 	, tableRowsTexture_(nullptr)
@@ -283,10 +278,12 @@ bool ReloadableHiscores::update(float dt) {
 	Item* selectedItem = page.getSelectedItem(displayOffset_);
 	if (selectedItem && selectedItem == lastSelectedItem_ &&
 		!(newItemSelected || (newScrollItemSelected && getMenuScrollReload()))) {
-		HighScoreView latestTable = LocalHiScores::getInstance().getTable({ selectedItem->name, true });
-		if (hasForceRedraw(latestTable)) {
+		const uint64_t revision = LocalHiScores::getInstance().getRevision(selectedItem->name);
+		if (revision != lastRenderedRevision_) {
+			HighScoreSnapshot snapshot = LocalHiScores::getInstance().getTable({ selectedItem->name });
 			LOG_INFO("ReloadableHiscores", "High score redraw requested for " + selectedItem->name + ".");
-			highScoreTable_ = latestTable;
+			highScoreTable_ = std::move(snapshot.view);
+			lastRenderedRevision_ = snapshot.revision;
 			currentTableIndex_ = 0;
 			tableDisplayTimer_ = 0.0f;
 			cacheValid_ = false;
@@ -518,11 +515,14 @@ void ReloadableHiscores::reloadTexture(bool resetScroll) {
 	if (itemChanged) {
 		lastSelectedItem_ = selectedItem;
 		if (selectedItem) {
-			highScoreTable_ = LocalHiScores::getInstance().getTable({ selectedItem->name });
+			HighScoreSnapshot snapshot = LocalHiScores::getInstance().getTable({ selectedItem->name });
+			highScoreTable_ = std::move(snapshot.view);
+			lastRenderedRevision_ = snapshot.revision;
 			if (!highScoreTable_.tables.empty()) currentTableIndex_ = 0;
 		}
 		else {
 			highScoreTable_.tables.clear();
+			lastRenderedRevision_ = 0;
 		}
 	}
 

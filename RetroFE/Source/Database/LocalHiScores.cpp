@@ -21,10 +21,22 @@ HighScoreView toHighScoreView(const openhi2txt::HiScoreResult& result) {
         table.columns = sourceTable.columns;
         table.rows = sourceTable.rows;
         table.isPlaceholder.assign(table.rows.size(), std::vector<bool>(table.columns.size(), false));
-        table.forceRedraw = true;
         data.tables.push_back(std::move(table));
     }
     return data;
+}
+
+bool viewsEqual(const HighScoreView& lhs, const HighScoreView& rhs) {
+    if (lhs.tables.size() != rhs.tables.size()) return false;
+    for (size_t i = 0; i < lhs.tables.size(); ++i) {
+        const auto& a = lhs.tables[i];
+        const auto& b = rhs.tables[i];
+        if (a.id != b.id || a.columns != b.columns || a.rows != b.rows ||
+            a.isPlaceholder != b.isPlaceholder) {
+            return false;
+        }
+    }
+    return true;
 }
 }
 
@@ -78,22 +90,24 @@ void LocalHiScores::loadHighScores(const std::string& zipPath, const std::string
         for (const auto& persistedScore : persistedScores) {
             HighScoreView data = toHighScoreView(persistedScore.second);
             if (data.tables.empty()) continue;
-            scoresCache_[persistedScore.first] = std::move(data);
+            scoresCache_[persistedScore.first] = { std::move(data), 1 };
             ++loaded;
         }
     }
     LOG_INFO("LocalHiScores", "OpenHi2txt local cache bulk-loaded " + std::to_string(loaded) + " games.");
 }
 
-HighScoreView LocalHiScores::getTable(const LocalScoreQuery& query) {
-    std::unique_lock<std::shared_mutex> lock(scoresCacheMutex_);
+HighScoreSnapshot LocalHiScores::getTable(const LocalScoreQuery& query) const {
+    std::shared_lock<std::shared_mutex> lock(scoresCacheMutex_);
     auto it = scoresCache_.find(query.gameName);
     if (it == scoresCache_.end()) return {};
-    HighScoreView result = it->second;
-    if (query.consumeForceRedraw) {
-        for (auto& table : it->second.tables) table.forceRedraw = false;
-    }
-    return result;
+    return it->second;
+}
+
+uint64_t LocalHiScores::getRevision(const std::string& gameName) const {
+    std::shared_lock<std::shared_mutex> lock(scoresCacheMutex_);
+    auto it = scoresCache_.find(gameName);
+    return it == scoresCache_.end() ? 0 : it->second.revision;
 }
 
 bool LocalHiScores::hasHiFile(const std::string& gameName) const {
@@ -124,7 +138,11 @@ bool LocalHiScores::runHi2Txt(const std::string& gameName) {
     }
     {
         std::unique_lock<std::shared_mutex> lock(scoresCacheMutex_);
-        scoresCache_[gameName] = std::move(data);
+        auto& snapshot = scoresCache_[gameName];
+        if (!viewsEqual(snapshot.view, data)) {
+            snapshot.view = std::move(data);
+            ++snapshot.revision;
+        }
     }
     LOG_INFO("LocalHiScores", "Scores updated for " + gameName + " using OpenHi2txt.");
     return true;

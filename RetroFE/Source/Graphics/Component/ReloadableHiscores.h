@@ -92,6 +92,7 @@ private:
 
     // Resources
     Item* lastSelectedItem_;
+    uint64_t lastRenderedRevision_;
     HighScoreView highScoreTable_;
 	SDL_Texture* headerTexture_;
 	SDL_Texture* tableRowsTexture_;

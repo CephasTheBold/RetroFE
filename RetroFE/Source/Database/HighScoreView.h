@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <cstdint>
 #include <vector>
 
 struct HighScoreTableView {
@@ -8,9 +9,13 @@ struct HighScoreTableView {
     std::vector<std::string> columns;
     std::vector<std::vector<std::string>> rows;
     std::vector<std::vector<bool>> isPlaceholder;
-    bool forceRedraw = false;
 };
 
 struct HighScoreView {
     std::vector<HighScoreTableView> tables;
+};
+
+struct HighScoreSnapshot {
+    HighScoreView view;
+    uint64_t revision = 0;
 };
