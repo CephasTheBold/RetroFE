@@ -521,8 +521,9 @@ static std::vector<uint8_t> buildTransformedBytes(const GameDef& def, const Elt&
                 if (it != def.bitmasks.end()) {
                     const BitmaskDef& bm = it->second;
 
-                    // GreatStone-style: for TEXT, treat <character> masks as per-output-character extraction.
-                    if (Utils::ieq(e.type, "text") && !bm.charMasks.empty()) {
+                    // GreatStone-style: <character> masks describe per-output-character
+                    // extraction for text and per-output-digit/byte extraction for ints.
+                    if (!bm.charMasks.empty()) {
                         b = applyBitmaskCharsBitstream(b, bm.charMasks, bm.byteCompletion);
                     }
                     else if (!bm.mergedMask.empty()) {
@@ -618,8 +619,9 @@ static Value decodeInt(const GameDef& def, const Elt& e, const uint8_t* p) {
             );
         }
 
-        // profile bcd-le implies little-endian digit order
-        if (profBcdLe || e.intBase == IntBaseKind::BcdLE) std::reverse(b.begin(), b.end());
+        // bcd-le decoding-profile is expanded into byte order/nibble operations
+        // during parsing; an explicit bcd-le integer base still reverses here.
+        if (e.intBase == IntBaseKind::BcdLE) std::reverse(b.begin(), b.end());
 
         int64_t v = (int64_t)bcdMsbToIntAllNibblesStrict(b);
 
@@ -800,14 +802,14 @@ static std::string decodeText(const GameDef& def, const Elt& e, const uint8_t* p
             bool consumed = applyCharsetStagesOne(stages, unit, u2, outText, stop);
             if (consumed) return outText;
 
-            // fall back to raw byte -> char (or ascii-step/offset if present)
-            int v = (int)(u2 & 0xFFu);
+            // fall back to the decoded unit itself; 16-bit text units may intentionally map to Unicode codepoints.
+            int v = (int)u2;
             if (e.hasAsciiStep && e.asciiStep != 0) v = v / e.asciiStep;
             if (e.hasAsciiOffset) v += e.asciiOffset;
             return utf8FromCodepoint(v);
         }
 
-        int v = (int)(unit & 0xFFu);
+        int v = (int)unit;
         if (e.hasAsciiStep && e.asciiStep != 0) v = v / e.asciiStep;
         if (e.hasAsciiOffset) v += e.asciiOffset;
         return utf8FromCodepoint(v);

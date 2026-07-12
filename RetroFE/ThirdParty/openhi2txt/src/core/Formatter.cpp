@@ -107,7 +107,34 @@ static std::string formatNumberWithFormatter(double x, const std::string& fmt) {
 
     char buf[256];
     // printf-style subset (examples in spec use %.2fsec)
-    std::snprintf(buf, sizeof(buf), fmt.c_str(), x);
+    bool integerFormatter = false;
+    for (size_t i = 0; i < fmt.size(); ++i) {
+        if (fmt[i] != '%') continue;
+        if (i + 1 < fmt.size() && fmt[i + 1] == '%') {
+            ++i;
+            continue;
+        }
+
+        size_t j = i + 1;
+        while (j < fmt.size() && std::string("-+ #0").find(fmt[j]) != std::string::npos) ++j;
+        while (j < fmt.size() && std::isdigit((unsigned char)fmt[j])) ++j;
+        if (j < fmt.size() && fmt[j] == '.') {
+            ++j;
+            while (j < fmt.size() && std::isdigit((unsigned char)fmt[j])) ++j;
+        }
+        while (j < fmt.size() && std::string("hljztL").find(fmt[j]) != std::string::npos) ++j;
+        if (j < fmt.size() && std::string("diuoxX").find(fmt[j]) != std::string::npos) {
+            integerFormatter = true;
+            break;
+        }
+    }
+
+    if (integerFormatter) {
+        std::snprintf(buf, sizeof(buf), fmt.c_str(), (int)x);
+    }
+    else {
+        std::snprintf(buf, sizeof(buf), fmt.c_str(), x);
+    }
     return std::string(buf);
 }
 
@@ -152,9 +179,33 @@ static std::string commonPrefixHint(const std::vector<ConcatPart>& parts) {
     return hint;
 }
 
+static std::vector<std::string> splitUtf8Chars(const std::string& s) {
+    std::vector<std::string> chars;
+    for (size_t i = 0; i < s.size();) {
+        const unsigned char c = (unsigned char)s[i];
+        size_t len = 1;
+        if ((c & 0x80) == 0) {
+            len = 1;
+        }
+        else if ((c & 0xE0) == 0xC0 && i + 1 < s.size()) {
+            len = 2;
+        }
+        else if ((c & 0xF0) == 0xE0 && i + 2 < s.size()) {
+            len = 3;
+        }
+        else if ((c & 0xF8) == 0xF0 && i + 3 < s.size()) {
+            len = 4;
+        }
+        if (i + len > s.size()) len = 1;
+        chars.push_back(s.substr(i, len));
+        i += len;
+    }
+    return chars;
+}
+
 static Value applyOneValue(const std::unordered_map<std::string, FormatDef>& formats,
-    const FormatDef& f,
-    const std::unordered_map<std::string, Value>& row,
+                           const FormatDef& f,
+                           const std::unordered_map<std::string, Value>& row,
     const Value& in,
     int loopIndex) {
 
@@ -559,8 +610,8 @@ static Value applyOne(const std::unordered_map<std::string, FormatDef>& formats,
         std::string out;
         out.reserve(src.size() * 2);
 
-        for (unsigned char ch : src) {
-            Value v = std::string(1, (char)ch);
+        for (const auto& ch : splitUtf8Chars(src)) {
+            Value v = ch;
 
             // apply operations once-per-char (force value mode inside)
             FormatDef tmp = f;

@@ -1013,8 +1013,8 @@ namespace openhi2txt {
 								if (p != std::string::npos) {
 									el.tableIndexCol = trim(ti.substr(0, p));
 									std::string rhs = trim(ti.substr(p + 1));
-									if (ieq(rhs, "index_from_value")) el.tableIndexKind = TableIndexKind::IndexFromValue;
-									else if (ieq(rhs, "value_from_index")) el.tableIndexKind = TableIndexKind::ValueFromIndex;
+									if (ieq(rhs, "index_from_value")) el.tableIndexKind = TableIndexKind::ValueFromIndex;
+									else if (ieq(rhs, "value_from_index")) el.tableIndexKind = TableIndexKind::IndexFromValue;
 									else {
 										int v = parseNum(ti);
 										if (v >= 0) { el.tableIndexKind = TableIndexKind::Fixed; el.tableIndexFixed = v; }

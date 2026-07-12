@@ -3,6 +3,7 @@
 #include <sstream>
 #include <cctype>
 #include <cstdio>
+#include <cstdint>
 #include <algorithm>
 
 namespace openhi2txt::Utils {
@@ -172,6 +173,45 @@ static const char* legacyEntityUtf8(const std::string& name) {
     return nullptr;
 }
 
+static bool decodeUtf8At(const std::string& s, size_t i, uint32_t& cp, size_t& len) {
+    const unsigned char c0 = (unsigned char)s[i];
+    if (c0 < 0x80) {
+        cp = c0;
+        len = 1;
+        return true;
+    }
+    if ((c0 & 0xE0) == 0xC0 && i + 1 < s.size()) {
+        const unsigned char c1 = (unsigned char)s[i + 1];
+        if ((c1 & 0xC0) != 0x80) return false;
+        cp = ((uint32_t)(c0 & 0x1F) << 6) | (uint32_t)(c1 & 0x3F);
+        len = 2;
+        return cp >= 0x80;
+    }
+    if ((c0 & 0xF0) == 0xE0 && i + 2 < s.size()) {
+        const unsigned char c1 = (unsigned char)s[i + 1];
+        const unsigned char c2 = (unsigned char)s[i + 2];
+        if ((c1 & 0xC0) != 0x80 || (c2 & 0xC0) != 0x80) return false;
+        cp = ((uint32_t)(c0 & 0x0F) << 12) |
+             ((uint32_t)(c1 & 0x3F) << 6) |
+             (uint32_t)(c2 & 0x3F);
+        len = 3;
+        return cp >= 0x800;
+    }
+    if ((c0 & 0xF8) == 0xF0 && i + 3 < s.size()) {
+        const unsigned char c1 = (unsigned char)s[i + 1];
+        const unsigned char c2 = (unsigned char)s[i + 2];
+        const unsigned char c3 = (unsigned char)s[i + 3];
+        if ((c1 & 0xC0) != 0x80 || (c2 & 0xC0) != 0x80 || (c3 & 0xC0) != 0x80) return false;
+        cp = ((uint32_t)(c0 & 0x07) << 18) |
+             ((uint32_t)(c1 & 0x3F) << 12) |
+             ((uint32_t)(c2 & 0x3F) << 6) |
+             (uint32_t)(c3 & 0x3F);
+        len = 4;
+        return cp >= 0x10000 && cp <= 0x10FFFF;
+    }
+    return false;
+}
+
 void xmlEscapePrintPreserveEntities(const std::string& s) {
     for (size_t i = 0; i < s.size(); ++i) {
         char ch = s[i];
@@ -194,6 +234,17 @@ void xmlEscapePrintPreserveEntities(const std::string& s) {
         else if (ch == '>') std::printf("&gt;");
         else if (ch == '"') std::printf("&quot;");
         else if (ch == '\'') std::printf("&apos;");
+        else if ((unsigned char)ch >= 0x80) {
+            uint32_t cp = 0;
+            size_t len = 0;
+            if (decodeUtf8At(s, i, cp, len)) {
+                std::printf("&#%u;", (unsigned)cp);
+                i += len - 1;
+            }
+            else {
+                std::printf("&#%u;", (unsigned char)ch);
+            }
+        }
         else std::printf("%c", ch);
     }
 }

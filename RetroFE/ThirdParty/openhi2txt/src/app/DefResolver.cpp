@@ -59,22 +59,50 @@ bool definitionTokensMatch(const std::vector<std::string>& structureTokens,
                            const std::vector<std::string>& datTokens) {
     if (structureTokens.empty()) return true;
     if (datTokens.empty()) return true;
-    return structureTokens == datTokens;
+    if (structureTokens.size() < datTokens.size()) return false;
+
+    for (size_t start = 0; start + datTokens.size() <= structureTokens.size(); ++start) {
+        bool matched = true;
+        for (size_t i = 0; i < datTokens.size(); ++i) {
+            if (structureTokens[start + i] != datTokens[i]) {
+                matched = false;
+                break;
+            }
+        }
+        if (matched) return true;
+    }
+
+    return false;
+}
+
+std::string joinDefinitionTokens(const std::vector<std::string>& tokens) {
+    std::string joined;
+    for (const auto& tok : tokens) joined += tok;
+    return joined;
 }
 
 void filterStructuresByHiscoreDat(GameDef& def,
-                                  const std::vector<std::string>& datTokens) {
+                                  const std::vector<std::string>& datTokens,
+                                  const TraceSink* trace) {
     if (datTokens.empty()) return;
 
     std::vector<Structure> filtered;
     filtered.reserve(def.structures.size());
+    const std::string joinedDat = joinDefinitionTokens(datTokens);
     for (auto& s : def.structures) {
         if (definitionTokensMatch(s.hiscoreDefinitionTokens, datTokens)) {
+            if (trace && !s.hiscoreDefinitionTokens.empty()) {
+                trace->line("TRACE: matching structure: hiscore.dat = " + joinedDat);
+            }
             filtered.push_back(std::move(s));
+        }
+        else if (trace && !s.hiscoreDefinitionTokens.empty()) {
+            trace->line("TRACE: structure definition " + joinDefinitionTokens(s.hiscoreDefinitionTokens) +
+                        " does NOT match hiscore.dat definition " + joinedDat);
         }
     }
 
-    if (!filtered.empty()) def.structures = std::move(filtered);
+    def.structures = std::move(filtered);
 }
 
 } // namespace
@@ -156,14 +184,17 @@ DefLoadResult DefResolver::loadFromZip(const fs::path& defsZip,
             if (std::find(charsetIds.begin(), charsetIds.end(), "CS_NUMBER") == charsetIds.end()) {
                 trace->line("TRACE: charset defined: CS_NUMBER");
             }
-            if (!hiscoreDefinitionTokens.empty()) {
-                std::string joined;
-                for (const auto& tok : hiscoreDefinitionTokens) joined += tok;
-                trace->line("TRACE: matching structure: hiscore.dat = " + joined);
-            }
         }
 
-        filterStructuresByHiscoreDat(parsed, hiscoreDefinitionTokens);
+        filterStructuresByHiscoreDat(parsed, hiscoreDefinitionTokens, trace);
+
+        if (Utils::ieq(cand, requestedGame) && parsed.structures.empty()) {
+            res.ok = true;
+            res.xmlText = std::move(tmp);
+            res.def = std::move(parsed);
+            res.usedDefId = cand;
+            return res;
+        }
 
         bool hasAnyOutput = false;
         for (const auto& kv : parsed.outputs) {
