@@ -3,104 +3,269 @@ name: Linux AppImages
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: appimage-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BUILD_TYPE: Release
+  APPIMAGE_EXTRACT_AND_RUN: "1"
+  LINUXDEPLOY_CHANNEL: continuous
+  GSTREAMER_PLUGIN_COMMIT: 2a2e67491c32995a3f279ad0ecbe77abd512b42a
+
 jobs:
   build:
+    name: Build ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+
     strategy:
+      fail-fast: false
       matrix:
-        config:
-          - { os: ubuntu-24.04, arch: x86_64 }
-          - { os: ubuntu-24.04-arm, arch: arm64 }
-    runs-on: ${{ matrix.config.os }}
-    name: Build ${{ matrix.config.os }}
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+            linuxdeploy_arch: x86_64
+            artifact_name: RetroFE-x86_64.AppImage
+
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+            linuxdeploy_arch: aarch64
+            artifact_name: RetroFE-arm64.AppImage
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Cache apt packages
-        uses: awalsh128/cache-apt-pkgs-action@latest
-        with:
-          packages: |
-            cmake
-            zlib1g-dev
-            libglib2.0-0 
-            libglib2.0-dev
-            libsdl2-2.0 
-            libsdl2-mixer-2.0
-            libsdl2-image-2.0 
-            libsdl2-ttf-2.0
-            libsdl2-dev 
-            libsdl2-mixer-dev 
-            libsdl2-image-dev 
-            libsdl2-ttf-dev
-            libgstreamer1.0 
-            libgstreamer1.0-dev 
-            libgstreamer-plugins-base1.0-dev
-            gstreamer1.0-plugins-base 
-            gstreamer1.0-plugins-good
-            gstreamer1.0-libav
-            libminizip-dev 
-            libwebp-dev 
-            libusb-1.0-0
-            libusb-1.0-0-dev
-            libevdev-dev
-            libserialport-dev
-            libcurl4-openssl-dev
-          version: ${{ matrix.config.os }}
-
-      - name: Install dependencies
+      - name: Install build and runtime dependencies
+        shell: bash
         run: |
+          set -euo pipefail
+
           sudo apt-get update
-          sudo apt-get install -y cmake \
-            zlib1g-dev libglib2.0-0 libglib2.0-dev \
-            libsdl2-2.0 libsdl2-mixer-2.0 libsdl2-image-2.0 libsdl2-ttf-2.0 \
-            libsdl2-dev libsdl2-mixer-dev libsdl2-image-dev libsdl2-ttf-dev \
-            libgstreamer1.0 libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
-            gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-libav \
-            libminizip-dev libwebp-dev libusb-1.0-0 libusb-1.0-0-dev libevdev-dev \
-            libserialport-dev libcurl4-openssl-dev
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            binutils \
+            ca-certificates \
+            cmake \
+            curl \
+            file \
+            ninja-build \
+            patchelf \
+            pkg-config \
+            zlib1g-dev \
+            libglib2.0-dev \
+            libsdl2-dev \
+            libsdl2-image-dev \
+            libsdl2-mixer-dev \
+            libsdl2-ttf-dev \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-libav \
+            libminizip-dev \
+            libwebp-dev \
+            libusb-1.0-0-dev \
+            libevdev-dev \
+            libserialport-dev \
+            libcurl4-openssl-dev
 
       - name: Configure CMake
-        run: cmake RetroFE/Source -BRetroFE/Build
-
-      - name: Build
-        run: cmake --build RetroFE/Build
-
-      - name: Install linuxdeploy
+        shell: bash
         run: |
-          URL="https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-${{ matrix.config.arch == 'arm64' && 'aarch64' || matrix.config.arch }}.AppImage"
-          OUT="linuxdeploy-${{ matrix.config.arch }}.AppImage"
+          set -euo pipefail
 
-          for i in 1 2 3 4 5; do
-            curl -fL --retry 5 --retry-all-errors --connect-timeout 20 --max-time 120 \
-              "$URL" -o "$OUT" && break
-            echo "Download failed, attempt $i"
-            sleep 10
-          done
+          cmake \
+            -S RetroFE/Source \
+            -B RetroFE/Build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE="${BUILD_TYPE}"
 
-          test -f "$OUT"
-          chmod +x "$OUT"
-          
-      - name: Install linuxdeploy-plugin-gstreamer
+      - name: Build RetroFE
+        shell: bash
         run: |
-          wget https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gstreamer/refs/heads/master/linuxdeploy-plugin-gstreamer.sh
+          set -euo pipefail
+          cmake --build RetroFE/Build --parallel
+
+      - name: Download linuxdeploy
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          filename="linuxdeploy-${{ matrix.linuxdeploy_arch }}.AppImage"
+          url="https://github.com/linuxdeploy/linuxdeploy/releases/download/${LINUXDEPLOY_CHANNEL}/${filename}"
+
+          rm -f "${filename}" "${filename}.tmp"
+
+          curl \
+            --fail \
+            --location \
+            --retry 5 \
+            --retry-all-errors \
+            --connect-timeout 20 \
+            --max-time 180 \
+            "${url}" \
+            --output "${filename}.tmp"
+
+          test -s "${filename}.tmp"
+          mv "${filename}.tmp" "${filename}"
+          chmod +x "${filename}"
+
+          echo "LINUXDEPLOY=${GITHUB_WORKSPACE}/${filename}" >> "${GITHUB_ENV}"
+
+      - name: Download pinned GStreamer plugin
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          curl \
+            --fail \
+            --location \
+            --retry 5 \
+            --retry-all-errors \
+            "https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gstreamer/${GSTREAMER_PLUGIN_COMMIT}/linuxdeploy-plugin-gstreamer.sh" \
+            --output linuxdeploy-plugin-gstreamer.sh
+
+          test -s linuxdeploy-plugin-gstreamer.sh
           chmod +x linuxdeploy-plugin-gstreamer.sh
 
       - name: Package AppImage
+        shell: bash
         run: |
-          ./linuxdeploy-${{ matrix.config.arch }}.AppImage \
+          set -euo pipefail
+
+          appdir="${GITHUB_WORKSPACE}/RetroFE/Build/AppDir"
+          output="${GITHUB_WORKSPACE}/${{ matrix.artifact_name }}"
+
+          rm -rf "${appdir}"
+          rm -f "${output}"
+
+          "${LINUXDEPLOY}" \
             --executable RetroFE/Build/retrofe \
-            --appdir RetroFE/Build/AppDir \
+            --appdir "${appdir}" \
             --plugin gstreamer \
-            --output appimage \
             --desktop-file Package/Environment/Linux/retrofe.desktop \
-            --icon-file Package/Environment/Common/RetroFE.png
-          if [ "${{ matrix.config.arch }}" == "arm64" ]; then
-            mv RetroFE-aarch64.AppImage RetroFE-arm64.AppImage
+            --icon-file Package/Environment/Common/RetroFE.png \
+            --output appimage
+
+          mapfile -t generated < <(
+            find "${GITHUB_WORKSPACE}" \
+              -maxdepth 1 \
+              -type f \
+              -name '*.AppImage' \
+              ! -name 'linuxdeploy-*.AppImage' \
+              -print
+          )
+
+          if (( ${#generated[@]} != 1 )); then
+            echo "Expected exactly one generated AppImage, found ${#generated[@]}:"
+            printf '  %s\n' "${generated[@]}"
+            exit 1
           fi
-      
-      - name: Upload ${{ matrix.config.arch }} Arch AppImage
+
+          if [[ "${generated[0]}" != "${output}" ]]; then
+            mv "${generated[0]}" "${output}"
+          fi
+
+          chmod +x "${output}"
+
+      - name: Validate packaged files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          appdir="${GITHUB_WORKSPACE}/RetroFE/Build/AppDir"
+          executable="${appdir}/usr/bin/retrofe"
+          plugin_dir="${appdir}/usr/lib/gstreamer-1.0"
+          scanner="${appdir}/usr/lib/gstreamer1.0/gstreamer-1.0/gst-plugin-scanner"
+
+          test -x "${appdir}/AppRun"
+          test -x "${executable}"
+          test -d "${plugin_dir}"
+          test -x "${scanner}"
+          find "${plugin_dir}" -maxdepth 1 -type f -name 'libgst*.so' -print -quit | grep -q .
+
+          check_dependencies() {
+            local file="$1"
+            local missing
+
+            missing="$(ldd "${file}" 2>/dev/null | grep 'not found' || true)"
+            if [[ -n "${missing}" ]]; then
+              echo "Unresolved dependencies for ${file}:"
+              echo "${missing}"
+              return 1
+            fi
+          }
+
+          check_dependencies "${executable}"
+          check_dependencies "${scanner}"
+
+          while IFS= read -r -d '' plugin; do
+            check_dependencies "${plugin}"
+          done < <(find "${plugin_dir}" -maxdepth 1 -type f -name '*.so' -print0)
+
+      - name: Report ABI requirements
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          appdir="${GITHUB_WORKSPACE}/RetroFE/Build/AppDir"
+          symbols_file="$(mktemp)"
+          trap 'rm -f "${symbols_file}"' EXIT
+
+          while IFS= read -r -d '' file_path; do
+            if file -b "${file_path}" | grep -q 'ELF'; then
+              readelf --version-info "${file_path}" >> "${symbols_file}" 2>/dev/null || true
+            fi
+          done < <(find "${appdir}" -type f -print0)
+
+          glibc_max="$({
+            grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' "${symbols_file}" || true
+          } | sort -Vu | tail -n 1)"
+
+          glibcxx_max="$({
+            grep -oE 'GLIBCXX_[0-9]+(\.[0-9]+)+' "${symbols_file}" || true
+          } | sort -Vu | tail -n 1)"
+
+          echo "Highest GLIBC requirement:   ${glibc_max:-none found}"
+          echo "Highest GLIBCXX requirement: ${glibcxx_max:-none found}"
+
+          {
+            echo "### RetroFE ${{ matrix.arch }} AppImage"
+            echo
+            echo "- Highest GLIBC requirement: \`${glibc_max:-none found}\`"
+            echo "- Highest GLIBCXX requirement: \`${glibcxx_max:-none found}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Verify AppImage can be extracted
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          output="${GITHUB_WORKSPACE}/${{ matrix.artifact_name }}"
+          extract_dir="${RUNNER_TEMP}/retrofe-appimage-extract"
+
+          rm -rf "${extract_dir}"
+          mkdir -p "${extract_dir}"
+          cd "${extract_dir}"
+
+          env -u APPIMAGE_EXTRACT_AND_RUN \
+            "${output}" \
+            --appimage-extract >/dev/null
+
+          test -x squashfs-root/AppRun
+          test -x squashfs-root/usr/bin/retrofe
+          test -d squashfs-root/usr/lib/gstreamer-1.0
+
+      - name: Upload ${{ matrix.arch }} AppImage
         uses: actions/upload-artifact@v4
         with:
-          name: RetroFE-${{ matrix.config.arch }}.AppImage
-          path: RetroFE-${{ matrix.config.arch }}.AppImage
+          name: RetroFE-${{ matrix.arch }}.AppImage
+          path: ${{ matrix.artifact_name }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
