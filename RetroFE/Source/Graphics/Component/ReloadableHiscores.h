@@ -24,6 +24,7 @@
 #include "Component.h"
 #include "../../Collection/Item.h"
 #include "../../Database/LocalHiScores.h"
+#include "LocalScorePagePlan.h"
 
 
 class ReloadableHiscores : public Component
@@ -41,6 +42,31 @@ public:
 
 
 private:
+    struct PagePanel {
+        size_t tableIndex = 0;
+        std::vector<size_t> visibleColumns;
+        std::vector<float> columnWidths;
+        std::vector<SDL_Texture*> rowTiles;
+        SDL_Texture* header = nullptr;
+        float x = 0.0f;
+        float width = 0.0f;
+        float scale = 0.0f;
+        float lineStep = 0.0f;
+        float headerHeight = 0.0f;
+        float rowsHeight = 0.0f;
+        float maxScroll = 0.0f;
+        int rowsPerTile = 32;
+    };
+
+    bool updatePages_(float dt);
+    void rebuildPagePlan_();
+    void buildCurrentPage_();
+    void freePagePanels_();
+    void drawPages_();
+    void renderPanels_(SDL_Renderer* renderer, float originX, float originY, Uint8 alpha) const;
+    void beginPageTransition_();
+    float measureNaturalWidth_(FontManager* font, const HighScoreTableView& table,
+        const std::vector<size_t>& columns, float scale) const;
     void reloadTexture(bool resetScroll = true);
     void beginTableTransition_();
     void cancelTableTransition_();
@@ -88,6 +114,7 @@ private:
     float cachedTotalTableWidth_;
     std::vector<size_t> visibleColumnIndices_;
     float cachedViewWidth_;           // Stores the width constraint used for the last full calculation
+    float cachedViewHeight_ = -1.0f;
     float cachedBaseFontSize_;        // Stores the baseViewInfo.FontSize used
     float lastComputedDrawableHeight_; // Drawable height based on final scale
     float lastComputedRowPadding_;     // Row padding based on final scale
@@ -100,6 +127,11 @@ private:
     Item* lastSelectedItem_;
     uint64_t lastRenderedRevision_;
     HighScoreView highScoreTable_;
+    std::vector<LocalScorePagePlan> pagePlan_;
+    std::vector<PagePanel> pagePanels_;
+    size_t currentPageIndex_ = 0;
+    float pageElapsed_ = 0.0f;
+    float pageEndPause_ = 0.0f;
 	SDL_Texture* headerTexture_;
 	SDL_Texture* tableRowsTexture_;
     SDL_Texture* previousTableTexture_;

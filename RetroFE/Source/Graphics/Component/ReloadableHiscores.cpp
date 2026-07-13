@@ -280,6 +280,8 @@ ReloadableHiscores::~ReloadableHiscores(){
 
 
 bool ReloadableHiscores::update(float dt) {
+	return updatePages_(dt);
+#if 0
 	if (tableCrossfading_) {
 		tableCrossfadeTimer_ += dt;
 		needsRedraw_ = true;
@@ -493,11 +495,13 @@ bool ReloadableHiscores::update(float dt) {
 	}
 
 	return Component::update(dt);
+#endif
 }
 
 void ReloadableHiscores::allocateGraphicsMemory() {
 	Component::allocateGraphicsMemory();
-	reloadTexture();
+	rebuildPagePlan_();
+	buildCurrentPage_();
 }
 
 
@@ -507,6 +511,7 @@ void ReloadableHiscores::freeGraphicsMemory() {
 	if (headerTexture_) { SDL_DestroyTexture(headerTexture_); headerTexture_ = nullptr; }
 	if (tableRowsTexture_) { SDL_DestroyTexture(tableRowsTexture_); tableRowsTexture_ = nullptr; }
 	if (previousTableTexture_) { SDL_DestroyTexture(previousTableTexture_); previousTableTexture_ = nullptr; }
+	freePagePanels_();
 	tableCrossfading_ = false;
 }
 
@@ -768,6 +773,178 @@ void ReloadableHiscores::renderNoDataMessage(SDL_Renderer* renderer, FontManager
 	needsRedraw_ = true;
 }
 
+float ReloadableHiscores::measureNaturalWidth_(FontManager* font, const HighScoreTableView& table,
+	const std::vector<size_t>& columns, float scale) const {
+	const float pad = baseColumnPadding_ * font->getMaxHeight() * scale;
+	float total = 0.0f;
+	for (size_t i = 0; i < columns.size(); ++i) {
+		const size_t c = columns[i];
+		float widest = c < table.columns.size() ? measureTextWidthExact(font, table.columns[c], scale) : 0.0f;
+		for (const auto& row : table.rows)
+			if (c < row.size()) widest = std::max(widest, measureTextWidthExact(font, row[c], scale));
+		total += widest + (i + 1 < columns.size() ? pad : 0.0f);
+	}
+	if (!table.id.empty()) total = std::max(total, measureTextWidthExact(font, table.id, scale));
+	return total;
+}
+
+void ReloadableHiscores::freePagePanels_() {
+	for (auto& panel : pagePanels_) {
+		if (panel.header) SDL_DestroyTexture(panel.header);
+		for (SDL_Texture* tile : panel.rowTiles) if (tile) SDL_DestroyTexture(tile);
+	}
+	pagePanels_.clear();
+}
+
+void ReloadableHiscores::rebuildPagePlan_() {
+	pagePlan_.clear();
+	FontManager* font = baseViewInfo.font ? baseViewInfo.font : fontInst_;
+	if (!font || font->getMaxHeight() <= 0 || highScoreTable_.tables.empty()) return;
+
+	const float fullW = (baseViewInfo.Width > 0 && baseViewInfo.Width < baseViewInfo.MaxWidth)
+		? baseViewInfo.Width : baseViewInfo.MaxWidth;
+	const float gap = fullW * 0.04f;
+	const float halfW = std::max(1.0f, (fullW - gap) * 0.5f);
+	const float baseScale = baseViewInfo.FontSize / font->getMaxHeight();
+	std::vector<LocalTableCandidate> candidates;
+	candidates.reserve(highScoreTable_.tables.size());
+
+	for (size_t ti = 0; ti < highScoreTable_.tables.size(); ++ti) {
+		const auto& table = highScoreTable_.tables[ti];
+		size_t maxCols = table.columns.size();
+		for (const auto& row : table.rows) maxCols = std::max(maxCols, row.size());
+		std::vector<size_t> cols;
+		for (size_t c = 0; c < maxCols; ++c) {
+			const std::string name = c < table.columns.size() ? Utils::toLower(table.columns[c]) : std::string();
+			if (name.empty() || excludedColumnsSet_.find(name) == excludedColumnsSet_.end()) cols.push_back(c);
+		}
+		const float naturalW = measureNaturalWidth_(font, table, cols, baseScale);
+		const size_t totalRows = std::min(table.rows.size(), maxRows_);
+		const size_t visibleRows = std::min<size_t>(10, totalRows);
+		const float baseGlyphH = font->getMaxHeight() * baseScale;
+		const float basePadH = baseGlyphH * baseRowPadding_;
+		const float targetLines = static_cast<float>(1 + (table.id.empty() ? 0 : 1) + visibleRows);
+		const float targetH = targetLines * baseGlyphH + std::max(0.0f, targetLines - 0.5f) * basePadH;
+		const float ratio = std::clamp(std::min(halfW / std::max(1.0f, naturalW),
+			baseViewInfo.ScaledHeight() / std::max(1.0f, targetH)), 0.0f, 1.0f);
+		candidates.push_back({ ti, baseViewInfo.FontSize * ratio, visibleRows, totalRows,
+			!cols.empty() && (!table.rows.empty() || !table.columns.empty() || !table.id.empty()) });
+	}
+	pagePlan_ = buildLocalScorePagePlan(candidates);
+	cachedViewWidth_ = fullW;
+	cachedViewHeight_ = baseViewInfo.ScaledHeight();
+	cachedBaseFontSize_ = baseViewInfo.FontSize;
+	currentPageIndex_ = std::min(currentPageIndex_, pagePlan_.empty() ? size_t(0) : pagePlan_.size() - 1);
+}
+
+void ReloadableHiscores::buildCurrentPage_() {
+	freePagePanels_();
+	if (pagePlan_.empty() || currentPageIndex_ >= pagePlan_.size()) return;
+	SDL_Renderer* renderer = SDL::getRenderer(baseViewInfo.Monitor);
+	FontManager* font = baseViewInfo.font ? baseViewInfo.font : fontInst_;
+	if (!renderer || !font) return;
+
+	const auto& plan = pagePlan_[currentPageIndex_];
+	const bool paired = plan.tableIndices.size() == 2;
+	const float fullW = (baseViewInfo.Width > 0 && baseViewInfo.Width < baseViewInfo.MaxWidth) ? baseViewInfo.Width : baseViewInfo.MaxWidth;
+	const float fullH = baseViewInfo.ScaledHeight();
+	const float gap = paired ? fullW * 0.04f : 0.0f;
+	const float cellW = paired ? (fullW - gap) * 0.5f : fullW;
+	const float baseScale = baseViewInfo.FontSize / font->getMaxHeight();
+	const bool reserveTitle = std::any_of(plan.tableIndices.begin(), plan.tableIndices.end(), [&](size_t i) { return !highScoreTable_.tables[i].id.empty(); });
+
+	float sharedRatio = 1.0f;
+	std::vector<std::vector<size_t>> pageCols;
+	for (size_t ti : plan.tableIndices) {
+		const auto& table = highScoreTable_.tables[ti];
+		size_t maxCols = table.columns.size(); for (const auto& row : table.rows) maxCols = std::max(maxCols, row.size());
+		std::vector<size_t> cols;
+		for (size_t c = 0; c < maxCols; ++c) {
+			const std::string name = c < table.columns.size() ? Utils::toLower(table.columns[c]) : std::string();
+			if (name.empty() || excludedColumnsSet_.find(name) == excludedColumnsSet_.end()) cols.push_back(c);
+		}
+		pageCols.push_back(cols);
+		const float naturalW = measureNaturalWidth_(font, table, cols, baseScale);
+		const size_t targetRows = std::min<size_t>(10, std::min(table.rows.size(), maxRows_));
+		const float baseGlyphH = font->getMaxHeight() * baseScale;
+		const float basePadH = baseGlyphH * baseRowPadding_;
+		const float targetLines = static_cast<float>(1 + (reserveTitle ? 1 : 0) + targetRows);
+		const float targetH = targetLines * baseGlyphH + std::max(0.0f, targetLines - 0.5f) * basePadH;
+		sharedRatio = std::min(sharedRatio, std::min(cellW / std::max(1.0f, naturalW), fullH / std::max(1.0f, targetH)));
+	}
+	sharedRatio = std::max(1.0f / 64.0f, std::floor(std::clamp(sharedRatio, 0.0f, 1.0f) * 64.0f) / 64.0f);
+
+	for (size_t pi = 0; pi < plan.tableIndices.size(); ++pi) {
+		PagePanel panel;
+		panel.tableIndex = plan.tableIndices[pi]; panel.visibleColumns = pageCols[pi]; panel.width = cellW;
+		panel.x = pi == 0 ? 0.0f : cellW + gap; panel.scale = baseScale * sharedRatio;
+		panel.lineStep = font->getMaxHeight() * panel.scale * (1.0f + baseRowPadding_);
+		panel.headerHeight = panel.lineStep * (1 + (reserveTitle ? 1 : 0));
+		const auto& table = highScoreTable_.tables[panel.tableIndex];
+		const size_t rowCount = std::min(table.rows.size(), maxRows_);
+		const float glyphH = font->getMaxHeight() * panel.scale;
+		const float padH = glyphH * baseRowPadding_;
+		panel.rowsHeight = rowCount > 0
+			? rowCount * glyphH + (static_cast<float>(rowCount) - 0.5f) * padH
+			: 0.0f;
+		panel.maxScroll = std::max(0.0f, panel.rowsHeight - std::max(0.0f, fullH - panel.headerHeight));
+		SDL_RendererInfo rendererInfo{};
+		if (SDL_GetRendererInfo(renderer, &rendererInfo) == 0 && rendererInfo.max_texture_height > 0) {
+			panel.rowsPerTile = std::max(1, std::min(panel.rowsPerTile,
+				rendererInfo.max_texture_height / std::max(1, (int)std::ceil(panel.lineStep))));
+		}
+
+		const float colPad = baseColumnPadding_ * font->getMaxHeight() * panel.scale;
+		float colsW = 0.0f;
+		for (size_t c : panel.visibleColumns) {
+			float w = c < table.columns.size() ? measureTextWidthExact(font, table.columns[c], panel.scale) : 0.0f;
+			for (const auto& row : table.rows) if (c < row.size()) w = std::max(w, measureTextWidthExact(font, row[c], panel.scale));
+			panel.columnWidths.push_back(w); colsW += w;
+		}
+		if (panel.columnWidths.size() > 1) colsW += colPad * (panel.columnWidths.size() - 1);
+		const float startX = std::max(0.0f, (cellW - colsW) * 0.5f);
+
+		panel.header = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET,
+			std::max(1, (int)std::ceil(cellW)), std::max(1, (int)std::ceil(panel.headerHeight)));
+		if (panel.header) SDL_SetTextureBlendMode(panel.header, SDL_BLENDMODE_BLEND);
+		SDL_Texture* old = SDL_GetRenderTarget(renderer);
+		if (panel.header) {
+			SDL_SetRenderTarget(renderer, panel.header); SDL_SetRenderDrawColor(renderer, 0,0,0,0); SDL_RenderClear(renderer);
+			const float pixelH = panel.scale * font->getMaxHeight(); const auto* mip = font->getMipLevelForSize((int)pixelH);
+			if (mip) {
+				SDL_SetTextureColorMod(mip->fillTexture, baseViewInfo.textColor.r, baseViewInfo.textColor.g, baseViewInfo.textColor.b);
+				if (mip->dynamicFillTexture) SDL_SetTextureColorMod(mip->dynamicFillTexture, baseViewInfo.textColor.r, baseViewInfo.textColor.g, baseViewInfo.textColor.b);
+				const float k = mip->height > 0 ? pixelH / mip->height : 1.0f;
+				if (!table.id.empty()) renderTextOutlined(renderer, font, mip, mip->fillTexture, mip->outlineTexture, table.id,
+					(cellW - measureTextWidthExact(font, table.id, panel.scale)) * 0.5f, 0, panel.scale, k);
+				float x = startX, y = reserveTitle ? panel.lineStep : 0.0f;
+				for (size_t ci=0; ci<panel.visibleColumns.size(); ++ci) { size_t c=panel.visibleColumns[ci]; std::string s=c<table.columns.size()?table.columns[c]:"";
+					renderTextOutlined(renderer,font,mip,mip->fillTexture,mip->outlineTexture,s,x+(panel.columnWidths[ci]-measureTextWidthExact(font,s,panel.scale))*0.5f,y,panel.scale,k); x+=panel.columnWidths[ci]+colPad; }
+			}
+		}
+
+		for (size_t first=0; first<rowCount; first+=panel.rowsPerTile) {
+			const size_t count=std::min<size_t>(panel.rowsPerTile,rowCount-first);
+			SDL_Texture* tile=SDL_CreateTexture(renderer,SDL_PIXELFORMAT_RGBA8888,SDL_TEXTUREACCESS_TARGET,std::max(1,(int)std::ceil(cellW)),std::max(1,(int)std::ceil(panel.lineStep*count)));
+			if (!tile) continue; SDL_SetTextureBlendMode(tile,SDL_BLENDMODE_BLEND); SDL_SetRenderTarget(renderer,tile); SDL_SetRenderDrawColor(renderer,0,0,0,0); SDL_RenderClear(renderer);
+			const float pixelH=panel.scale*font->getMaxHeight(); const auto* mip=font->getMipLevelForSize((int)pixelH); if(mip){SDL_SetTextureColorMod(mip->fillTexture,baseViewInfo.textColor.r,baseViewInfo.textColor.g,baseViewInfo.textColor.b);if(mip->dynamicFillTexture)SDL_SetTextureColorMod(mip->dynamicFillTexture,baseViewInfo.textColor.r,baseViewInfo.textColor.g,baseViewInfo.textColor.b);const float k=mip->height>0?pixelH/mip->height:1.0f;
+				for(size_t rr=0;rr<count;++rr){
+					float x=startX,y=panel.lineStep*rr;
+					SDL_Rect rowClip{0,(int)std::floor(y),std::max(1,(int)std::ceil(cellW)),
+						std::max(1,(int)std::ceil(panel.lineStep))};
+					SDL_RenderSetClipRect(renderer,&rowClip);
+					const auto& row=table.rows[first+rr];
+					for(size_t ci=0;ci<panel.visibleColumns.size();++ci){size_t c=panel.visibleColumns[ci];std::string s=c<row.size()?row[c]:"";renderTextOutlined(renderer,font,mip,mip->fillTexture,mip->outlineTexture,s,x+(panel.columnWidths[ci]-measureTextWidthExact(font,s,panel.scale))*0.5f,y,panel.scale,k);x+=panel.columnWidths[ci]+colPad;}
+				}
+				SDL_RenderSetClipRect(renderer,nullptr);
+			}
+			panel.rowTiles.push_back(tile);
+		}
+		SDL_SetRenderTarget(renderer, old); pagePanels_.push_back(std::move(panel));
+	}
+	currentPosition_=0.0f; pageElapsed_=0.0f; pageEndPause_=0.0f; waitStartTime_=startTime_;
+}
+
 void ReloadableHiscores::cancelTableTransition_() {
 	tableCrossfading_ = false;
 	tableCrossfadeTimer_ = 0.0f;
@@ -828,7 +1005,43 @@ void ReloadableHiscores::beginTableTransition_() {
 	tableCrossfadeTimer_ = 0.0f;
 }
 
+void ReloadableHiscores::renderPanels_(SDL_Renderer* renderer, float originX, float originY, Uint8 alpha) const {
+	for (const auto& panel : pagePanels_) {
+		const float x=originX+panel.x;
+		if(panel.header){SDL_SetTextureAlphaMod(panel.header,alpha);SDL_FRect d{x,originY,panel.width,panel.headerHeight};SDL_RenderCopyF(renderer,panel.header,nullptr,&d);}
+		const float viewport=std::max(0.0f,baseViewInfo.ScaledHeight()-panel.headerHeight);
+		const float scroll=panel.maxScroll>0?std::min(currentPosition_,panel.maxScroll):0.0f;
+		for(size_t i=0;i<panel.rowTiles.size();++i){SDL_Texture* tile=panel.rowTiles[i];if(!tile)continue;int tw=0,th=0;SDL_QueryTexture(tile,nullptr,nullptr,&tw,&th);
+			float top=panel.headerHeight+i*panel.rowsPerTile*panel.lineStep-scroll,bottom=top+th;float ct=std::max(panel.headerHeight,top),cb=std::min(panel.headerHeight+viewport,bottom);if(cb<=ct)continue;
+			SDL_Rect src{0,(int)std::floor(ct-top),tw,std::min(th-(int)std::floor(ct-top),(int)std::ceil(cb-ct))};SDL_FRect dst{x,originY+ct,panel.width,(float)src.h};SDL_SetTextureAlphaMod(tile,alpha);SDL_RenderCopyF(renderer,tile,&src,&dst);}
+	}
+}
+
+void ReloadableHiscores::beginPageTransition_(){if(pagePanels_.empty())return;SDL_Renderer* r=SDL::getRenderer(baseViewInfo.Monitor);if(!r)return;cancelTableTransition_();
+	int w=std::max(1,(int)std::ceil((baseViewInfo.Width>0&&baseViewInfo.Width<baseViewInfo.MaxWidth)?baseViewInfo.Width:baseViewInfo.MaxWidth)),h=std::max(1,(int)std::ceil(baseViewInfo.ScaledHeight()));
+	previousTableTexture_=SDL_CreateTexture(r,SDL_PIXELFORMAT_RGBA8888,SDL_TEXTUREACCESS_TARGET,w,h);if(!previousTableTexture_)return;SDL_SetTextureBlendMode(previousTableTexture_,SDL_BLENDMODE_BLEND);SDL_Texture* old=SDL_GetRenderTarget(r);SDL_SetRenderTarget(r,previousTableTexture_);SDL_SetRenderDrawColor(r,0,0,0,0);SDL_RenderClear(r);renderPanels_(r,0,0,255);SDL_SetRenderTarget(r,old);tableCrossfading_=true;tableCrossfadeTimer_=0;}
+
+bool ReloadableHiscores::updatePages_(float dt){if(tableCrossfading_){tableCrossfadeTimer_+=dt;if(tableCrossfadeTimer_>=tableCrossfadeDuration_)cancelTableTransition_();}
+	Item* selected=page.getSelectedItem(displayOffset_);bool selectionEvent=newItemSelected||(newScrollItemSelected&&getMenuScrollReload());uint64_t revision=selected?LocalHiScores::getInstance().getRevision(selected->name):0;
+	const float currentWidth=(baseViewInfo.Width>0&&baseViewInfo.Width<baseViewInfo.MaxWidth)?baseViewInfo.Width:baseViewInfo.MaxWidth;
+	const bool geometryChanged=std::abs(currentWidth-cachedViewWidth_)>0.5f||std::abs(baseViewInfo.ScaledHeight()-cachedViewHeight_)>0.5f||std::abs(baseViewInfo.FontSize-cachedBaseFontSize_)>0.01f;
+	if(selected!=lastSelectedItem_||selectionEvent||revision!=lastRenderedRevision_||geometryChanged){cancelTableTransition_();lastSelectedItem_=selected;if(!geometryChanged)currentPageIndex_=0;if(selected){auto s=LocalHiScores::getInstance().getTable({selected->name});highScoreTable_=std::move(s.view);lastRenderedRevision_=s.revision;}else{highScoreTable_.tables.clear();lastRenderedRevision_=0;}rebuildPagePlan_();buildCurrentPage_();newItemSelected=false;newScrollItemSelected=false;if(pagePlan_.empty()){SDL_Renderer* r=SDL::getRenderer(baseViewInfo.Monitor);FontManager* f=baseViewInfo.font?baseViewInfo.font:fontInst_;if(r&&f)renderNoDataMessage(r,f);}}
+	if(pagePanels_.empty())return Component::update(dt);if(waitStartTime_>0){waitStartTime_=std::max(0.0f,waitStartTime_-dt);return Component::update(dt);}float maxScroll=0;for(const auto& p:pagePanels_)maxScroll=std::max(maxScroll,p.maxScroll);bool advance=false;
+	if(maxScroll>0){if(currentPosition_<maxScroll)currentPosition_=std::min(maxScroll,currentPosition_+scrollingSpeed_*dt);else{pageEndPause_+=dt;if(pageEndPause_>=startTime_)advance=true;}}else{pageElapsed_+=dt;if(pageElapsed_>=displayTime_)advance=true;}
+	if(advance){
+		if(pagePlan_.size()>1){beginPageTransition_();currentPageIndex_=(currentPageIndex_+1)%pagePlan_.size();buildCurrentPage_();}
+		else if(maxScroll>0){beginPageTransition_();buildCurrentPage_();}
+		else{currentPosition_=0;pageElapsed_=pageEndPause_=0;waitStartTime_=startTime_;}
+	}
+	return Component::update(dt);}
+
+void ReloadableHiscores::drawPages_(){Component::draw();if(baseViewInfo.Alpha<=0)return;SDL_Renderer* r=SDL::getRenderer(baseViewInfo.Monitor);if(!r)return;if(pagePanels_.empty()){if(headerTexture_)renderCurrentTable_(r,baseViewInfo.XRelativeToOrigin(),baseViewInfo.YRelativeToOrigin(),(Uint8)(baseViewInfo.Alpha*255));return;}
+	Uint8 base=(Uint8)(std::clamp(baseViewInfo.Alpha,0.0f,1.0f)*255);float fade=tableCrossfading_?std::clamp(tableCrossfadeTimer_/tableCrossfadeDuration_,0.0f,1.0f):1.0f;if(tableCrossfading_&&previousTableTexture_){SDL_SetTextureAlphaMod(previousTableTexture_,(Uint8)(base*(1-fade)));SDL_FRect d{baseViewInfo.XRelativeToOrigin(),baseViewInfo.YRelativeToOrigin(),(baseViewInfo.Width>0&&baseViewInfo.Width<baseViewInfo.MaxWidth)?baseViewInfo.Width:baseViewInfo.MaxWidth,baseViewInfo.ScaledHeight()};SDL_RenderCopyF(r,previousTableTexture_,nullptr,&d);}renderPanels_(r,baseViewInfo.XRelativeToOrigin(),baseViewInfo.YRelativeToOrigin(),(Uint8)(base*fade));}
+
 void ReloadableHiscores::draw() {
+	drawPages_();
+	return;
+#if 0
 	Component::draw();
 
 	if (baseViewInfo.Alpha <= 0.0f) return;
@@ -862,6 +1075,7 @@ void ReloadableHiscores::draw() {
 	float effectiveViewWidth = (baseViewInfo.Width > 0 && baseViewInfo.Width < baseViewInfo.MaxWidth) ? baseViewInfo.Width : baseViewInfo.MaxWidth;
 	SDL_FRect outlineRect = { baseViewInfo.XRelativeToOrigin(), baseViewInfo.YRelativeToOrigin(), effectiveViewWidth, baseViewInfo.ScaledHeight() };
 	SDL_RenderDrawRectF(renderer, &outlineRect);
+#endif
 #endif
 }
 
