@@ -102,7 +102,7 @@ private:
     // --- Grid baseline computation ---
     void computeGridBaseline_(FontManager* font,
         int totalTables, float compW, float compH,
-        float baseScale, float asc);
+        float baseScale);
 
     // --- State helpers ---
     void beginContext_(bool resetQr = true);      // new game/score context; reset everything

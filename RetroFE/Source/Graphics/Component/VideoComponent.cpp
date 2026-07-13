@@ -51,7 +51,7 @@ VideoComponent::~VideoComponent() {
     VideoComponent::freeGraphicsMemory();
 }
 
-bool VideoComponent::recycleAsVideo(const std::string& path, const std::string& name) {
+bool VideoComponent::recycleAsVideo(const std::string& path, const std::string&) {
     if (path.empty()) return false;
 
     if (videoFile_ == path && videoInst_ && !videoInst_->hasError()) {

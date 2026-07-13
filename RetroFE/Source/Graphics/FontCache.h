@@ -35,6 +35,5 @@ public:
 private:
     std::unordered_map<std::string, std::unique_ptr<FontManager>> fontFaceMap_;
 
-    // MODIFIED: Parameter renamed for clarity.
-    std::string buildFontKey(std::string font, int maxFontSize, SDL_Color color, bool gradient, int outlinePx, int monitor);
+    std::string buildFontKey(std::string font, int maxFontSize, bool gradient, int outlinePx, int monitor);
 };

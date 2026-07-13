@@ -364,12 +364,6 @@ void FontManager::preloadGlyphRange(TTF_Font* font,
 bool FontManager::initialize() {
     clearMips();
 
-    const int MIN_FONT_SIZE_DEFAULT = 24;
-
-    // Determine a safe min floor based on maxFontSize_
-    const int minFontSize =
-        (maxFontSize_ > 0) ? std::min(MIN_FONT_SIZE_DEFAULT, maxFontSize_) : MIN_FONT_SIZE_DEFAULT;
-
     // We only initialize the specific size target requested by PageBuilder.
     int currentSize = maxFontSize_;
 

@@ -6,6 +6,7 @@
 #include <sstream>
 #include <filesystem>
 #include <cstring> // For strlen
+#include <cstddef>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -18,6 +19,7 @@
 #include <fcntl.h>     // For low-level open()
 #include <execinfo.h>  // For backtrace and backtrace_symbols_fd
 #include <csignal>
+#include <cerrno>
 #endif
 
 namespace fs = std::filesystem;
@@ -182,33 +184,53 @@ long __stdcall CrashHandler::windowsExceptionFilter(struct _EXCEPTION_POINTERS* 
 // 5. UNIX SIGNAL LAYER
 // ------------------------------------------------------------------------
 #else
+namespace {
+void writeAll(int fd, const char* data, std::size_t size) {
+    while (size > 0) {
+        const ssize_t bytesWritten = write(fd, data, size);
+        if (bytesWritten > 0) {
+            data += bytesWritten;
+            size -= static_cast<std::size_t>(bytesWritten);
+            continue;
+        }
+        if (bytesWritten < 0 && errno == EINTR) {
+            continue;
+        }
+        break;
+    }
+}
+
+template <std::size_t N>
+void writeAll(int fd, const char (&text)[N]) {
+    writeAll(fd, text, N - 1);
+}
+} // namespace
+
 void CrashHandler::linuxSignalHandler(int signalNumber) {
     int fd = open(g_EmergencyLogPath.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644);
     if (fd >= 0) {
-        const char* header = "\n==================================================\n"
+        constexpr char header[] = "\n==================================================\n"
             "[CRITICAL] [FATAL UNIX SIGNAL DETECTED]\n"
             "Reason: ";
-        write(fd, header, strlen(header));
+        writeAll(fd, header);
 
         switch (signalNumber) {
-            case SIGSEGV: write(fd, "SIGSEGV (Segmentation Fault)\n", 29); break;
-            case SIGFPE:  write(fd, "SIGFPE (Arithmetic Error)\n", 26); break;
-            case SIGILL:  write(fd, "SIGILL (Illegal Instruction)\n", 29); break;
-            case SIGABRT: write(fd, "SIGABRT (Abort Script Call)\n", 28); break;
-            case SIGBUS:  write(fd, "SIGBUS (Bus Alignment Error)\n", 29); break;
-            default:      write(fd, "Unknown System Signal\n", 22); break;
+            case SIGSEGV: writeAll(fd, "SIGSEGV (Segmentation Fault)\n"); break;
+            case SIGFPE:  writeAll(fd, "SIGFPE (Arithmetic Error)\n"); break;
+            case SIGILL:  writeAll(fd, "SIGILL (Illegal Instruction)\n"); break;
+            case SIGABRT: writeAll(fd, "SIGABRT (Abort Script Call)\n"); break;
+            case SIGBUS:  writeAll(fd, "SIGBUS (Bus Alignment Error)\n"); break;
+            default:      writeAll(fd, "Unknown System Signal\n"); break;
         }
 
         void* stackBuffer[64];
         int frames = backtrace(stackBuffer, 64);
 
-        const char* traceHeader = "Stack Trace Call Frames:\n";
-        write(fd, traceHeader, strlen(traceHeader));
+        writeAll(fd, "Stack Trace Call Frames:\n");
 
         backtrace_symbols_fd(stackBuffer, frames, fd);
 
-        const char* footer = "==================================================\n";
-        write(fd, footer, strlen(footer));
+        writeAll(fd, "==================================================\n");
 
 #ifdef __linux__
         fsync(fd);

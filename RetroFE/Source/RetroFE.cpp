@@ -985,7 +985,6 @@ bool RetroFE::run() {
 	l.LEDBlinky(1);
 	l.startScript();
 
-	float deltaTime = 0.0f;     // Compatibility alias for animationDt.
 	float animationDt = 0.0f;   // Smoothed visual delta used by Page::update().
 	float timerDt = 0.0f;       // Real/clamped timer delta used by AttractMode.
 
@@ -2905,8 +2904,6 @@ bool RetroFE::run() {
 		wasPacingActive = pacingActive;
 
 		animationDt = smoothedDt;
-		deltaTime = animationDt;
-
 		// Handle screen updates and attract mode
 		if (running)
 		{

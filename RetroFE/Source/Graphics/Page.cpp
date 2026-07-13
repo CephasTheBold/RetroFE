@@ -2092,14 +2092,14 @@ int Page::getCurrentLayout() const {
 
 
 int Page::getLayoutWidthByMonitor(int monitor) {
-	if (monitor >= 0 && monitor < layoutWidthByMonitor_.size())
+	if (monitor >= 0 && static_cast<std::size_t>(monitor) < layoutWidthByMonitor_.size())
 		return layoutWidthByMonitor_[monitor];
 	return 0;
 }
 
 
 int Page::getLayoutHeightByMonitor(int monitor) {
-	if (monitor >= 0 && monitor < layoutHeightByMonitor_.size())
+	if (monitor >= 0 && static_cast<std::size_t>(monitor) < layoutHeightByMonitor_.size())
 		return layoutHeightByMonitor_[monitor];
 	else
 		return 0;

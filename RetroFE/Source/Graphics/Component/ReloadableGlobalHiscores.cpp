@@ -490,8 +490,7 @@ bool ReloadableGlobalHiscores::update(float dt) {
             FontManager* font = baseViewInfo.font ? baseViewInfo.font : fontInst_;
             if (font && baseViewInfo.Width > 1.f && baseViewInfo.Height > 1.f) {
                 const float baseScale = baseViewInfo.FontSize / (float)font->getMaxHeight();
-                const float asc = (float)font->getMaxAscent();
-                computeGridBaseline_(font, totalTables, baseViewInfo.Width, baseViewInfo.Height, baseScale, asc);
+                computeGridBaseline_(font, totalTables, baseViewInfo.Width, baseViewInfo.Height, baseScale);
                 pageSize = std::max(1, gridBaselineValid_ ? gridBaselineSlots_ : gridPageSize_);
             }
         }
@@ -651,8 +650,7 @@ void ReloadableGlobalHiscores::computeGridBaseline_(
     int totalTables,
     float compW,
     float compH,
-    float baseScale,
-    float asc) {
+    float baseScale) {
     gridBaselineValid_ = false;
     gridBaselineSlots_ = 0;
     gridBaselineCols_ = 0;
@@ -1123,7 +1121,6 @@ void ReloadableGlobalHiscores::reloadTexture() {
 
     // --- Base metrics ---
     const float baseScale = baseViewInfo.FontSize / (float)font->getMaxHeight();
-    const float asc = (float)font->getMaxAscent();
 
     // Keep the fit model identical to the rendered geometry: title, header,
     // and ten data rows each consume a full glyph-height line box.
@@ -1167,7 +1164,7 @@ void ReloadableGlobalHiscores::reloadTexture() {
 
     // Compute grid baseline if needed
     if (!gridBaselineValid_) {
-        computeGridBaseline_(font, totalTables, compW, compH, baseScale, asc);
+        computeGridBaseline_(font, totalTables, compW, compH, baseScale);
     }
     const int cols = gridBaselineCols_;
     const int rows = gridBaselineRows_;

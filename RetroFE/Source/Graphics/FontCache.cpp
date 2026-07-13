@@ -53,7 +53,7 @@ bool FontCache::initialize() const {
 
 FontManager* FontCache::getFont(const std::string& fontPath, int maxFontSize, SDL_Color color, bool gradient, int outlinePx, int monitor) {
     // 1. First, check for a perfect, exact configuration match (Fast path)
-    std::string exactKey = buildFontKey(fontPath, maxFontSize, color, gradient, outlinePx, monitor);
+    std::string exactKey = buildFontKey(fontPath, maxFontSize, gradient, outlinePx, monitor);
     auto it = fontFaceMap_.find(exactKey);
     if (it != fontFaceMap_.end()) {
         return it->second.get();
@@ -89,7 +89,7 @@ FontManager* FontCache::getFont(const std::string& fontPath, int maxFontSize, SD
     return nullptr;
 }
 
-std::string FontCache::buildFontKey(std::string font, int maxFontSize, SDL_Color color, bool gradient, int outlinePx, int monitor) {
+std::string FontCache::buildFontKey(std::string font, int maxFontSize, bool gradient, int outlinePx, int monitor) {
     std::stringstream ss;
     // Fix: Dropped RGB parameters. Color is a rendering property, not a font geometry property.
     ss << font << "_SIZE=" << maxFontSize;
@@ -105,7 +105,7 @@ bool FontCache::loadFont(std::string fontPath, int maxFontSize, SDL_Color color,
         return true; // Short-circuit completely! A valid target asset handle is already warm
     }
 
-    std::string key = buildFontKey(fontPath, maxFontSize, color, gradient, outlinePx, monitor);
+    std::string key = buildFontKey(fontPath, maxFontSize, gradient, outlinePx, monitor);
 
     // Only compile a cold initialization pass if absolutely no larger matching variant exists
     auto font = std::make_unique<FontManager>(fontPath, maxFontSize, color, gradient, outlinePx, monitor);
