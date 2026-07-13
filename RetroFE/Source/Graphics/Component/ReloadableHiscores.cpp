@@ -926,7 +926,13 @@ void ReloadableHiscores::buildCurrentPage_() {
 		for (size_t first=0; first<rowCount; first+=panel.rowsPerTile) {
 			const size_t count=std::min<size_t>(panel.rowsPerTile,rowCount-first);
 			SDL_Texture* tile=SDL_CreateTexture(renderer,SDL_PIXELFORMAT_RGBA8888,SDL_TEXTUREACCESS_TARGET,std::max(1,(int)std::ceil(cellW)),std::max(1,(int)std::ceil(panel.lineStep*count)));
-			if (!tile) continue; SDL_SetTextureBlendMode(tile,SDL_BLENDMODE_BLEND); SDL_SetRenderTarget(renderer,tile); SDL_SetRenderDrawColor(renderer,0,0,0,0); SDL_RenderClear(renderer);
+			if (!tile) {
+				continue;
+			}
+			SDL_SetTextureBlendMode(tile, SDL_BLENDMODE_BLEND);
+			SDL_SetRenderTarget(renderer, tile);
+			SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
+			SDL_RenderClear(renderer);
 			const float pixelH=panel.scale*font->getMaxHeight(); const auto* mip=font->getMipLevelForSize((int)pixelH); if(mip){SDL_SetTextureColorMod(mip->fillTexture,baseViewInfo.textColor.r,baseViewInfo.textColor.g,baseViewInfo.textColor.b);if(mip->dynamicFillTexture)SDL_SetTextureColorMod(mip->dynamicFillTexture,baseViewInfo.textColor.r,baseViewInfo.textColor.g,baseViewInfo.textColor.b);const float k=mip->height>0?pixelH/mip->height:1.0f;
 				for(size_t rr=0;rr<count;++rr){
 					float x=startX,y=panel.lineStep*rr;
@@ -1026,7 +1032,18 @@ bool ReloadableHiscores::updatePages_(float dt){if(tableCrossfading_){tableCross
 	const float currentWidth=(baseViewInfo.Width>0&&baseViewInfo.Width<baseViewInfo.MaxWidth)?baseViewInfo.Width:baseViewInfo.MaxWidth;
 	const bool geometryChanged=std::abs(currentWidth-cachedViewWidth_)>0.5f||std::abs(baseViewInfo.ScaledHeight()-cachedViewHeight_)>0.5f||std::abs(baseViewInfo.FontSize-cachedBaseFontSize_)>0.01f;
 	if(selected!=lastSelectedItem_||selectionEvent||revision!=lastRenderedRevision_||geometryChanged){cancelTableTransition_();lastSelectedItem_=selected;if(!geometryChanged)currentPageIndex_=0;if(selected){auto s=LocalHiScores::getInstance().getTable({selected->name});highScoreTable_=std::move(s.view);lastRenderedRevision_=s.revision;}else{highScoreTable_.tables.clear();lastRenderedRevision_=0;}rebuildPagePlan_();buildCurrentPage_();newItemSelected=false;newScrollItemSelected=false;if(pagePlan_.empty()){SDL_Renderer* r=SDL::getRenderer(baseViewInfo.Monitor);FontManager* f=baseViewInfo.font?baseViewInfo.font:fontInst_;if(r&&f)renderNoDataMessage(r,f);}}
-	if(pagePanels_.empty())return Component::update(dt);if(waitStartTime_>0){waitStartTime_=std::max(0.0f,waitStartTime_-dt);return Component::update(dt);}float maxScroll=0;for(const auto& p:pagePanels_)maxScroll=std::max(maxScroll,p.maxScroll);bool advance=false;
+	if (pagePanels_.empty()) {
+		return Component::update(dt);
+	}
+	if (waitStartTime_ > 0) {
+		waitStartTime_ = std::max(0.0f, waitStartTime_ - dt);
+		return Component::update(dt);
+	}
+	float maxScroll = 0;
+	for (const auto& p : pagePanels_) {
+		maxScroll = std::max(maxScroll, p.maxScroll);
+	}
+	bool advance = false;
 	if(maxScroll>0){if(currentPosition_<maxScroll)currentPosition_=std::min(maxScroll,currentPosition_+scrollingSpeed_*dt);else{pageEndPause_+=dt;if(pageEndPause_>=startTime_)advance=true;}}else{pageElapsed_+=dt;if(pageElapsed_>=displayTime_)advance=true;}
 	if(advance){
 		if(pagePlan_.size()>1){beginPageTransition_();currentPageIndex_=(currentPageIndex_+1)%pagePlan_.size();buildCurrentPage_();}
