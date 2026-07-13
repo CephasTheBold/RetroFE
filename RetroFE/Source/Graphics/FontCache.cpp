@@ -51,7 +51,7 @@ bool FontCache::initialize() const {
     }
 }
 
-FontManager* FontCache::getFont(const std::string& fontPath, int maxFontSize, SDL_Color color, bool gradient, int outlinePx, int monitor) {
+FontManager* FontCache::getFont(const std::string& fontPath, int maxFontSize, bool gradient, int outlinePx, int monitor) {
     // 1. First, check for a perfect, exact configuration match (Fast path)
     std::string exactKey = buildFontKey(fontPath, maxFontSize, gradient, outlinePx, monitor);
     auto it = fontFaceMap_.find(exactKey);
@@ -101,7 +101,7 @@ std::string FontCache::buildFontKey(std::string font, int maxFontSize, bool grad
 
 bool FontCache::loadFont(std::string fontPath, int maxFontSize, SDL_Color color, bool gradient, int outlinePx, int monitor) {
     // Check if we already have an identical or larger font available that satisfies this layout component
-    if (getFont(fontPath, maxFontSize, color, gradient, outlinePx, monitor) != nullptr) {
+    if (getFont(fontPath, maxFontSize, gradient, outlinePx, monitor) != nullptr) {
         return true; // Short-circuit completely! A valid target asset handle is already warm
     }
 

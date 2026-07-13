@@ -30,7 +30,7 @@ public:
 
     // MODIFIED: Parameter renamed to reflect it's the maximum size for the mipmap chain.
     bool loadFont(std::string fontPath, int maxFontSize, SDL_Color color, bool gradient, int outlinePx, int monitor);
-    FontManager* getFont(const std::string& fontPath, int maxFontSize, SDL_Color color, bool gradient, int outlinePx, int monitor);
+    FontManager* getFont(const std::string& fontPath, int maxFontSize, bool gradient, int outlinePx, int monitor);
 
 private:
     std::unordered_map<std::string, std::unique_ptr<FontManager>> fontFaceMap_;

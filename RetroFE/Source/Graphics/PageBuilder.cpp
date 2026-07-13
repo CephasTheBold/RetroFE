@@ -992,7 +992,7 @@ FontManager* PageBuilder::addFont(const xml_node<>* component, const xml_node<>*
 	SDL_Color whiteBaseline{ 255, 255, 255, 255 };
 
 	fontCache_->loadFont(fontName, fontSize, whiteBaseline, fontGradient, fontOutline, monitor);
-	return fontCache_->getFont(fontName, fontSize, whiteBaseline, fontGradient, fontOutline, monitor);
+	return fontCache_->getFont(fontName, fontSize, fontGradient, fontOutline, monitor);
 }
 
 void PageBuilder::loadTweens(Component* c, xml_node<>* componentXml) {
