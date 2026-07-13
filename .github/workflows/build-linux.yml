@@ -219,7 +219,8 @@ jobs:
 
           while IFS= read -r -d '' file_path; do
             if file -b "${file_path}" | grep -q 'ELF'; then
-              readelf --version-info "${file_path}" >> "${symbols_file}" 2>/dev/null || true
+              objdump -T "${file_path}" 2>/dev/null |
+              grep '\*UND\*' >> "${symbols_file}" || true
             fi
           done < <(find "${appdir}" -type f -print0)
 
