@@ -104,6 +104,9 @@ private:
     bool tableCrossfading_;
     float tableCrossfadeTimer_;
     float tableCrossfadeDuration_;
+    bool showingNoData_;
+    float noDataElapsed_;
+    bool wasComponentVisible_;
 
     // Cached Data
     float lastScale_;
