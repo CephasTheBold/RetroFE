@@ -47,6 +47,8 @@ jobs:
             libusb-1.0-0
             libusb-1.0-0-dev
             libevdev-dev
+            libserialport-dev
+            libcurl4-openssl-dev
             flatpak
             flatpak-builder
           version: ubuntu-24.04
@@ -78,6 +80,8 @@ jobs:
             libusb-1.0-0 \
             libusb-1.0-0-dev \
             libevdev-dev \
+            libserialport-dev
+            libcurl4-openssl-dev
             flatpak \
             flatpak-builder
 
