@@ -149,6 +149,27 @@ jobs:
           #!/bin/sh
           set -eu
 
+          if [ "$#" -lt 1 ]; then
+              echo "Usage: flatpak run org.coinops.Runtime <CoinOPS build folder>"
+              exit 1
+          fi
+
+          COINOPS_ROOT="$1"
+          shift
+
+          if [ ! -d "$COINOPS_ROOT" ]; then
+              echo "CoinOPS build folder not found: $COINOPS_ROOT"
+              exit 1
+          fi
+
+          if [ ! -f "$COINOPS_ROOT/settings.conf" ]; then
+              echo "settings.conf not found in CoinOPS build folder: $COINOPS_ROOT"
+              exit 1
+          fi
+
+          export RETROFE_PATH="$COINOPS_ROOT"
+          cd "$COINOPS_ROOT"
+
           exec /app/retrofe/AppRun "$@"
           EOF
 
