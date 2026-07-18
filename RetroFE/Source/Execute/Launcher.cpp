@@ -193,10 +193,13 @@ bool Launcher::run(std::string collection, Item* collectionItem, Page* currentPa
     executablePath = replaceVariables(executablePath, selectedItemsPath, collectionItem->name, Utils::getFileName(selectedItemsPath), selectedItemsDirectory, collection);
     LOG_INFO("Launcher", "Path after variable replacement: " + executablePath);
 
-    // 2) Absolutize executable path (relative to RetroFE root if needed)
+    // 2) Absolutize executable path only when it is an actual relative path.
+    // Bare executable names such as "mame" are left unchanged so execvp()
+    // can resolve them through PATH.
     std::filesystem::path finalExePath(executablePath);
-    if (!finalExePath.is_absolute()) {
-        finalExePath = std::filesystem::path(Configuration::absolutePath) / executablePath;
+
+    if (!finalExePath.is_absolute() && finalExePath.has_parent_path()) {
+        finalExePath = std::filesystem::path(Configuration::absolutePath) / finalExePath;
         executablePath = finalExePath.string();
         LOG_INFO("Launcher", "Resolved relative executable path to: " + executablePath);
     }
