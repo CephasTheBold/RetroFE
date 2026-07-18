@@ -1,23 +1,19 @@
-name: CoinOPS Runtime Flatpak
+name: CoinOPS Runtime AppImage Test
 
 on:
   workflow_dispatch:
 
 jobs:
-  build-flatpak:
+  build:
     runs-on: ubuntu-24.04
-    name: Build CoinOPS Runtime Flatpak x86_64
+    name: Build CoinOPS Runtime x86_64
 
     steps:
-      # ------------------------------------------------------------
-      # Source
-      # ------------------------------------------------------------
-
       - name: Checkout code
         uses: actions/checkout@v4
 
       # ------------------------------------------------------------
-      # Build RetroFE exactly like the known-working AppImage build
+      # Cache downloaded apt packages
       # ------------------------------------------------------------
 
       - name: Cache apt packages
@@ -28,15 +24,15 @@ jobs:
             zlib1g-dev
             libglib2.0-0
             libglib2.0-dev
-            libsdl2-2.0
-            libsdl2-mixer-2.0
-            libsdl2-image-2.0
-            libsdl2-ttf-2.0
+            libsdl2-2.0-0
+            libsdl2-mixer-2.0-0
+            libsdl2-image-2.0-0
+            libsdl2-ttf-2.0-0
             libsdl2-dev
             libsdl2-mixer-dev
             libsdl2-image-dev
             libsdl2-ttf-dev
-            libgstreamer1.0
+            libgstreamer1.0-0
             libgstreamer1.0-dev
             libgstreamer-plugins-base1.0-dev
             gstreamer1.0-plugins-base
@@ -47,29 +43,39 @@ jobs:
             libusb-1.0-0
             libusb-1.0-0-dev
             libevdev-dev
+            libudev-dev
             libserialport-dev
             libcurl4-openssl-dev
-            flatpak
-            flatpak-builder
-          version: ubuntu-24.04
+            mame
+            patchelf
+            strace
+            dbus-x11
+            wget
+          version: ubuntu-24.04-coinops-runtime-v1
+
+      # ------------------------------------------------------------
+      # Install RetroFE build dependencies + stock MAME
+      # ------------------------------------------------------------
 
       - name: Install dependencies
         run: |
+          sudo add-apt-repository -y universe
           sudo apt-get update
+
           sudo apt-get install -y \
             cmake \
             zlib1g-dev \
             libglib2.0-0 \
             libglib2.0-dev \
-            libsdl2-2.0 \
-            libsdl2-mixer-2.0 \
-            libsdl2-image-2.0 \
-            libsdl2-ttf-2.0 \
+            libsdl2-2.0-0 \
+            libsdl2-mixer-2.0-0 \
+            libsdl2-image-2.0-0 \
+            libsdl2-ttf-2.0-0 \
             libsdl2-dev \
             libsdl2-mixer-dev \
             libsdl2-image-dev \
             libsdl2-ttf-dev \
-            libgstreamer1.0 \
+            libgstreamer1.0-0 \
             libgstreamer1.0-dev \
             libgstreamer-plugins-base1.0-dev \
             gstreamer1.0-plugins-base \
@@ -80,10 +86,30 @@ jobs:
             libusb-1.0-0 \
             libusb-1.0-0-dev \
             libevdev-dev \
+            libudev-dev \
             libserialport-dev \
             libcurl4-openssl-dev \
-            flatpak \
-            flatpak-builder
+            mame \
+            patchelf \
+            strace \
+            dbus-x11 \
+            wget
+
+      # ------------------------------------------------------------
+      # Cache RetroFE object files
+      # ------------------------------------------------------------
+
+      - name: Cache RetroFE build
+        uses: actions/cache@v4
+        with:
+          path: RetroFE/Build
+          key: retrofe-runtime-build-${{ runner.os }}-${{ hashFiles('RetroFE/Source/**', 'RetroFE/CMake/**', 'RetroFE/ThirdParty/**') }}
+          restore-keys: |
+            retrofe-runtime-build-${{ runner.os }}-
+
+      # ------------------------------------------------------------
+      # Build RetroFE
+      # ------------------------------------------------------------
 
       - name: Configure RetroFE
         run: |
@@ -91,66 +117,156 @@ jobs:
 
       - name: Build RetroFE
         run: |
-          cmake --build RetroFE/Build
+          cmake --build RetroFE/Build --parallel
 
       # ------------------------------------------------------------
-      # Use linuxdeploy to create the same dependency-complete AppDir
-      # used by the existing AppImage workflow.
-      #
-      # Important: no --output appimage here.
-      # We want the unpacked AppDir as input to Flatpak.
+      # Locate and verify both binaries
       # ------------------------------------------------------------
 
-      - name: Install linuxdeploy
+      - name: Locate binaries
+        id: binaries
+        run: |
+          RETROFE_BINARY="$PWD/RetroFE/Build/retrofe"
+          MAME_BINARY="$(command -v mame)"
+
+          if [ ! -x "$RETROFE_BINARY" ]; then
+            echo "RetroFE binary not found or not executable:"
+            echo "$RETROFE_BINARY"
+            exit 1
+          fi
+
+          if [ -z "$MAME_BINARY" ] || [ ! -x "$MAME_BINARY" ]; then
+            echo "MAME binary not found"
+            exit 1
+          fi
+
+          echo "RetroFE: $RETROFE_BINARY"
+          echo "MAME:    $MAME_BINARY"
+
+          "$MAME_BINARY" -version || true
+
+          echo "retrofe=$RETROFE_BINARY" >> "$GITHUB_OUTPUT"
+          echo "mame=$MAME_BINARY" >> "$GITHUB_OUTPUT"
+
+      # ------------------------------------------------------------
+      # Download quick-sharun
+      # ------------------------------------------------------------
+
+      - name: Install quick-sharun
         run: |
           wget \
-            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage \
-            -O linuxdeploy-x86_64.AppImage
+            https://raw.githubusercontent.com/pkgforge-dev/Anylinux-AppImages/main/useful-tools/quick-sharun.sh \
+            -O quick-sharun.sh
 
-          chmod +x linuxdeploy-x86_64.AppImage
-
-      - name: Install linuxdeploy GStreamer plugin
-        run: |
-          wget \
-            https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gstreamer/refs/heads/master/linuxdeploy-plugin-gstreamer.sh
-
-          chmod +x linuxdeploy-plugin-gstreamer.sh
-
-      - name: Stage RetroFE runtime
-        run: |
-          ./linuxdeploy-x86_64.AppImage \
-            --executable RetroFE/Build/retrofe \
-            --appdir RetroFE/Build/AppDir \
-            --plugin gstreamer \
-            --desktop-file Package/Environment/Linux/retrofe.desktop \
-            --icon-file Package/Environment/Common/RetroFE.png
-
-          echo "Contents of staged AppDir:"
-          find RetroFE/Build/AppDir -maxdepth 3 -type f | sort | head -200
+          chmod +x quick-sharun.sh
 
       # ------------------------------------------------------------
-      # Create the initial CoinOPS bootstrap.
+      # Create desktop metadata
       #
-      # For version 0 this simply executes RetroFE's staged AppRun.
-      # Later this becomes:
+      # We generate our own entry because this is now CoinOPS Runtime,
+      # not a normal standalone RetroFE AppImage.
+      # ------------------------------------------------------------
+
+      - name: Create AppImage metadata
+        run: |
+          mkdir -p Packaging/Runtime
+
+          cat > Packaging/Runtime/coinops-runtime.desktop <<'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=CoinOPS Runtime
+          Comment=Portable CoinOPS Runtime
+          Exec=coinops-runtime
+          Icon=coinops-runtime
+          Terminal=false
+          Categories=Game;
+          EOF
+
+          cp Package/Environment/Common/RetroFE.png \
+            Packaging/Runtime/coinops-runtime.png
+
+      # ------------------------------------------------------------
+      # Deploy RetroFE + MAME into ONE sharun environment
       #
-      #   coinops-launcher --pack <id>
-      #       -> locate data pack
-      #       -> set RetroFE root
-      #       -> launch RetroFE
+      # quick-sharun inspects both executables and collects their
+      # required libraries into the same AppDir.
+      # ------------------------------------------------------------
+
+      - name: Create combined CoinOPS Runtime AppDir
+        env:
+          RETROFE_BINARY: ${{ steps.binaries.outputs.retrofe }}
+          MAME_BINARY: ${{ steps.binaries.outputs.mame }}
+        run: |
+          export APPDIR="$PWD/AppDir"
+
+          export DEPLOY_SDL=1
+          export DEPLOY_GSTREAMER=1
+          export DEPLOY_OPENGL=1
+
+          export DESKTOP="$PWD/Packaging/Runtime/coinops-runtime.desktop"
+          export ICON="$PWD/Packaging/Runtime/coinops-runtime.png"
+
+          ./quick-sharun.sh \
+            "$RETROFE_BINARY" \
+            "$MAME_BINARY"
+
+      # ------------------------------------------------------------
+      # Show us exactly what quick-sharun produced.
       #
+      # This is useful during the experiment because we want to verify
+      # the exact internal names/paths before integrating custom MAME.
+      # ------------------------------------------------------------
+
+      - name: Inspect AppDir
+        run: |
+          echo "---- AppDir root ----"
+          ls -la AppDir
+
+          echo
+          echo "---- AppDir/bin ----"
+          ls -la AppDir/bin || true
+
+          echo
+          echo "---- sharun ----"
+          find AppDir -maxdepth 2 \
+            \( -name sharun -o -name retrofe -o -name mame \) \
+            -print
+
+      # ------------------------------------------------------------
+      # Create our own CoinOPS AppRun
+      #
+      # Usage:
+      #
+      #   ./CoinOPS-Runtime-x86_64.AppImage "/home/deck/CoinOPS Arise"
+      #
+      # RETROFE_PATH tells RetroFE where settings.conf, collections,
+      # layouts, media, etc. live.
+      #
+      # IMPORTANT:
+      # RetroFE is launched THROUGH sharun rather than directly, so the
+      # bundled libraries, GStreamer environment and PATH are active.
+      #
+      # That PATH should also allow RetroFE to later execute:
+      #
+      #   mame
+      #
+      # from inside the same AppImage.
       # ------------------------------------------------------------
 
       - name: Create CoinOPS runtime launcher
         run: |
-          mkdir -p Packaging/Flatpak
+          rm -f AppDir/AppRun
 
-          cat > Packaging/Flatpak/coinops-launcher <<'EOF'
+          cat > AppDir/AppRun <<'EOF'
           #!/bin/sh
           set -eu
 
           if [ "$#" -lt 1 ]; then
-              echo "Usage: flatpak run org.coinops.Runtime <CoinOPS build folder>"
+              echo "Usage:"
+              echo "  CoinOPS-Runtime.AppImage <CoinOPS build folder>"
+              echo
+              echo "Example:"
+              echo '  ./CoinOPS-Runtime.AppImage "$HOME/CoinOPS Arise"'
               exit 1
           fi
 
@@ -158,145 +274,95 @@ jobs:
           shift
 
           if [ ! -d "$COINOPS_ROOT" ]; then
-              echo "CoinOPS build folder not found: $COINOPS_ROOT"
+              echo "CoinOPS build folder not found:"
+              echo "  $COINOPS_ROOT"
               exit 1
           fi
 
           if [ ! -f "$COINOPS_ROOT/settings.conf" ]; then
-              echo "settings.conf not found in CoinOPS build folder: $COINOPS_ROOT"
+              echo "settings.conf not found in CoinOPS build folder:"
+              echo "  $COINOPS_ROOT"
               exit 1
           fi
 
           export RETROFE_PATH="$COINOPS_ROOT"
+
           cd "$COINOPS_ROOT"
 
-          exec /app/retrofe/AppRun "$@"
+          exec "$APPDIR/sharun" retrofe "$@"
           EOF
 
-          chmod +x Packaging/Flatpak/coinops-launcher
+          chmod +x AppDir/AppRun
 
       # ------------------------------------------------------------
-      # Create Flatpak manifest.
+      # Verify the staged runtime before creating the AppImage
+      # ------------------------------------------------------------
+
+      - name: Verify staged runtime
+        run: |
+          test -x AppDir/AppRun
+          test -x AppDir/sharun
+
+          echo "Checking RetroFE through sharun..."
+          AppDir/sharun retrofe --version || true
+
+          echo
+          echo "Checking MAME through sharun..."
+          AppDir/sharun mame -version
+
+      # ------------------------------------------------------------
+      # Build final AppImage
       #
-      # We initially retain the complete linuxdeploy AppDir unchanged
-      # under /app/retrofe. This minimizes differences from the
-      # already-working AppImage.
-      # ------------------------------------------------------------
-
-      - name: Create Flatpak manifest
-        run: |
-          cat > Packaging/Flatpak/org.coinops.Runtime.yml <<'EOF'
-          id: org.coinops.Runtime
-
-          runtime: org.freedesktop.Platform
-          runtime-version: '25.08'
-          sdk: org.freedesktop.Sdk
-
-          command: coinops-launcher
-
-          finish-args:
-            # Display
-            - --share=ipc
-            - --socket=wayland
-            - --socket=fallback-x11
-
-            # Audio
-            - --socket=pulseaudio
-
-            # Controllers / input / GPU devices
-            - --device=all
-
-            # CoinOPS data may live in the user's home directory
-            # or on removable Steam Deck storage.
-            - --filesystem=home
-            - --filesystem=/run/media
-
-          modules:
-            - name: coinops-runtime
-              buildsystem: simple
-
-              build-commands:
-                - mkdir -p /app/retrofe
-                - cp -a retrofe/. /app/retrofe/
-                - install -Dm755 coinops-launcher /app/bin/coinops-launcher
-
-              sources:
-                - type: dir
-                  path: ../../RetroFE/Build/AppDir
-                  dest: retrofe
-
-                - type: file
-                  path: coinops-launcher
-          EOF
-
-          cat Packaging/Flatpak/org.coinops.Runtime.yml
-
-      # ------------------------------------------------------------
-      # Install the Flatpak SDK/runtime used to construct the package.
-      # ------------------------------------------------------------
-
-      - name: Configure Flathub
-        run: |
-          flatpak remote-add \
-            --user \
-            --if-not-exists \
-            flathub \
-            https://flathub.org/repo/flathub.flatpakrepo
-
-      - name: Install Flatpak SDK
-        run: |
-          flatpak install \
-            --user \
-            --noninteractive \
-            flathub \
-            org.freedesktop.Platform//25.08 \
-            org.freedesktop.Sdk//25.08
-
-      # ------------------------------------------------------------
-      # Build/export to a local Flatpak repository.
-      # ------------------------------------------------------------
-
-      - name: Build CoinOPS Runtime Flatpak
-        run: |
-          flatpak-builder \
-            --user \
-            --force-clean \
-            --install-deps-from=flathub \
-            --repo=flatpak-repo \
-            flatpak-build \
-            Packaging/Flatpak/org.coinops.Runtime.yml
-
-      # ------------------------------------------------------------
-      # Turn the local repository commit into one distributable file.
+      # This follows the same basic two-stage method used by the
+      # pkgforge MAME-AppImage project:
       #
-      # The runtime repo metadata tells SteamOS where to obtain the
-      # Freedesktop runtime when the user installs this bundle.
+      #   quick-sharun <binaries>
+      #   quick-sharun --make-appimage
       # ------------------------------------------------------------
 
-      - name: Create Flatpak bundle
+      - name: Build CoinOPS Runtime AppImage
         run: |
-          flatpak build-bundle \
-            flatpak-repo \
-            CoinOPS-Runtime-x86_64.flatpak \
-            org.coinops.Runtime \
-            --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo
+          export APPDIR="$PWD/AppDir"
+          export APPNAME="CoinOPS-Runtime"
+          export ARCH="x86_64"
+          export OUTPATH="$PWD/dist"
+
+          export DESKTOP="$PWD/Packaging/Runtime/coinops-runtime.desktop"
+          export ICON="$PWD/Packaging/Runtime/coinops-runtime.png"
+
+          mkdir -p "$OUTPATH"
+
+          ./quick-sharun.sh --make-appimage
+
+          echo
+          echo "---- Generated files ----"
+          find dist -maxdepth 1 -type f -ls
 
       # ------------------------------------------------------------
-      # Basic sanity information
+      # Give the artifact a predictable filename
       # ------------------------------------------------------------
 
-      - name: Show bundle information
+      - name: Normalize AppImage filename
         run: |
-          ls -lh CoinOPS-Runtime-x86_64.flatpak
-          flatpak build-bundle --help >/dev/null
+          APPIMAGE="$(find dist -maxdepth 1 -type f -name '*.AppImage' | head -n 1)"
+
+          if [ -z "$APPIMAGE" ]; then
+            echo "No AppImage was generated"
+            exit 1
+          fi
+
+          mv "$APPIMAGE" CoinOPS-Runtime-x86_64.AppImage
+          chmod +x CoinOPS-Runtime-x86_64.AppImage
+
+          ls -lh CoinOPS-Runtime-x86_64.AppImage
 
       # ------------------------------------------------------------
-      # GitHub Actions artifact
+      # Upload artifact
       # ------------------------------------------------------------
 
-      - name: Upload CoinOPS Runtime Flatpak
+      - name: Upload CoinOPS Runtime AppImage
         uses: actions/upload-artifact@v4
         with:
-          name: CoinOPS-Runtime-x86_64.flatpak
-          path: CoinOPS-Runtime-x86_64.flatpak
+          name: CoinOPS-Runtime-x86_64.AppImage
+          path: CoinOPS-Runtime-x86_64.AppImage
           if-no-files-found: error
