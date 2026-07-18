@@ -201,11 +201,11 @@ jobs:
 
               sources:
                 - type: dir
-                  path: RetroFE/Build/AppDir
+                  path: ../../RetroFE/Build/AppDir
                   dest: retrofe
 
                 - type: file
-                  path: Packaging/Flatpak/coinops-launcher
+                  path: coinops-launcher
           EOF
 
           cat Packaging/Flatpak/org.coinops.Runtime.yml
