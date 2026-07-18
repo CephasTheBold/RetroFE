@@ -176,7 +176,7 @@ jobs:
           Type=Application
           Name=CoinOPS Runtime
           Comment=Portable CoinOPS Runtime
-          Exec=coinops-runtime
+          Exec=retrofe
           Icon=coinops-runtime
           Terminal=false
           Categories=Game;
