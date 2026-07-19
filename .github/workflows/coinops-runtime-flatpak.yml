@@ -206,6 +206,11 @@ jobs:
           export DESKTOP="$PWD/Packaging/Runtime/coinops-runtime.desktop"
           export ICON="$PWD/Packaging/Runtime/coinops-runtime.png"
 
+          # Only runtime-trace RetroFE.
+          # MAME's normal ELF dependencies are still collected via ldd.
+          export STRACE_BINARY="retrofe"
+          export STRACE_TIME=5
+
           ./quick-sharun.sh \
             "$RETROFE_BINARY" \
             "$MAME_BINARY"
