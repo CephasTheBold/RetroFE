@@ -451,8 +451,12 @@ jobs:
                     echo "[FOUND] minizip $(pkg-config --modversion minizip)"
                   else
                     echo "[NOT FOUND] minizip"
-                    echo "RetroFE configure/build will determine whether it must be bundled."
                   fi
+
+                  echo
+                  echo "--- Module source layout ---"
+                  pwd
+                  find . -maxdepth 2 -type d | sort | head -100
 
                 - |
                   echo
@@ -461,8 +465,8 @@ jobs:
                   echo "============================================================"
 
                   cmake \
-                    -S RetroFE/Source \
-                    -B RetroFE/Build \
+                    -S Source \
+                    -B Build \
                     -DCMAKE_BUILD_TYPE=Release \
                     -DCMAKE_PREFIX_PATH=/app \
                     -DCMAKE_INSTALL_PREFIX=/app
@@ -474,12 +478,12 @@ jobs:
                   echo "============================================================"
 
                   cmake \
-                    --build RetroFE/Build \
+                    --build Build \
                     --parallel
 
-                - test -x RetroFE/Build/retrofe
+                - test -x Build/retrofe
 
-                - install -Dm755 RetroFE/Build/retrofe /app/bin/retrofe
+                - install -Dm755 Build/retrofe /app/bin/retrofe
 
               sources:
                 - type: dir
