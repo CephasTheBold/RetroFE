@@ -1,67 +1,91 @@
-name: Linux AppImages
+name: CoinOPS Runtime Flatpak
 
 on:
   workflow_dispatch:
 
-permissions:
-  contents: read
-
-concurrency:
-  group: appimage-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
-env:
-  BUILD_TYPE: Release
-  APPIMAGE_EXTRACT_AND_RUN: "1"
-  LINUXDEPLOY_CHANNEL: continuous
-  GSTREAMER_PLUGIN_COMMIT: 2a2e67491c32995a3f279ad0ecbe77abd512b42a
-
 jobs:
   build:
-    name: Build ${{ matrix.arch }}
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
-
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: ubuntu-24.04
-            arch: x86_64
-            linuxdeploy_arch: x86_64
-            artifact_name: RetroFE-x86_64.AppImage
-
-          - runner: ubuntu-24.04-arm
-            arch: arm64
-            linuxdeploy_arch: aarch64
-            artifact_name: RetroFE-arm64.AppImage
+    runs-on: ubuntu-26.04
+    name: Build CoinOPS Runtime x86_64
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
+      # ============================================================
+      # Checkout RetroFE
+      # ============================================================
 
-      - name: Install build and runtime dependencies
-        shell: bash
+      - name: Checkout RetroFE
+        uses: actions/checkout@v4
+
+      # ============================================================
+      # Checkout custom MAME fork
+      # ============================================================
+
+      - name: Checkout MAME fork
+        uses: actions/checkout@v4
+        with:
+          repository: CoinOPS-Official/MAME-FFMpeg
+          ref: mame0285-local
+          path: MAME
+          token: ${{ secrets.MAME_REPO_TOKEN }}
+
+      # ============================================================
+      # Determine exact MAME revision
+      # ============================================================
+
+      - name: Get MAME revision
+        id: mame-rev
+        working-directory: MAME
         run: |
-          set -euo pipefail
+          MAME_SHA="$(git rev-parse HEAD)"
 
+          echo "MAME revision: $MAME_SHA"
+          echo "sha=$MAME_SHA" >> "$GITHUB_OUTPUT"
+
+      # ============================================================
+      # Restore cached MAME binary
+      # ============================================================
+
+      - name: Cache custom MAME
+        id: cache-mame
+        uses: actions/cache@v4
+        with:
+          path: MAME/mame
+          key: mame-linux-x64-${{ steps.mame-rev.outputs.sha }}-ffmpeg0-v1
+
+      # ============================================================
+      # Host build/staging dependencies
+      #
+      # GStreamer requirements:
+      #
+      # Build:
+      #   libgstreamer1.0-dev
+      #   libgstreamer-plugins-base1.0-dev
+      #
+      # Runtime/plugin families used by RetroFE:
+      #   libgstreamer1.0-0
+      #   gstreamer1.0-plugins-base
+      #   gstreamer1.0-plugins-good
+      #   gstreamer1.0-libav
+      # ============================================================
+
+      - name: Install dependencies
+        run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+
+          sudo apt-get install -y \
             build-essential \
-            binutils \
-            ca-certificates \
+            git \
+            python3 \
             cmake \
-            curl \
-            file \
-            ninja-build \
-            patchelf \
-            pkg-config \
             zlib1g-dev \
             libglib2.0-dev \
             libsdl2-dev \
-            libsdl2-image-dev \
             libsdl2-mixer-dev \
+            libsdl2-image-dev \
             libsdl2-ttf-dev \
+            libfontconfig-dev \
+            libpulse-dev \
+            libgstreamer1.0-0 \
             libgstreamer1.0-dev \
             libgstreamer-plugins-base1.0-dev \
             gstreamer1.0-plugins-base \
@@ -71,202 +95,697 @@ jobs:
             libwebp-dev \
             libusb-1.0-0-dev \
             libevdev-dev \
+            libudev-dev \
             libserialport-dev \
-            libcurl4-openssl-dev
+            libcurl4-openssl-dev \
+            patchelf \
+            strace \
+            wget \
+            flatpak \
+            flatpak-builder
 
-      - name: Configure CMake
-        shell: bash
+      # ============================================================
+      # Cache RetroFE build
+      # ============================================================
+
+      - name: Cache RetroFE build
+        uses: actions/cache@v4
+        with:
+          path: RetroFE/Build
+          key: retrofe-flatpak-build-${{ runner.os }}-${{ hashFiles('RetroFE/Source/**', 'RetroFE/CMake/**', 'RetroFE/ThirdParty/**') }}
+          restore-keys: |
+            retrofe-flatpak-build-${{ runner.os }}-
+
+      # ============================================================
+      # Build RetroFE
+      # ============================================================
+
+      - name: Configure RetroFE
         run: |
-          set -euo pipefail
-
-          cmake \
-            -S RetroFE/Source \
-            -B RetroFE/Build \
-            -G Ninja \
-            -DCMAKE_BUILD_TYPE="${BUILD_TYPE}"
+          cmake RetroFE/Source -BRetroFE/Build
 
       - name: Build RetroFE
-        shell: bash
         run: |
-          set -euo pipefail
           cmake --build RetroFE/Build --parallel
 
-      - name: Download linuxdeploy
-        shell: bash
+      # ============================================================
+      # Build custom MAME
+      #
+      # Skipped when exact binary is restored from cache.
+      # ============================================================
+
+      - name: Build custom MAME
+        if: steps.cache-mame.outputs.cache-hit != 'true'
+        working-directory: MAME
         run: |
-          set -euo pipefail
+          echo "No cached MAME binary found."
+          echo "Building revision:"
+          git rev-parse HEAD
 
-          filename="linuxdeploy-${{ matrix.linuxdeploy_arch }}.AppImage"
-          url="https://github.com/linuxdeploy/linuxdeploy/releases/download/${LINUXDEPLOY_CHANNEL}/${filename}"
+          make \
+            -j3 \
+            REGENIE=1 \
+            USE_FFMPEG=0 \
+            TOOLS=0 \
+            TESTS=0 \
+            BENCHMARKS=0 \
+            USE_QTDEBUG=0 \
+            NO_USE_MIDI=1 \
+            NO_USE_PORTAUDIO=1 \
+            USE_TAPTUN=0 \
+            USE_PCAP=0
 
-          rm -f "${filename}" "${filename}.tmp"
+          test -x mame
 
-          curl \
-            --fail \
-            --location \
-            --retry 5 \
-            --retry-all-errors \
-            --connect-timeout 20 \
-            --max-time 180 \
-            "${url}" \
-            --output "${filename}.tmp"
+      # ============================================================
+      # Verify MAME
+      # ============================================================
 
-          test -s "${filename}.tmp"
-          mv "${filename}.tmp" "${filename}"
-          chmod +x "${filename}"
-
-          echo "LINUXDEPLOY=${GITHUB_WORKSPACE}/${filename}" >> "${GITHUB_ENV}"
-
-      - name: Download pinned GStreamer plugin
-        shell: bash
+      - name: Verify custom MAME
+        working-directory: MAME
         run: |
-          set -euo pipefail
+          test -x mame
 
-          curl \
-            --fail \
-            --location \
-            --retry 5 \
-            --retry-all-errors \
-            "https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gstreamer/${GSTREAMER_PLUGIN_COMMIT}/linuxdeploy-plugin-gstreamer.sh" \
-            --output linuxdeploy-plugin-gstreamer.sh
+          echo "MAME cache hit:"
+          echo "${{ steps.cache-mame.outputs.cache-hit }}"
 
-          test -s linuxdeploy-plugin-gstreamer.sh
-          chmod +x linuxdeploy-plugin-gstreamer.sh
+          echo
+          echo "Custom MAME version:"
+          ./mame -version
 
-      - name: Package AppImage
-        shell: bash
+          echo
+          echo "MAME source revision:"
+          git rev-parse HEAD
+
+          echo
+          echo "MAME binary size:"
+          ls -lh mame
+          du -h mame
+
+      # ============================================================
+      # Locate binaries
+      # ============================================================
+
+      - name: Locate binaries
+        id: binaries
         run: |
-          set -euo pipefail
+          RETROFE_BINARY="$PWD/RetroFE/Build/retrofe"
+          MAME_BINARY="$PWD/MAME/mame"
 
-          appdir="${GITHUB_WORKSPACE}/RetroFE/Build/AppDir"
-          output="${GITHUB_WORKSPACE}/${{ matrix.artifact_name }}"
-
-          rm -rf "${appdir}"
-          rm -f "${output}"
-
-          "${LINUXDEPLOY}" \
-            --executable RetroFE/Build/retrofe \
-            --appdir "${appdir}" \
-            --plugin gstreamer \
-            --desktop-file Package/Environment/Linux/retrofe.desktop \
-            --icon-file Package/Environment/Common/RetroFE.png \
-            --output appimage
-
-          mapfile -t generated < <(
-            find "${GITHUB_WORKSPACE}" \
-              -maxdepth 1 \
-              -type f \
-              -name '*.AppImage' \
-              ! -name 'linuxdeploy-*.AppImage' \
-              -print
-          )
-
-          if (( ${#generated[@]} != 1 )); then
-            echo "Expected exactly one generated AppImage, found ${#generated[@]}:"
-            printf '  %s\n' "${generated[@]}"
+          if [ ! -x "$RETROFE_BINARY" ]; then
+            echo "RetroFE binary not found:"
+            echo "$RETROFE_BINARY"
             exit 1
           fi
 
-          if [[ "${generated[0]}" != "${output}" ]]; then
-            mv "${generated[0]}" "${output}"
+          if [ ! -x "$MAME_BINARY" ]; then
+            echo "Custom MAME binary not found:"
+            echo "$MAME_BINARY"
+            exit 1
           fi
 
-          chmod +x "${output}"
+          echo "RetroFE:"
+          "$RETROFE_BINARY" --version || true
 
-      - name: Validate packaged files
-        shell: bash
+          echo
+          echo "Custom MAME:"
+          "$MAME_BINARY" -version
+
+          echo "retrofe=$RETROFE_BINARY" >> "$GITHUB_OUTPUT"
+          echo "mame=$MAME_BINARY" >> "$GITHUB_OUTPUT"
+
+      # ============================================================
+      # Inspect direct dependencies
+      # ============================================================
+
+      - name: Inspect binary dependencies
+        env:
+          RETROFE_BINARY: ${{ steps.binaries.outputs.retrofe }}
+          MAME_BINARY: ${{ steps.binaries.outputs.mame }}
         run: |
-          set -euo pipefail
+          echo "============================================================"
+          echo "RetroFE direct dependencies"
+          echo "============================================================"
+          ldd "$RETROFE_BINARY" | sort
 
-          appdir="${GITHUB_WORKSPACE}/RetroFE/Build/AppDir"
-          executable="${appdir}/usr/bin/retrofe"
-          plugin_dir="${appdir}/usr/lib/gstreamer-1.0"
-          scanner="${appdir}/usr/lib/gstreamer1.0/gstreamer-1.0/gst-plugin-scanner"
+          echo
+          echo "============================================================"
+          echo "MAME direct dependencies"
+          echo "============================================================"
+          ldd "$MAME_BINARY" | sort
 
-          test -x "${appdir}/AppRun"
-          test -x "${executable}"
-          test -d "${plugin_dir}"
-          test -x "${scanner}"
-          find "${plugin_dir}" -maxdepth 1 -type f -name 'libgst*.so' -print -quit | grep -q .
+          echo
+          echo "============================================================"
+          echo "SDL linkage"
+          echo "============================================================"
 
-          check_dependencies() {
-            local file="$1"
-            local missing
+          echo "RetroFE:"
+          ldd "$RETROFE_BINARY" | grep -Ei 'SDL2|SDL3' || true
 
-            missing="$(ldd "${file}" 2>/dev/null | grep 'not found' || true)"
-            if [[ -n "${missing}" ]]; then
-              echo "Unresolved dependencies for ${file}:"
-              echo "${missing}"
-              return 1
-            fi
-          }
+          echo
+          echo "MAME:"
+          ldd "$MAME_BINARY" | grep -Ei 'SDL2|SDL3' || true
 
-          check_dependencies "${executable}"
-          check_dependencies "${scanner}"
+      # ============================================================
+      # Download quick-sharun
+      # ============================================================
 
-          while IFS= read -r -d '' plugin; do
-            check_dependencies "${plugin}"
-          done < <(find "${plugin_dir}" -maxdepth 1 -type f -name '*.so' -print0)
-
-      - name: Report ABI requirements
-        shell: bash
+      - name: Install quick-sharun
         run: |
-          set -euo pipefail
+          wget \
+            https://raw.githubusercontent.com/pkgforge-dev/Anylinux-AppImages/main/useful-tools/quick-sharun.sh \
+            -O quick-sharun.sh
 
-          appdir="${GITHUB_WORKSPACE}/RetroFE/Build/AppDir"
-          symbols_file="$(mktemp)"
-          trap 'rm -f "${symbols_file}"' EXIT
+          chmod +x quick-sharun.sh
 
-          while IFS= read -r -d '' file_path; do
-            if file -b "${file_path}" | grep -q 'ELF'; then
-              objdump -T "${file_path}" 2>/dev/null |
-              grep '\*UND\*' >> "${symbols_file}" || true
-            fi
-          done < <(find "${appdir}" -type f -print0)
+      # ============================================================
+      # Runtime metadata
+      # ============================================================
 
-          glibc_max="$({
-            grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' "${symbols_file}" || true
-          } | sort -Vu | tail -n 1)"
+      - name: Create runtime metadata
+        run: |
+          mkdir -p Packaging/Flatpak
 
-          glibcxx_max="$({
-            grep -oE 'GLIBCXX_[0-9]+(\.[0-9]+)+' "${symbols_file}" || true
-          } | sort -Vu | tail -n 1)"
+          cat > Packaging/Flatpak/coinops-runtime.desktop <<'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=CoinOPS Runtime
+          Comment=CoinOPS Runtime
+          Exec=retrofe
+          Icon=coinops-runtime
+          Terminal=false
+          Categories=Game;
+          EOF
 
-          echo "Highest GLIBC requirement:   ${glibc_max:-none found}"
-          echo "Highest GLIBCXX requirement: ${glibcxx_max:-none found}"
+          cp \
+            Package/Environment/Common/RetroFE.png \
+            Packaging/Flatpak/coinops-runtime.png
+
+      # ============================================================
+      # Record exact GStreamer plugin whitelist
+      #
+      # Keep only plugin .so files supplied by:
+      #
+      #   gstreamer1.0-plugins-base
+      #   gstreamer1.0-plugins-good
+      #   gstreamer1.0-libav
+      #
+      # Development packages contain headers/link metadata and are
+      # deliberately NOT part of the runtime plugin whitelist.
+      # ============================================================
+
+      - name: Create GStreamer plugin whitelist
+        run: |
+          mkdir -p Packaging/Flatpak
 
           {
-            echo "### RetroFE ${{ matrix.arch }} AppImage"
-            echo
-            echo "- Highest GLIBC requirement: \`${glibc_max:-none found}\`"
-            echo "- Highest GLIBCXX requirement: \`${glibcxx_max:-none found}\`"
-          } >> "${GITHUB_STEP_SUMMARY}"
+            dpkg-query -L gstreamer1.0-plugins-base
+            dpkg-query -L gstreamer1.0-plugins-good
+            dpkg-query -L gstreamer1.0-libav
+          } \
+            | grep '/gstreamer-1.0/.*\.so$' \
+            | xargs -r -n1 basename \
+            | sort -u \
+            > Packaging/Flatpak/gstreamer-plugin-whitelist.txt
 
-      - name: Verify AppImage can be extracted
-        shell: bash
+          echo "============================================================"
+          echo "Allowed GStreamer plugins"
+          echo "============================================================"
+
+          cat Packaging/Flatpak/gstreamer-plugin-whitelist.txt
+
+          echo
+          echo "Plugin count:"
+          wc -l < Packaging/Flatpak/gstreamer-plugin-whitelist.txt
+
+      # ============================================================
+      # Stage RetroFE + MAME + dependencies
+      #
+      # DEPLOY_SDL is NOT enabled.
+      #
+      # DEPLOY_OPENGL is NOT enabled.
+      #
+      # DEPLOY_GSTREAMER remains enabled so Sharun discovers and
+      # gathers GStreamer runtime dependencies correctly.
+      #
+      # The plugin directory is pruned immediately afterward to the
+      # exact Base + Good + Libav package set RetroFE requires.
+      # ============================================================
+
+      - name: Create combined runtime stage
+        env:
+          RETROFE_BINARY: ${{ steps.binaries.outputs.retrofe }}
+          MAME_BINARY: ${{ steps.binaries.outputs.mame }}
         run: |
-          set -euo pipefail
+          rm -rf RuntimeStage
 
-          output="${GITHUB_WORKSPACE}/${{ matrix.artifact_name }}"
-          extract_dir="${RUNNER_TEMP}/retrofe-appimage-extract"
+          export APPDIR="$PWD/RuntimeStage"
 
-          rm -rf "${extract_dir}"
-          mkdir -p "${extract_dir}"
-          cd "${extract_dir}"
+          export DEPLOY_GSTREAMER=1
 
-          env -u APPIMAGE_EXTRACT_AND_RUN \
-            "${output}" \
-            --appimage-extract >/dev/null
+          export DESKTOP="$PWD/Packaging/Flatpak/coinops-runtime.desktop"
+          export ICON="$PWD/Packaging/Flatpak/coinops-runtime.png"
 
-          test -x squashfs-root/AppRun
-          test -x squashfs-root/usr/bin/retrofe
-          test -d squashfs-root/usr/lib/gstreamer-1.0
+          # Probe RetroFE for dynamically loaded runtime libraries.
+          export STRACE_BINARY="retrofe"
+          export STRACE_TIME=5
 
-      - name: Upload ${{ matrix.arch }} AppImage
-        uses: actions/upload-artifact@v7
+          ./quick-sharun.sh \
+            "$RETROFE_BINARY" \
+            "$MAME_BINARY"
+
+      # ============================================================
+      # Prune GStreamer plugins
+      #
+      # Sharun may deploy plugins outside the three package families
+      # RetroFE actually requires.
+      #
+      # Only plugin files are removed here.
+      #
+      # Transitive shared libraries are deliberately left untouched
+      # for this pass so we do not accidentally remove a dependency
+      # needed by one of the retained plugins.
+      # ============================================================
+
+      - name: Prune GStreamer plugins
+        run: |
+          WHITELIST="$PWD/Packaging/Flatpak/gstreamer-plugin-whitelist.txt"
+
+          echo "============================================================"
+          echo "GStreamer before pruning"
+          echo "============================================================"
+
+          BEFORE_COUNT=0
+
+          while IFS= read -r GST_DIR; do
+            [ -d "$GST_DIR" ] || continue
+
+            COUNT="$(find "$GST_DIR" -maxdepth 1 -type f -name '*.so' | wc -l)"
+            BEFORE_COUNT=$((BEFORE_COUNT + COUNT))
+
+            echo "$GST_DIR"
+            echo "  plugins: $COUNT"
+            du -sh "$GST_DIR"
+          done <<EOF
+          $(find RuntimeStage -type d -path '*/gstreamer-1.0' | sort)
+          EOF
+
+          echo
+          echo "Total plugins before: $BEFORE_COUNT"
+
+          REMOVED=0
+          KEPT=0
+
+          while IFS= read -r PLUGIN; do
+            [ -f "$PLUGIN" ] || continue
+
+            NAME="$(basename "$PLUGIN")"
+
+            if grep -Fxq "$NAME" "$WHITELIST"; then
+              KEPT=$((KEPT + 1))
+            else
+              echo "Removing unneeded GStreamer plugin: $NAME"
+              rm -f "$PLUGIN"
+              REMOVED=$((REMOVED + 1))
+            fi
+          done <<EOF
+          $(find RuntimeStage -type f -path '*/gstreamer-1.0/*.so' | sort)
+          EOF
+
+          echo
+          echo "============================================================"
+          echo "GStreamer pruning result"
+          echo "============================================================"
+
+          echo "Kept:    $KEPT"
+          echo "Removed: $REMOVED"
+
+          echo
+          echo "Remaining plugins:"
+
+          find RuntimeStage \
+            -type f \
+            -path '*/gstreamer-1.0/*.so' \
+            -printf '%f\n' \
+            | sort
+
+      # ============================================================
+      # Analyze staged runtime
+      # ============================================================
+
+      - name: Analyze runtime stage
+        run: |
+          echo "============================================================"
+          echo "TOTAL RUNTIME STAGE"
+          echo "============================================================"
+          du -sh RuntimeStage
+
+          echo
+          echo "============================================================"
+          echo "TOP DIRECTORY SIZES"
+          echo "============================================================"
+
+          du -h -d 2 RuntimeStage 2>/dev/null \
+            | sort -h \
+            | tail -80
+
+          echo
+          echo "============================================================"
+          echo "50 LARGEST FILES"
+          echo "============================================================"
+
+          find RuntimeStage -type f -printf '%s %p\n' \
+            | sort -nr \
+            | head -50 \
+            | numfmt --field=1 --to=iec || true
+
+          echo
+          echo "============================================================"
+          echo "GSTREAMER"
+          echo "============================================================"
+
+          GST_COUNT=0
+
+          while IFS= read -r GST_DIR; do
+            [ -d "$GST_DIR" ] || continue
+
+            echo
+            echo "$GST_DIR"
+
+            COUNT="$(find "$GST_DIR" -maxdepth 1 -type f -name '*.so' | wc -l)"
+            GST_COUNT=$((GST_COUNT + COUNT))
+
+            echo "Plugins: $COUNT"
+            du -sh "$GST_DIR"
+          done <<EOF
+          $(find RuntimeStage -type d -path '*/gstreamer-1.0' | sort)
+          EOF
+
+          echo
+          echo "Total retained GStreamer plugins: $GST_COUNT"
+
+          echo
+          echo "============================================================"
+          echo "SDL LIBRARIES"
+          echo "============================================================"
+
+          find RuntimeStage \
+            \( -type f -o -type l \) \
+            \( -iname '*SDL2*' -o -iname '*SDL3*' \) \
+            -print \
+            | sort || true
+
+          echo
+          echo "============================================================"
+          echo "OPENGL / MESA / LLVM / OPENCL"
+          echo "============================================================"
+
+          find RuntimeStage \
+            \( -type f -o -type l \) \
+            \( \
+              -iname '*LLVM*' \
+              -o -iname '*OpenCL*' \
+              -o -iname '*GLX*' \
+              -o -iname '*EGL*' \
+              -o -iname '*mesa*' \
+              -o -iname '*dri.so' \
+            \) \
+            -print \
+            | sort || true
+
+          echo
+          echo "============================================================"
+          echo "GLIBC / LOADER"
+          echo "============================================================"
+
+          find RuntimeStage \
+            \( -type f -o -type l \) \
+            \( \
+              -name 'libc.so*' \
+              -o -name 'ld-linux*' \
+              -o -name 'libpthread.so*' \
+              -o -name 'libm.so*' \
+            \) \
+            -print \
+            | sort || true
+
+      # ============================================================
+      # Verify staged runtime
+      # ============================================================
+
+      - name: Verify staged runtime
+        run: |
+          echo "---- RuntimeStage binaries ----"
+
+          find RuntimeStage -maxdepth 3 \
+            \( -name sharun -o -name retrofe -o -name mame \) \
+            -print
+
+          test -x RuntimeStage/sharun
+
+          echo
+          echo "RetroFE:"
+          RuntimeStage/sharun retrofe --version || true
+
+          echo
+          echo "Custom MAME:"
+          RuntimeStage/sharun mame -version
+
+      # ============================================================
+      # CoinOPS runtime launcher
+      # ============================================================
+
+      - name: Create CoinOPS runtime launcher
+        run: |
+          mkdir -p Packaging/Flatpak
+
+          cat > Packaging/Flatpak/coinops-launcher <<'EOF'
+          #!/bin/sh
+          set -eu
+
+          if [ "$#" -lt 1 ]; then
+              echo "Usage:"
+              echo "  flatpak run org.coinops.Runtime <CoinOPS build folder>"
+              echo
+              echo "Example:"
+              echo '  flatpak run org.coinops.Runtime "$HOME/CoinOPS Arise"'
+              exit 1
+          fi
+
+          COINOPS_ROOT="$1"
+          shift
+
+          if [ ! -d "$COINOPS_ROOT" ]; then
+              echo "CoinOPS build folder not found:"
+              echo "  $COINOPS_ROOT"
+              exit 1
+          fi
+
+          if [ ! -f "$COINOPS_ROOT/settings.conf" ]; then
+              echo "settings.conf not found in CoinOPS build folder:"
+              echo "  $COINOPS_ROOT"
+              exit 1
+          fi
+
+          export RETROFE_PATH="$COINOPS_ROOT"
+
+          cd "$COINOPS_ROOT"
+
+          exec /app/runtime/sharun retrofe "$@"
+          EOF
+
+          chmod +x Packaging/Flatpak/coinops-launcher
+
+      # ============================================================
+      # Create Flatpak manifest
+      # ============================================================
+
+      - name: Create Flatpak manifest
+        run: |
+          cat > org.coinops.Runtime.yml <<'EOF'
+          app-id: org.coinops.Runtime
+
+          runtime: org.freedesktop.Platform
+          runtime-version: '25.08'
+          sdk: org.freedesktop.Sdk
+
+          command: coinops-launcher
+
+          finish-args:
+            - --share=ipc
+            - --share=network
+
+            - --socket=wayland
+            - --socket=fallback-x11
+            - --socket=pulseaudio
+
+            - --device=all
+
+            - --filesystem=home
+            - --filesystem=/run/media
+            - --filesystem=/media
+            - --filesystem=/mnt
+
+          modules:
+            - name: coinops-runtime
+              buildsystem: simple
+
+              build-commands:
+                - mkdir -p /app/runtime
+                - cp -a runtime/. /app/runtime/
+
+                - install -Dm755 coinops-launcher /app/bin/coinops-launcher
+
+                - install -Dm644 coinops-runtime.desktop /app/share/applications/org.coinops.Runtime.desktop
+
+                - install -Dm644 coinops-runtime.png /app/share/icons/hicolor/256x256/apps/org.coinops.Runtime.png
+
+              sources:
+                - type: dir
+                  path: RuntimeStage
+                  dest: runtime
+
+                - type: file
+                  path: Packaging/Flatpak/coinops-launcher
+
+                - type: file
+                  path: Packaging/Flatpak/coinops-runtime.desktop
+
+                - type: file
+                  path: Packaging/Flatpak/coinops-runtime.png
+          EOF
+
+          cat org.coinops.Runtime.yml
+
+      # ============================================================
+      # Configure Flathub
+      # ============================================================
+
+      - name: Configure Flathub
+        run: |
+          flatpak remote-add \
+            --user \
+            --if-not-exists \
+            flathub \
+            https://dl.flathub.org/repo/flathub.flatpakrepo
+
+      # ============================================================
+      # Install Flatpak runtime + SDK
+      # ============================================================
+
+      - name: Install Flatpak SDK
+        run: |
+          flatpak install \
+            --user \
+            --noninteractive \
+            flathub \
+            org.freedesktop.Platform//25.08 \
+            org.freedesktop.Sdk//25.08
+
+      # ============================================================
+      # Cache flatpak-builder data
+      #
+      # v5 because runtime staging/pruning policy changed.
+      # ============================================================
+
+      - name: Cache Flatpak builder
+        uses: actions/cache@v4
         with:
-          name: RetroFE-${{ matrix.arch }}.AppImage
-          path: ${{ matrix.artifact_name }}
+          path: .flatpak-builder
+          key: coinops-flatpak-builder-${{ runner.os }}-25.08-v5
+          restore-keys: |
+            coinops-flatpak-builder-${{ runner.os }}-25.08-
+
+      # ============================================================
+      # Build Flatpak repository
+      # ============================================================
+
+      - name: Build CoinOPS Runtime Flatpak
+        run: |
+          rm -rf build-dir repo
+
+          flatpak-builder \
+            --user \
+            --force-clean \
+            --repo=repo \
+            --install-deps-from=flathub \
+            build-dir \
+            org.coinops.Runtime.yml
+
+      # ============================================================
+      # Analyze built Flatpak
+      # ============================================================
+
+      - name: Analyze built Flatpak
+        run: |
+          echo "============================================================"
+          echo "FLATPAK BUILD DIRECTORY"
+          echo "============================================================"
+
+          du -sh build-dir || true
+
+          echo
+          echo "============================================================"
+          echo "INSTALLED /APP PAYLOAD"
+          echo "============================================================"
+
+          if [ -d build-dir/files ]; then
+            du -sh build-dir/files
+
+            du -h -d 3 build-dir/files 2>/dev/null \
+              | sort -h \
+              | tail -80
+          fi
+
+          echo
+          echo "============================================================"
+          echo "FLATPAK REPOSITORY"
+          echo "============================================================"
+
+          du -sh repo
+
+      # ============================================================
+      # Build distributable Flatpak bundle
+      # ============================================================
+
+      - name: Build Flatpak bundle
+        run: |
+          echo "Creating Flatpak bundle..."
+
+          (
+            while true; do
+              echo "Still building Flatpak bundle: $(date)"
+              sleep 60
+            done
+          ) &
+          HEARTBEAT_PID=$!
+
+          trap 'kill "$HEARTBEAT_PID" 2>/dev/null || true' EXIT
+
+          flatpak build-bundle \
+            repo \
+            CoinOPS-Runtime-x86_64.flatpak \
+            org.coinops.Runtime \
+            --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo
+
+          kill "$HEARTBEAT_PID" 2>/dev/null || true
+          trap - EXIT
+
+          echo
+          echo "Bundle complete:"
+          ls -lh CoinOPS-Runtime-x86_64.flatpak
+
+          echo
+          echo "Bundle byte size:"
+          stat --printf='%s bytes\n' CoinOPS-Runtime-x86_64.flatpak
+
+      # ============================================================
+      # Upload artifact
+      # ============================================================
+
+      - name: Upload CoinOPS Runtime Flatpak
+        uses: actions/upload-artifact@v4
+        with:
+          name: CoinOPS-Runtime-x86_64.flatpak
+          path: CoinOPS-Runtime-x86_64.flatpak
           if-no-files-found: error
-          compression-level: 0
-          retention-days: 14
