@@ -46,15 +46,12 @@ jobs:
           git -C MAME rev-parse HEAD
 
       # ============================================================
-      # Install HOST tools only
+      # Install host tools only
       #
-      # These are NOT application runtime dependencies.
-      #
-      # RetroFE and MAME will be compiled inside:
+      # Application binaries are NOT built against Ubuntu.
+      # RetroFE and MAME are compiled inside:
       #
       #   org.freedesktop.Sdk//25.08
-      #
-      # rather than against Ubuntu.
       # ============================================================
 
       - name: Install host build tools
@@ -80,9 +77,6 @@ jobs:
 
       # ============================================================
       # Install matching runtime + SDK
-      #
-      # Flatpak applications are intended to build against the SDK
-      # corresponding to their runtime.
       # ============================================================
 
       - name: Install Freedesktop 25.08 runtime and SDK
@@ -95,70 +89,68 @@ jobs:
             org.freedesktop.Sdk//25.08
 
       # ============================================================
-      # Inspect the actual Freedesktop SDK
+      # Inspect actual SDK dependency availability
       #
-      # This is deliberately verbose for the first native builds.
-      # It tells us exactly which RetroFE dependencies are already
-      # supplied by 25.08 rather than guessing.
+      # This is intentionally verbose during migration.
       # ============================================================
 
       - name: Inspect Freedesktop SDK dependencies
         run: |
-          echo "============================================================"
-          echo "SDL"
-          echo "============================================================"
-
           flatpak run \
             --command=sh \
             org.freedesktop.Sdk//25.08 \
             -c '
-              echo "--- pkg-config SDL entries ---"
+              echo "============================================================"
+              echo "SDL"
+              echo "============================================================"
+
+              for pkg in \
+                sdl2 \
+                SDL2_image \
+                SDL2_ttf \
+                SDL2_mixer
+              do
+                printf "%-24s " "$pkg"
+
+                if pkg-config --exists "$pkg"; then
+                  pkg-config --modversion "$pkg"
+                else
+                  echo "NOT FOUND"
+                fi
+              done
+
+              echo
+              echo "--- SDL pkg-config entries ---"
               pkg-config --list-all 2>/dev/null | grep -Ei "SDL|sdl" || true
 
               echo
-              echo "--- SDL2 version ---"
-              pkg-config --modversion sdl2 2>/dev/null || true
+              echo "============================================================"
+              echo "GSTREAMER"
+              echo "============================================================"
 
-              echo
-              echo "--- SDL2 flags ---"
-              pkg-config --cflags --libs sdl2 2>/dev/null || true
+              for pkg in \
+                gstreamer-1.0 \
+                gstreamer-app-1.0 \
+                gstreamer-video-1.0
+              do
+                printf "%-24s " "$pkg"
 
-              echo
-              echo "--- SDL libraries ---"
-              ldconfig -p | grep -Ei "SDL|sdl" || true
-            '
-
-          echo
-          echo "============================================================"
-          echo "GSTREAMER"
-          echo "============================================================"
-
-          flatpak run \
-            --command=sh \
-            org.freedesktop.Sdk//25.08 \
-            -c '
-              pkg-config --modversion gstreamer-1.0 2>/dev/null || true
-              pkg-config --modversion gstreamer-app-1.0 2>/dev/null || true
-              pkg-config --modversion gstreamer-video-1.0 2>/dev/null || true
+                if pkg-config --exists "$pkg"; then
+                  pkg-config --modversion "$pkg"
+                else
+                  echo "NOT FOUND"
+                fi
+              done
 
               echo
               echo "--- GStreamer pkg-config entries ---"
               pkg-config --list-all 2>/dev/null | grep -i gstreamer || true
 
               echo
-              echo "--- GStreamer plugin directories ---"
-              find /usr -type d -name "gstreamer-1.0" -print 2>/dev/null || true
-            '
+              echo "============================================================"
+              echo "OTHER RETROFE DEPENDENCIES"
+              echo "============================================================"
 
-          echo
-          echo "============================================================"
-          echo "OTHER RETROFE DEPENDENCIES"
-          echo "============================================================"
-
-          flatpak run \
-            --command=sh \
-            org.freedesktop.Sdk//25.08 \
-            -c '
               for pkg in \
                 fontconfig \
                 libcurl \
@@ -166,25 +158,22 @@ jobs:
                 libevdev \
                 libudev \
                 zlib \
-                libwebp
+                libwebp \
+                minizip \
+                libserialport
               do
                 printf "%-24s " "$pkg"
-                pkg-config --modversion "$pkg" 2>/dev/null || echo "not found"
+
+                if pkg-config --exists "$pkg"; then
+                  pkg-config --modversion "$pkg"
+                else
+                  echo "NOT FOUND"
+                fi
               done
-
-              echo
-              echo "--- minizip ---"
-              pkg-config --modversion minizip 2>/dev/null || true
-              ldconfig -p | grep -i minizip || true
-
-              echo
-              echo "--- libserialport ---"
-              pkg-config --modversion libserialport 2>/dev/null || true
-              ldconfig -p | grep -i serialport || true
             '
 
       # ============================================================
-      # Create Flatpak metadata
+      # Create launcher + metadata
       # ============================================================
 
       - name: Create Flatpak metadata
@@ -246,24 +235,17 @@ jobs:
       # ============================================================
       # Create native Flatpak manifest
       #
-      # Important:
+      # We rely on org.freedesktop.Platform for:
       #
-      # We DO NOT bundle:
+      #   - glibc / libstdc++
+      #   - SDL2 compatibility layer
+      #   - SDL companion libraries IF present
+      #   - OpenGL / EGL / graphics stack
+      #   - Wayland / X11
+      #   - base GStreamer stack
+      #   - normal system libraries
       #
-      #   - glibc
-      #   - libstdc++
-      #   - SDL2 itself
-      #   - Mesa
-      #   - OpenGL drivers
-      #   - EGL/GLX implementation
-      #   - X11/Wayland runtime
-      #   - base GStreamer runtime
-      #
-      # Those come from org.freedesktop.Platform.
-      #
-      # We initially bundle SDL companion libraries explicitly,
-      # because RetroFE uses them and SDL2_image/SDL2_ttf were
-      # removed from the Freedesktop 25.08 project stack.
+      # We only bundle what is actually missing.
       # ============================================================
 
       - name: Create native Flatpak manifest
@@ -278,23 +260,15 @@ jobs:
           command: coinops-launcher
 
           finish-args:
-            # Shared memory is important for graphics/game workloads.
             - --share=ipc
-
-            # RetroFE/CoinOPS may launch network-capable applications.
             - --share=network
 
-            # Native display support.
             - --socket=wayland
             - --socket=fallback-x11
-
-            # Audio.
             - --socket=pulseaudio
 
-            # GPU and input device access.
             - --device=all
 
-            # CoinOPS data is intentionally external to the Flatpak.
             - --filesystem=home
             - --filesystem=/run/media
             - --filesystem=/media
@@ -303,98 +277,11 @@ jobs:
           modules:
 
             # ======================================================
-            # SDL2_image
-            #
-            # RetroFE uses SDL_image.
-            #
-            # Build against Freedesktop's SDL2 compatibility layer.
-            # ======================================================
-
-            - name: SDL2_image
-              buildsystem: cmake-ninja
-
-              config-opts:
-                - -DCMAKE_BUILD_TYPE=Release
-                - -DCMAKE_INSTALL_PREFIX=/app
-                - -DBUILD_SHARED_LIBS=ON
-                - -DSDL2IMAGE_SAMPLES=OFF
-                - -DSDL2IMAGE_TESTS=OFF
-
-              cleanup:
-                - /include
-                - /lib/cmake
-                - /lib/pkgconfig
-                - '*.a'
-                - '*.la'
-
-              sources:
-                - type: git
-                  url: https://github.com/libsdl-org/SDL_image.git
-                  branch: SDL2
-
-            # ======================================================
-            # SDL2_ttf
-            #
-            # RetroFE uses SDL_ttf.
-            # ======================================================
-
-            - name: SDL2_ttf
-              buildsystem: cmake-ninja
-
-              config-opts:
-                - -DCMAKE_BUILD_TYPE=Release
-                - -DCMAKE_INSTALL_PREFIX=/app
-                - -DBUILD_SHARED_LIBS=ON
-                - -DSDL2TTF_SAMPLES=OFF
-
-              cleanup:
-                - /include
-                - /lib/cmake
-                - /lib/pkgconfig
-                - '*.a'
-                - '*.la'
-
-              sources:
-                - type: git
-                  url: https://github.com/libsdl-org/SDL_ttf.git
-                  branch: SDL2
-
-            # ======================================================
-            # SDL2_mixer
-            #
-            # RetroFE MusicPlayer uses SDL_mixer.
-            #
-            # Keep this explicit in the first native iteration.
-            # Once working, we can inspect which decoder libraries
-            # are actually being included and trim deliberately.
-            # ======================================================
-
-            - name: SDL2_mixer
-              buildsystem: cmake-ninja
-
-              config-opts:
-                - -DCMAKE_BUILD_TYPE=Release
-                - -DCMAKE_INSTALL_PREFIX=/app
-                - -DBUILD_SHARED_LIBS=ON
-                - -DSDL2MIXER_SAMPLES=OFF
-
-              cleanup:
-                - /include
-                - /lib/cmake
-                - /lib/pkgconfig
-                - '*.a'
-                - '*.la'
-
-              sources:
-                - type: git
-                  url: https://github.com/libsdl-org/SDL_mixer.git
-                  branch: SDL2
-
-            # ======================================================
             # libserialport
             #
-            # RetroFE's restrictor / hardware integration can use
-            # serial devices.
+            # Kept explicit because RetroFE hardware/restrictor
+            # integration uses serial devices and this is not a
+            # dependency we want to assume is present.
             # ======================================================
 
             - name: libserialport
@@ -418,10 +305,10 @@ jobs:
             # ======================================================
             # RetroFE
             #
-            # Compiled INSIDE org.freedesktop.Sdk//25.08.
+            # Built inside org.freedesktop.Sdk//25.08.
             #
-            # This is the major architectural change from the
-            # Sharun/AppImage-style workflow.
+            # Before configuring, explicitly verify the dependencies
+            # that RetroFE requires.
             # ======================================================
 
             - name: retrofe
@@ -430,31 +317,55 @@ jobs:
               build-commands:
                 - |
                   echo "============================================================"
-                  echo "RetroFE build environment"
+                  echo "Checking required RetroFE dependencies"
                   echo "============================================================"
 
-                  echo
-                  echo "SDL2:"
-                  pkg-config --modversion sdl2 || true
-                  pkg-config --cflags --libs sdl2 || true
+                  check_pkg() {
+                    PKG="$1"
+
+                    if pkg-config --exists "$PKG"; then
+                      VERSION="$(pkg-config --modversion "$PKG")"
+                      echo "[FOUND] $PKG $VERSION"
+                    else
+                      echo "[MISSING] $PKG"
+                      exit 1
+                    fi
+                  }
+
+                  check_pkg sdl2
+                  check_pkg SDL2_image
+                  check_pkg SDL2_ttf
+                  check_pkg SDL2_mixer
+
+                  check_pkg gstreamer-1.0
+                  check_pkg gstreamer-app-1.0
+                  check_pkg gstreamer-video-1.0
+
+                  check_pkg fontconfig
+                  check_pkg libcurl
+                  check_pkg libusb-1.0
+                  check_pkg libevdev
+                  check_pkg libudev
+                  check_pkg zlib
+                  check_pkg libwebp
+                  check_pkg libserialport
 
                   echo
-                  echo "SDL_image:"
-                  pkg-config --modversion SDL2_image || true
+                  echo "Optional / compatibility check: minizip"
 
-                  echo
-                  echo "SDL_ttf:"
-                  pkg-config --modversion SDL2_ttf || true
-
-                  echo
-                  echo "SDL_mixer:"
-                  pkg-config --modversion SDL2_mixer || true
-
-                  echo
-                  echo "GStreamer:"
-                  pkg-config --modversion gstreamer-1.0 || true
+                  if pkg-config --exists minizip; then
+                    echo "[FOUND] minizip $(pkg-config --modversion minizip)"
+                  else
+                    echo "[NOT FOUND] minizip"
+                    echo "RetroFE configure/build will determine whether an explicit module is required."
+                  fi
 
                 - |
+                  echo
+                  echo "============================================================"
+                  echo "Configuring RetroFE"
+                  echo "============================================================"
+
                   cmake \
                     -S RetroFE/Source \
                     -B RetroFE/Build \
@@ -462,7 +373,15 @@ jobs:
                     -DCMAKE_PREFIX_PATH=/app \
                     -DCMAKE_INSTALL_PREFIX=/app
 
-                - cmake --build RetroFE/Build --parallel
+                - |
+                  echo
+                  echo "============================================================"
+                  echo "Building RetroFE"
+                  echo "============================================================"
+
+                  cmake \
+                    --build RetroFE/Build \
+                    --parallel
 
                 - test -x RetroFE/Build/retrofe
 
@@ -475,9 +394,7 @@ jobs:
             # ======================================================
             # Custom MAME
             #
-            # Also compiled inside org.freedesktop.Sdk//25.08.
-            #
-            # No Ubuntu-linked binary is copied into the Flatpak.
+            # Built inside the same Freedesktop SDK environment.
             # ======================================================
 
             - name: mame
@@ -515,7 +432,7 @@ jobs:
                   path: MAME
 
             # ======================================================
-            # CoinOPS launcher and desktop metadata
+            # CoinOPS launcher + desktop metadata
             # ======================================================
 
             - name: coinops-runtime
@@ -542,12 +459,9 @@ jobs:
           cat org.coinops.Runtime.yml
 
       # ============================================================
-      # Cache flatpak-builder
+      # Cache flatpak-builder state
       #
-      # flatpak-builder caches completed modules.
-      #
-      # Keep this broad restore key so unchanged dependency modules
-      # can be reused between workflow runs.
+      # flatpak-builder will reuse unchanged modules.
       # ============================================================
 
       - name: Cache Flatpak builder
@@ -560,9 +474,6 @@ jobs:
 
       # ============================================================
       # Build native Flatpak
-      #
-      # Everything in modules: is compiled inside the Freedesktop
-      # SDK sandbox.
       # ============================================================
 
       - name: Build native CoinOPS Flatpak
@@ -578,7 +489,7 @@ jobs:
             org.coinops.Runtime.yml
 
       # ============================================================
-      # Inspect resulting native Flatpak filesystem
+      # Analyze resulting Flatpak
       # ============================================================
 
       - name: Analyze native Flatpak
@@ -619,13 +530,13 @@ jobs:
 
           if [ -d build-dir/files/lib ]; then
             find build-dir/files/lib \
-              -maxdepth 2 \
+              -maxdepth 3 \
               \( -type f -o -type l \) \
               -printf '%p\n' \
               | sort
 
             echo
-            du -h -d 2 build-dir/files/lib 2>/dev/null \
+            du -h -d 3 build-dir/files/lib 2>/dev/null \
               | sort -h \
               | tail -100
           fi
@@ -648,7 +559,7 @@ jobs:
           du -sh repo
 
       # ============================================================
-      # Runtime smoke tests INSIDE the built Flatpak environment
+      # Smoke tests inside built Flatpak environment
       # ============================================================
 
       - name: Smoke test native Flatpak
