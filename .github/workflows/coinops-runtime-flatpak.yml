@@ -29,6 +29,44 @@ jobs:
           token: ${{ secrets.MAME_REPO_TOKEN }}
 
       # ============================================================
+      # Determine exact MAME source revision
+      #
+      # The cache key is tied to the actual MAME commit rather than
+      # the RetroFE repository commit. This means unrelated RetroFE,
+      # launcher, packaging, or Flatpak changes will not force MAME
+      # to rebuild.
+      # ============================================================
+
+      - name: Get MAME revision
+        id: mame-rev
+        working-directory: MAME
+        run: |
+          MAME_SHA="$(git rev-parse HEAD)"
+
+          echo "MAME revision: $MAME_SHA"
+          echo "sha=$MAME_SHA" >> "$GITHUB_OUTPUT"
+
+      # ============================================================
+      # Restore cached custom MAME binary
+      #
+      # Cache identity includes:
+      #   - exact MAME source commit
+      #   - architecture
+      #   - FFmpeg build policy
+      #   - cache format revision
+      #
+      # Increment the final v1 manually if the build configuration
+      # changes in a way that should invalidate existing binaries.
+      # ============================================================
+
+      - name: Cache custom MAME
+        id: cache-mame
+        uses: actions/cache@v4
+        with:
+          path: MAME/mame
+          key: mame-linux-x64-${{ steps.mame-rev.outputs.sha }}-ffmpeg0-v1
+
+      # ============================================================
       # Host build dependencies
       # ============================================================
 
@@ -102,6 +140,9 @@ jobs:
       # ============================================================
       # Build custom MAME
       #
+      # This step is skipped completely when an exact cached MAME
+      # executable exists for the checked-out MAME source revision.
+      #
       # Disabled for CoinOPS runtime:
       #   - FFmpeg layout/video support
       #   - auxiliary tools
@@ -122,8 +163,13 @@ jobs:
       # ============================================================
 
       - name: Build custom MAME
+        if: steps.cache-mame.outputs.cache-hit != 'true'
         working-directory: MAME
         run: |
+          echo "No cached MAME binary found."
+          echo "Building custom MAME from revision:"
+          git rev-parse HEAD
+
           make \
             -j3 \
             REGENIE=1 \
@@ -139,8 +185,27 @@ jobs:
 
           test -x mame
 
+      # ============================================================
+      # Verify custom MAME
+      #
+      # Runs whether MAME was freshly compiled or restored from cache.
+      # ============================================================
+
+      - name: Verify custom MAME
+        working-directory: MAME
+        run: |
+          test -x mame
+
+          echo "MAME cache hit:"
+          echo "${{ steps.cache-mame.outputs.cache-hit }}"
+
+          echo
           echo "Custom MAME version:"
           ./mame -version
+
+          echo
+          echo "MAME source revision:"
+          git rev-parse HEAD
 
       # ============================================================
       # Locate binaries
