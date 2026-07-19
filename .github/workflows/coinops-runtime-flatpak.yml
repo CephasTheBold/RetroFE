@@ -26,6 +26,7 @@ jobs:
           repository: CoinOPS-Official/MAME-FFMpeg
           ref: mame0285-local
           path: MAME
+          token: ${{ secrets.MAME_REPO_TOKEN }}
 
       # ============================================================
       # Host build dependencies
