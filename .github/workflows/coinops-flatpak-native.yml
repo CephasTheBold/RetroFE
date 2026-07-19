@@ -48,10 +48,8 @@ jobs:
       # ============================================================
       # Install host tools only
       #
-      # Application binaries are NOT built against Ubuntu.
-      # RetroFE and MAME are compiled inside:
-      #
-      #   org.freedesktop.Sdk//25.08
+      # RetroFE and MAME are NOT built against Ubuntu.
+      # They are compiled inside org.freedesktop.Sdk//25.08.
       # ============================================================
 
       - name: Install host build tools
@@ -91,7 +89,17 @@ jobs:
       # ============================================================
       # Inspect actual SDK dependency availability
       #
-      # This is intentionally verbose during migration.
+      # Confirmed so far:
+      #
+      #   sdl2        2.32.70
+      #   SDL2_mixer  2.8.2
+      #
+      # Missing:
+      #
+      #   SDL2_image
+      #   SDL2_ttf
+      #
+      # Those two are bundled below.
       # ============================================================
 
       - name: Inspect Freedesktop SDK dependencies
@@ -234,18 +242,6 @@ jobs:
 
       # ============================================================
       # Create native Flatpak manifest
-      #
-      # We rely on org.freedesktop.Platform for:
-      #
-      #   - glibc / libstdc++
-      #   - SDL2 compatibility layer
-      #   - SDL companion libraries IF present
-      #   - OpenGL / EGL / graphics stack
-      #   - Wayland / X11
-      #   - base GStreamer stack
-      #   - normal system libraries
-      #
-      # We only bundle what is actually missing.
       # ============================================================
 
       - name: Create native Flatpak manifest
@@ -277,11 +273,71 @@ jobs:
           modules:
 
             # ======================================================
+            # SDL2_image
+            #
+            # Freedesktop 25.08 does not provide SDL2_image.
+            #
+            # Build only this missing SDL2 companion library.
+            # ======================================================
+
+            - name: SDL2_image
+              buildsystem: cmake-ninja
+              builddir: true
+
+              config-opts:
+                - -DCMAKE_BUILD_TYPE=Release
+                - -DCMAKE_INSTALL_PREFIX=/app
+                - -DBUILD_SHARED_LIBS=ON
+                - -DSDL2IMAGE_SAMPLES=OFF
+                - -DSDL2IMAGE_TESTS=OFF
+
+              cleanup:
+                - /include
+                - /lib/cmake
+                - /lib/pkgconfig
+                - '*.a'
+                - '*.la'
+
+              sources:
+                - type: git
+                  url: https://github.com/libsdl-org/SDL_image.git
+                  branch: SDL2
+
+            # ======================================================
+            # SDL2_ttf
+            #
+            # Freedesktop 25.08 does not provide SDL2_ttf.
+            #
+            # Build only this missing SDL2 companion library.
+            # ======================================================
+
+            - name: SDL2_ttf
+              buildsystem: cmake-ninja
+              builddir: true
+
+              config-opts:
+                - -DCMAKE_BUILD_TYPE=Release
+                - -DCMAKE_INSTALL_PREFIX=/app
+                - -DBUILD_SHARED_LIBS=ON
+                - -DSDL2TTF_SAMPLES=OFF
+
+              cleanup:
+                - /include
+                - /lib/cmake
+                - /lib/pkgconfig
+                - '*.a'
+                - '*.la'
+
+              sources:
+                - type: git
+                  url: https://github.com/libsdl-org/SDL_ttf.git
+                  branch: SDL2
+
+            # ======================================================
             # libserialport
             #
-            # Kept explicit because RetroFE hardware/restrictor
-            # integration uses serial devices and this is not a
-            # dependency we want to assume is present.
+            # Explicitly bundled for RetroFE hardware/restrictor
+            # support.
             # ======================================================
 
             - name: libserialport
@@ -305,10 +361,14 @@ jobs:
             # ======================================================
             # RetroFE
             #
-            # Built inside org.freedesktop.Sdk//25.08.
+            # Uses:
             #
-            # Before configuring, explicitly verify the dependencies
-            # that RetroFE requires.
+            #   sdl2        from Freedesktop 25.08
+            #   SDL2_mixer  from Freedesktop 25.08
+            #   SDL2_image  from /app
+            #   SDL2_ttf    from /app
+            #
+            # Built entirely inside org.freedesktop.Sdk//25.08.
             # ======================================================
 
             - name: retrofe
@@ -332,14 +392,23 @@ jobs:
                     fi
                   }
 
+                  echo
+                  echo "--- SDL ---"
+
                   check_pkg sdl2
                   check_pkg SDL2_image
                   check_pkg SDL2_ttf
                   check_pkg SDL2_mixer
 
+                  echo
+                  echo "--- GStreamer ---"
+
                   check_pkg gstreamer-1.0
                   check_pkg gstreamer-app-1.0
                   check_pkg gstreamer-video-1.0
+
+                  echo
+                  echo "--- Other dependencies ---"
 
                   check_pkg fontconfig
                   check_pkg libcurl
@@ -351,13 +420,13 @@ jobs:
                   check_pkg libserialport
 
                   echo
-                  echo "Optional / compatibility check: minizip"
+                  echo "--- minizip ---"
 
                   if pkg-config --exists minizip; then
                     echo "[FOUND] minizip $(pkg-config --modversion minizip)"
                   else
                     echo "[NOT FOUND] minizip"
-                    echo "RetroFE configure/build will determine whether an explicit module is required."
+                    echo "RetroFE configure/build will determine whether it must be bundled."
                   fi
 
                 - |
@@ -461,7 +530,7 @@ jobs:
       # ============================================================
       # Cache flatpak-builder state
       #
-      # flatpak-builder will reuse unchanged modules.
+      # Unchanged modules should be reused automatically.
       # ============================================================
 
       - name: Cache Flatpak builder
