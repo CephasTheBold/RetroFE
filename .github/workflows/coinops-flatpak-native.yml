@@ -568,12 +568,22 @@ jobs:
             # sections that caused the previous final-link overflow.
             # ======================================================
 
+            # ======================================================
+            # Custom MAME
+            # ======================================================
+
             - name: mame
               buildsystem: simple
 
               build-options:
                 strip: true
                 no-debuginfo: true
+
+                cflags-override: true
+                cxxflags-override: true
+
+                cflags: -O2 -g0
+                cxxflags: -O2 -g0
 
               build-commands:
                 - |
@@ -609,6 +619,7 @@ jobs:
                     REGENIE=1 \
                     SYMBOLS=0 \
                     SYMLEVEL=0 \
+                    ARCHOPTS="-g0" \
                     USE_FFMPEG=0 \
                     TOOLS=0 \
                     TESTS=0 \
