@@ -412,7 +412,7 @@ jobs:
 
               sources:
                 - type: git
-                  url: https://sigrok.org/git/libserialport
+                  url: https://github.com/martinling/libserialport.git
                   branch: master
 
             # ======================================================
