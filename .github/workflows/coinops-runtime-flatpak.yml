@@ -10,17 +10,25 @@ jobs:
 
     steps:
       # ============================================================
-      # Checkout
+      # Checkout RetroFE
       # ============================================================
 
-      - name: Checkout code
+      - name: Checkout RetroFE
         uses: actions/checkout@v4
 
       # ============================================================
+      # Checkout custom MAME fork
+      # ============================================================
+
+      - name: Checkout MAME fork
+        uses: actions/checkout@v4
+        with:
+          repository: CoinOPS-Official/MAME-FFMpeg
+          ref: mame0285-local
+          path: MAME
+
+      # ============================================================
       # Host build dependencies
-      #
-      # Stock MAME is temporary. Once everything is proven, replace
-      # this with a build of your custom MAME fork.
       # ============================================================
 
       - name: Install dependencies
@@ -28,6 +36,9 @@ jobs:
           sudo apt-get update
 
           sudo apt-get install -y \
+            build-essential \
+            git \
+            python3 \
             cmake \
             zlib1g-dev \
             libglib2.0-0 \
@@ -40,6 +51,8 @@ jobs:
             libsdl2-mixer-dev \
             libsdl2-image-dev \
             libsdl2-ttf-dev \
+            libfontconfig-dev \
+            libpulse-dev \
             libgstreamer1.0-0 \
             libgstreamer1.0-dev \
             libgstreamer-plugins-base1.0-dev \
@@ -54,7 +67,6 @@ jobs:
             libudev-dev \
             libserialport-dev \
             libcurl4-openssl-dev \
-            mame \
             patchelf \
             strace \
             dbus-x11 \
@@ -87,6 +99,49 @@ jobs:
           cmake --build RetroFE/Build --parallel
 
       # ============================================================
+      # Build custom MAME
+      #
+      # Disabled for CoinOPS runtime:
+      #   - FFmpeg layout/video support
+      #   - auxiliary tools
+      #   - tests
+      #   - benchmarks
+      #   - Qt debugger
+      #   - MIDI
+      #   - PortAudio
+      #   - TAP/TUN networking
+      #   - PCAP networking
+      #
+      # Kept:
+      #   - SDL
+      #   - OpenGL
+      #   - BGFX
+      #   - PulseAudio
+      #   - PipeWire/default Linux audio support
+      # ============================================================
+
+      - name: Build custom MAME
+        working-directory: MAME
+        run: |
+          make \
+            -j3 \
+            REGENIE=1 \
+            USE_FFMPEG=0 \
+            TOOLS=0 \
+            TESTS=0 \
+            BENCHMARKS=0 \
+            USE_QTDEBUG=0 \
+            NO_USE_MIDI=1 \
+            NO_USE_PORTAUDIO=1 \
+            USE_TAPTUN=0 \
+            USE_PCAP=0
+
+          test -x mame
+
+          echo "Custom MAME version:"
+          ./mame -version
+
+      # ============================================================
       # Locate binaries
       # ============================================================
 
@@ -94,7 +149,7 @@ jobs:
         id: binaries
         run: |
           RETROFE_BINARY="$PWD/RetroFE/Build/retrofe"
-          MAME_BINARY="$(command -v mame)"
+          MAME_BINARY="$PWD/MAME/mame"
 
           if [ ! -x "$RETROFE_BINARY" ]; then
             echo "RetroFE binary not found:"
@@ -102,28 +157,24 @@ jobs:
             exit 1
           fi
 
-          if [ -z "$MAME_BINARY" ] || [ ! -x "$MAME_BINARY" ]; then
-            echo "MAME binary not found"
+          if [ ! -x "$MAME_BINARY" ]; then
+            echo "Custom MAME binary not found:"
+            echo "$MAME_BINARY"
             exit 1
           fi
 
-          echo "RetroFE: $RETROFE_BINARY"
-          echo "MAME:    $MAME_BINARY"
-
+          echo "RetroFE:"
           "$RETROFE_BINARY" --version || true
-          "$MAME_BINARY" -version || true
+
+          echo
+          echo "Custom MAME:"
+          "$MAME_BINARY" -version
 
           echo "retrofe=$RETROFE_BINARY" >> "$GITHUB_OUTPUT"
           echo "mame=$MAME_BINARY" >> "$GITHUB_OUTPUT"
 
       # ============================================================
       # Download quick-sharun
-      #
-      # We already proved this can collect RetroFE + MAME into one
-      # self-contained runtime environment.
-      #
-      # Here we use it only as the STAGING mechanism. The resulting
-      # tree gets installed inside the Flatpak.
       # ============================================================
 
       - name: Install quick-sharun
@@ -135,7 +186,7 @@ jobs:
           chmod +x quick-sharun.sh
 
       # ============================================================
-      # Metadata used while staging
+      # Runtime metadata
       # ============================================================
 
       - name: Create runtime metadata
@@ -158,17 +209,13 @@ jobs:
             Packaging/Flatpak/coinops-runtime.png
 
       # ============================================================
-      # Stage RetroFE + MAME + dependencies
+      # Stage RetroFE + custom MAME + dependencies
       #
-      # RuntimeStage becomes a sharun environment containing:
-      #
-      #   RuntimeStage/
-      #     sharun
-      #     shared/bin/retrofe
-      #     shared/bin/mame
-      #     shared/lib/...
-      #
-      # We do NOT make an AppImage from it.
+      # RuntimeStage/
+      #   sharun
+      #   shared/bin/retrofe
+      #   shared/bin/mame
+      #   shared/lib/...
       # ============================================================
 
       - name: Create combined runtime stage
@@ -185,9 +232,8 @@ jobs:
           export DESKTOP="$PWD/Packaging/Flatpak/coinops-runtime.desktop"
           export ICON="$PWD/Packaging/Flatpak/coinops-runtime.png"
 
-          # Avoid dynamically launching MAME during dependency probing.
-          # It is still packaged and its normal ELF dependencies are
-          # still collected.
+          # Runtime-probe RetroFE only.
+          # MAME is still packaged and its ELF dependencies are collected.
           export STRACE_BINARY="retrofe"
           export STRACE_TIME=5
 
@@ -196,12 +242,13 @@ jobs:
             "$MAME_BINARY"
 
       # ============================================================
-      # Verify staged runtime before Flatpak packaging
+      # Verify staged runtime
       # ============================================================
 
       - name: Verify staged runtime
         run: |
-          echo "---- RuntimeStage ----"
+          echo "---- RuntimeStage binaries ----"
+
           find RuntimeStage -maxdepth 3 \
             \( -name sharun -o -name retrofe -o -name mame \) \
             -print
@@ -213,25 +260,11 @@ jobs:
           RuntimeStage/sharun retrofe --version || true
 
           echo
-          echo "MAME:"
+          echo "Custom MAME:"
           RuntimeStage/sharun mame -version
 
       # ============================================================
-      # CoinOPS Flatpak launcher
-      #
-      # Usage:
-      #
-      # flatpak run org.coinops.Runtime "/home/deck/CoinOPS Arise"
-      #
-      # RETROFE_PATH points RetroFE itself at the external CoinOPS
-      # build.
-      #
-      # Your new RetroFE executable handling means:
-      #
-      #   executable = mame
-      #
-      # remains "mame", allowing execvp() to resolve the bundled MAME
-      # from the sharun PATH.
+      # CoinOPS runtime launcher
       # ============================================================
 
       - name: Create CoinOPS runtime launcher
@@ -277,9 +310,6 @@ jobs:
 
       # ============================================================
       # Create Flatpak manifest
-      #
-      # Manifest is generated at repository root so RuntimeStage and
-      # Packaging paths resolve cleanly.
       # ============================================================
 
       - name: Create Flatpak manifest
@@ -352,7 +382,7 @@ jobs:
             https://dl.flathub.org/repo/flathub.flatpakrepo
 
       # ============================================================
-      # Install build SDK/runtime
+      # Install Flatpak runtime + SDK
       # ============================================================
 
       - name: Install Flatpak SDK
@@ -372,7 +402,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .flatpak-builder
-          key: coinops-flatpak-builder-${{ runner.os }}-25.08-v1
+          key: coinops-flatpak-builder-${{ runner.os }}-25.08-v3
           restore-keys: |
             coinops-flatpak-builder-${{ runner.os }}-25.08-
 
@@ -393,17 +423,38 @@ jobs:
             org.coinops.Runtime.yml
 
       # ============================================================
-      # Build distributable .flatpak bundle
+      # Build distributable Flatpak bundle
       # ============================================================
 
       - name: Build Flatpak bundle
         run: |
+          echo "Flatpak repository size:"
+          du -sh repo
+
+          echo
+          echo "Creating Flatpak bundle..."
+
+          (
+            while true; do
+              echo "Still building Flatpak bundle: $(date)"
+              sleep 60
+            done
+          ) &
+          HEARTBEAT_PID=$!
+
+          trap 'kill "$HEARTBEAT_PID" 2>/dev/null || true' EXIT
+
           flatpak build-bundle \
             repo \
             CoinOPS-Runtime-x86_64.flatpak \
             org.coinops.Runtime \
             --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo
 
+          kill "$HEARTBEAT_PID" 2>/dev/null || true
+          trap - EXIT
+
+          echo
+          echo "Bundle complete:"
           ls -lh CoinOPS-Runtime-x86_64.flatpak
 
       # ============================================================
