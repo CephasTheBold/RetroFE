@@ -593,6 +593,10 @@ jobs:
             - name: mame
               buildsystem: simple
 
+              build-options:
+                strip: true
+                no-debuginfo: true
+
               build-commands:
                 - |
                   echo "============================================================"
