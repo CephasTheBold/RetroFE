@@ -17,6 +17,18 @@ jobs:
         uses: actions/checkout@v4
 
       # ============================================================
+      # Determine exact RetroFE revision
+      # ============================================================
+
+      - name: Get RetroFE revision
+        id: retrofe-rev
+        run: |
+          RETROFE_SHA="$(git rev-parse HEAD)"
+
+          echo "RetroFE revision: $RETROFE_SHA"
+          echo "sha=$RETROFE_SHA" >> "$GITHUB_OUTPUT"
+
+      # ============================================================
       # Checkout custom MAME fork
       # ============================================================
 
@@ -42,10 +54,21 @@ jobs:
           echo "sha=$MAME_SHA" >> "$GITHUB_OUTPUT"
 
       # ============================================================
-      # Restore cached MAME binary
+      # Restore cached RetroFE binary
       #
-      # Cache key is tied to the exact MAME source revision and
-      # current build configuration.
+      # Bump v1 if build flags, compiler assumptions, dependencies,
+      # or CMake configuration materially change.
+      # ============================================================
+
+      - name: Cache RetroFE
+        id: cache-retrofe
+        uses: actions/cache@v4
+        with:
+          path: RetroFE/Build/retrofe
+          key: retrofe-linux-x64-${{ steps.retrofe-rev.outputs.sha }}-v1
+
+      # ============================================================
+      # Restore cached MAME binary
       # ============================================================
 
       - name: Cache custom MAME
@@ -56,14 +79,7 @@ jobs:
           key: mame-linux-x64-${{ steps.mame-rev.outputs.sha }}-ffmpeg0-v1
 
       # ============================================================
-      # Host build/staging dependencies
-      #
-      # These packages are installed on the GitHub runner so the
-      # applications can build and quick-sharun can discover runtime
-      # dependencies.
-      #
-      # Their presence on the host does not automatically mean they
-      # are bundled into the final Flatpak.
+      # Install host build/staging dependencies
       # ============================================================
 
       - name: Install dependencies
@@ -103,44 +119,55 @@ jobs:
             flatpak-builder
 
       # ============================================================
-      # Cache RetroFE build
-      # ============================================================
-
-      - name: Cache RetroFE build
-        uses: actions/cache@v4
-        with:
-          path: RetroFE/Build
-          key: retrofe-flatpak-build-${{ runner.os }}-${{ hashFiles('RetroFE/Source/**', 'RetroFE/CMake/**', 'RetroFE/ThirdParty/**') }}
-          restore-keys: |
-            retrofe-flatpak-build-${{ runner.os }}-
-
-      # ============================================================
-      # Build RetroFE
+      # Configure RetroFE only on cache miss
       # ============================================================
 
       - name: Configure RetroFE
+        if: steps.cache-retrofe.outputs.cache-hit != 'true'
         run: |
+          echo "No cached RetroFE binary found."
+          echo "Configuring RetroFE revision:"
+          git rev-parse HEAD
+
           cmake RetroFE/Source -BRetroFE/Build
 
+      # ============================================================
+      # Build RetroFE only on cache miss
+      # ============================================================
+
       - name: Build RetroFE
+        if: steps.cache-retrofe.outputs.cache-hit != 'true'
         run: |
           cmake --build RetroFE/Build --parallel
 
+          test -x RetroFE/Build/retrofe
+
       # ============================================================
-      # Build custom MAME
-      #
-      # Skipped when the exact MAME binary is restored from cache.
-      #
-      # Disabled:
-      #   - FFmpeg layout/video support
-      #   - auxiliary tools
-      #   - tests
-      #   - benchmarks
-      #   - Qt debugger
-      #   - MIDI
-      #   - PortAudio
-      #   - TAP/TUN networking
-      #   - PCAP networking
+      # Verify cached or newly built RetroFE
+      # ============================================================
+
+      - name: Verify RetroFE
+        run: |
+          test -x RetroFE/Build/retrofe
+
+          echo "RetroFE cache hit:"
+          echo "${{ steps.cache-retrofe.outputs.cache-hit }}"
+
+          echo
+          echo "RetroFE source revision:"
+          git rev-parse HEAD
+
+          echo
+          echo "RetroFE version:"
+          RetroFE/Build/retrofe --version || true
+
+          echo
+          echo "RetroFE binary size:"
+          ls -lh RetroFE/Build/retrofe
+          du -h RetroFE/Build/retrofe
+
+      # ============================================================
+      # Build custom MAME only on cache miss
       # ============================================================
 
       - name: Build custom MAME
@@ -167,7 +194,7 @@ jobs:
           test -x mame
 
       # ============================================================
-      # Verify custom MAME
+      # Verify cached or newly built MAME
       # ============================================================
 
       - name: Verify custom MAME
@@ -187,12 +214,12 @@ jobs:
           git rev-parse HEAD
 
           echo
-          echo "MAME binary size before Sharun staging:"
+          echo "MAME binary size:"
           ls -lh mame
           du -h mame
 
       # ============================================================
-      # Locate runtime binaries
+      # Locate binaries
       # ============================================================
 
       - name: Locate binaries
@@ -270,20 +297,10 @@ jobs:
           chmod +x quick-sharun.sh
 
       # ============================================================
-      # Runtime metadata
+      # Create desktop metadata
       #
-      # Two desktop files are used deliberately:
-      #
-      # 1. Sharun staging desktop
-      #      Exec=retrofe
-      #
-      #    Sharun reads this while building RuntimeStage and requires
-      #    the referenced executable to already be present.
-      #
-      # 2. Final Flatpak desktop
-      #      Exec=coinops-launcher
-      #
-      #    coinops-launcher is installed later by flatpak-builder.
+      # Sharun sees Exec=retrofe during staging.
+      # Final Flatpak desktop points to coinops-launcher.
       # ============================================================
 
       - name: Create runtime metadata
@@ -317,20 +334,9 @@ jobs:
             Packaging/Flatpak/coinops-runtime.png
 
       # ============================================================
-      # Stage RetroFE + MAME + dependencies
+      # Stage RetroFE + MAME + runtime dependencies
       #
-      # DEPLOY_SDL is intentionally NOT enabled.
-      #
-      # SDL dependencies are collected naturally from the ELF
-      # dependency graph.
-      #
-      # DEPLOY_OPENGL is intentionally NOT enabled.
-      #
-      # Explicit OpenGL deployment previously pulled the Ubuntu
-      # Mesa/LLVM/OpenCL stack into the application.
-      #
-      # DEPLOY_GSTREAMER remains enabled because RetroFE dynamically
-      # loads GStreamer plugins.
+      # Known-good explicit deployment behavior restored.
       # ============================================================
 
       - name: Create combined runtime stage
@@ -342,15 +348,13 @@ jobs:
 
           export APPDIR="$PWD/RuntimeStage"
 
+          export DEPLOY_SDL=1
+          export DEPLOY_OPENGL=1
           export DEPLOY_GSTREAMER=1
 
           export DESKTOP="$PWD/Packaging/Flatpak/coinops-runtime-sharun.desktop"
           export ICON="$PWD/Packaging/Flatpak/coinops-runtime.png"
 
-          # Runtime-probe RetroFE only.
-          #
-          # MAME is still packaged and its normal ELF dependencies
-          # are collected by quick-sharun.
           export STRACE_BINARY="retrofe"
           export STRACE_TIME=5
 
@@ -443,22 +447,6 @@ jobs:
             -print \
             | sort || true
 
-          echo
-          echo "============================================================"
-          echo "GLIBC / LOADER"
-          echo "============================================================"
-
-          find RuntimeStage \
-            \( -type f -o -type l \) \
-            \( \
-              -name 'libc.so*' \
-              -o -name 'ld-linux*' \
-              -o -name 'libpthread.so*' \
-              -o -name 'libm.so*' \
-            \) \
-            -print \
-            | sort || true
-
       # ============================================================
       # Verify staged runtime
       # ============================================================
@@ -482,7 +470,7 @@ jobs:
           RuntimeStage/sharun mame -version
 
       # ============================================================
-      # CoinOPS runtime launcher
+      # Create CoinOPS launcher
       # ============================================================
 
       - name: Create CoinOPS runtime launcher
@@ -544,13 +532,10 @@ jobs:
           finish-args:
             - --share=ipc
             - --share=network
-
             - --socket=wayland
             - --socket=fallback-x11
             - --socket=pulseaudio
-
             - --device=all
-
             - --filesystem=home
             - --filesystem=/run/media
             - --filesystem=/media
@@ -563,11 +548,8 @@ jobs:
               build-commands:
                 - mkdir -p /app/runtime
                 - cp -a runtime/. /app/runtime/
-
                 - install -Dm755 coinops-launcher /app/bin/coinops-launcher
-
                 - install -Dm644 coinops-runtime.desktop /app/share/applications/org.coinops.Runtime.desktop
-
                 - install -Dm644 coinops-runtime.png /app/share/icons/hicolor/256x256/apps/org.coinops.Runtime.png
 
               sources:
@@ -614,15 +596,13 @@ jobs:
 
       # ============================================================
       # Cache flatpak-builder data
-      #
-      # New cache revision after returning to direct MAME staging.
       # ============================================================
 
       - name: Cache Flatpak builder
         uses: actions/cache@v4
         with:
           path: .flatpak-builder
-          key: coinops-flatpak-builder-${{ runner.os }}-25.08-v8
+          key: coinops-flatpak-builder-${{ runner.os }}-25.08-v10
           restore-keys: |
             coinops-flatpak-builder-${{ runner.os }}-25.08-
 
