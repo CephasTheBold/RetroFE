@@ -43,6 +43,9 @@ jobs:
 
       # ============================================================
       # Restore cached MAME binary
+      #
+      # The cache stores the original, unmodified MAME binary.
+      # A separate stripped copy is created later for packaging.
       # ============================================================
 
       - name: Cache custom MAME
@@ -55,17 +58,11 @@ jobs:
       # ============================================================
       # Host build/staging dependencies
       #
-      # GStreamer requirements:
+      # These packages exist on the GitHub runner so RetroFE/MAME
+      # can build and quick-sharun can discover runtime dependencies.
       #
-      # Build:
-      #   libgstreamer1.0-dev
-      #   libgstreamer-plugins-base1.0-dev
-      #
-      # Runtime/plugin families used by RetroFE:
-      #   libgstreamer1.0-0
-      #   gstreamer1.0-plugins-base
-      #   gstreamer1.0-plugins-good
-      #   gstreamer1.0-libav
+      # Their presence here does not automatically mean they are
+      # included in the final Flatpak.
       # ============================================================
 
       - name: Install dependencies
@@ -131,7 +128,18 @@ jobs:
       # ============================================================
       # Build custom MAME
       #
-      # Skipped when exact binary is restored from cache.
+      # Skipped when the exact MAME revision is restored from cache.
+      #
+      # Disabled:
+      #   - FFmpeg layout/video support
+      #   - auxiliary tools
+      #   - tests
+      #   - benchmarks
+      #   - Qt debugger
+      #   - MIDI
+      #   - PortAudio
+      #   - TAP/TUN networking
+      #   - PCAP networking
       # ============================================================
 
       - name: Build custom MAME
@@ -139,7 +147,7 @@ jobs:
         working-directory: MAME
         run: |
           echo "No cached MAME binary found."
-          echo "Building revision:"
+          echo "Building MAME revision:"
           git rev-parse HEAD
 
           make \
@@ -158,7 +166,7 @@ jobs:
           test -x mame
 
       # ============================================================
-      # Verify MAME
+      # Verify original/cached MAME
       # ============================================================
 
       - name: Verify custom MAME
@@ -178,19 +186,24 @@ jobs:
           git rev-parse HEAD
 
           echo
-          echo "MAME binary size:"
+          echo "Original MAME binary size:"
           ls -lh mame
           du -h mame
 
       # ============================================================
-      # Locate binaries
+      # Prepare runtime binaries
+      #
+      # Keep MAME/mame untouched so the existing cache remains valid.
+      #
+      # Create MAME/mame-runtime as a stripped packaging copy.
       # ============================================================
 
-      - name: Locate binaries
+      - name: Prepare runtime binaries
         id: binaries
         run: |
           RETROFE_BINARY="$PWD/RetroFE/Build/retrofe"
-          MAME_BINARY="$PWD/MAME/mame"
+          MAME_ORIGINAL="$PWD/MAME/mame"
+          MAME_RUNTIME="$PWD/MAME/mame-runtime"
 
           if [ ! -x "$RETROFE_BINARY" ]; then
             echo "RetroFE binary not found:"
@@ -198,24 +211,46 @@ jobs:
             exit 1
           fi
 
-          if [ ! -x "$MAME_BINARY" ]; then
+          if [ ! -x "$MAME_ORIGINAL" ]; then
             echo "Custom MAME binary not found:"
-            echo "$MAME_BINARY"
+            echo "$MAME_ORIGINAL"
             exit 1
           fi
 
+          rm -f "$MAME_RUNTIME"
+
+          echo "============================================================"
+          echo "MAME BEFORE STRIPPING"
+          echo "============================================================"
+
+          ls -lh "$MAME_ORIGINAL"
+          du -h "$MAME_ORIGINAL"
+
+          cp -a "$MAME_ORIGINAL" "$MAME_RUNTIME"
+
+          strip --strip-unneeded "$MAME_RUNTIME"
+
+          echo
+          echo "============================================================"
+          echo "MAME AFTER STRIPPING"
+          echo "============================================================"
+
+          ls -lh "$MAME_RUNTIME"
+          du -h "$MAME_RUNTIME"
+
+          echo
+          echo "Verifying stripped MAME:"
+          "$MAME_RUNTIME" -version
+
+          echo
           echo "RetroFE:"
           "$RETROFE_BINARY" --version || true
 
-          echo
-          echo "Custom MAME:"
-          "$MAME_BINARY" -version
-
           echo "retrofe=$RETROFE_BINARY" >> "$GITHUB_OUTPUT"
-          echo "mame=$MAME_BINARY" >> "$GITHUB_OUTPUT"
+          echo "mame=$MAME_RUNTIME" >> "$GITHUB_OUTPUT"
 
       # ============================================================
-      # Inspect direct dependencies
+      # Inspect direct binary dependencies
       # ============================================================
 
       - name: Inspect binary dependencies
@@ -226,12 +261,14 @@ jobs:
           echo "============================================================"
           echo "RetroFE direct dependencies"
           echo "============================================================"
+
           ldd "$RETROFE_BINARY" | sort
 
           echo
           echo "============================================================"
           echo "MAME direct dependencies"
           echo "============================================================"
+
           ldd "$MAME_BINARY" | sort
 
           echo
@@ -271,8 +308,8 @@ jobs:
           Type=Application
           Name=CoinOPS Runtime
           Comment=CoinOPS Runtime
-          Exec=retrofe
-          Icon=coinops-runtime
+          Exec=coinops-launcher
+          Icon=org.coinops.Runtime
           Terminal=false
           Categories=Game;
           EOF
@@ -282,54 +319,19 @@ jobs:
             Packaging/Flatpak/coinops-runtime.png
 
       # ============================================================
-      # Record exact GStreamer plugin whitelist
+      # Stage RetroFE + stripped MAME + dependencies
       #
-      # Keep only plugin .so files supplied by:
+      # DEPLOY_SDL is intentionally NOT enabled.
       #
-      #   gstreamer1.0-plugins-base
-      #   gstreamer1.0-plugins-good
-      #   gstreamer1.0-libav
+      # SDL dependencies are discovered naturally from the binaries.
       #
-      # Development packages contain headers/link metadata and are
-      # deliberately NOT part of the runtime plugin whitelist.
-      # ============================================================
-
-      - name: Create GStreamer plugin whitelist
-        run: |
-          mkdir -p Packaging/Flatpak
-
-          {
-            dpkg-query -L gstreamer1.0-plugins-base
-            dpkg-query -L gstreamer1.0-plugins-good
-            dpkg-query -L gstreamer1.0-libav
-          } \
-            | grep '/gstreamer-1.0/.*\.so$' \
-            | xargs -r -n1 basename \
-            | sort -u \
-            > Packaging/Flatpak/gstreamer-plugin-whitelist.txt
-
-          echo "============================================================"
-          echo "Allowed GStreamer plugins"
-          echo "============================================================"
-
-          cat Packaging/Flatpak/gstreamer-plugin-whitelist.txt
-
-          echo
-          echo "Plugin count:"
-          wc -l < Packaging/Flatpak/gstreamer-plugin-whitelist.txt
-
-      # ============================================================
-      # Stage RetroFE + MAME + dependencies
+      # DEPLOY_OPENGL is intentionally NOT enabled.
       #
-      # DEPLOY_SDL is NOT enabled.
+      # Explicit OpenGL deployment previously pulled a large Ubuntu
+      # Mesa/LLVM/OpenCL stack into the Flatpak.
       #
-      # DEPLOY_OPENGL is NOT enabled.
-      #
-      # DEPLOY_GSTREAMER remains enabled so Sharun discovers and
-      # gathers GStreamer runtime dependencies correctly.
-      #
-      # The plugin directory is pruned immediately afterward to the
-      # exact Base + Good + Libav package set RetroFE requires.
+      # DEPLOY_GSTREAMER remains enabled because RetroFE dynamically
+      # loads GStreamer plugins.
       # ============================================================
 
       - name: Create combined runtime stage
@@ -346,88 +348,16 @@ jobs:
           export DESKTOP="$PWD/Packaging/Flatpak/coinops-runtime.desktop"
           export ICON="$PWD/Packaging/Flatpak/coinops-runtime.png"
 
-          # Probe RetroFE for dynamically loaded runtime libraries.
+          # Runtime-probe RetroFE only.
+          #
+          # MAME is still packaged and its normal ELF dependencies
+          # are collected by quick-sharun.
           export STRACE_BINARY="retrofe"
           export STRACE_TIME=5
 
           ./quick-sharun.sh \
             "$RETROFE_BINARY" \
             "$MAME_BINARY"
-
-      # ============================================================
-      # Prune GStreamer plugins
-      #
-      # Sharun may deploy plugins outside the three package families
-      # RetroFE actually requires.
-      #
-      # Only plugin files are removed here.
-      #
-      # Transitive shared libraries are deliberately left untouched
-      # for this pass so we do not accidentally remove a dependency
-      # needed by one of the retained plugins.
-      # ============================================================
-
-      - name: Prune GStreamer plugins
-        run: |
-          WHITELIST="$PWD/Packaging/Flatpak/gstreamer-plugin-whitelist.txt"
-
-          echo "============================================================"
-          echo "GStreamer before pruning"
-          echo "============================================================"
-
-          BEFORE_COUNT=0
-
-          while IFS= read -r GST_DIR; do
-            [ -d "$GST_DIR" ] || continue
-
-            COUNT="$(find "$GST_DIR" -maxdepth 1 -type f -name '*.so' | wc -l)"
-            BEFORE_COUNT=$((BEFORE_COUNT + COUNT))
-
-            echo "$GST_DIR"
-            echo "  plugins: $COUNT"
-            du -sh "$GST_DIR"
-          done <<EOF
-          $(find RuntimeStage -type d -path '*/gstreamer-1.0' | sort)
-          EOF
-
-          echo
-          echo "Total plugins before: $BEFORE_COUNT"
-
-          REMOVED=0
-          KEPT=0
-
-          while IFS= read -r PLUGIN; do
-            [ -f "$PLUGIN" ] || continue
-
-            NAME="$(basename "$PLUGIN")"
-
-            if grep -Fxq "$NAME" "$WHITELIST"; then
-              KEPT=$((KEPT + 1))
-            else
-              echo "Removing unneeded GStreamer plugin: $NAME"
-              rm -f "$PLUGIN"
-              REMOVED=$((REMOVED + 1))
-            fi
-          done <<EOF
-          $(find RuntimeStage -type f -path '*/gstreamer-1.0/*.so' | sort)
-          EOF
-
-          echo
-          echo "============================================================"
-          echo "GStreamer pruning result"
-          echo "============================================================"
-
-          echo "Kept:    $KEPT"
-          echo "Removed: $REMOVED"
-
-          echo
-          echo "Remaining plugins:"
-
-          find RuntimeStage \
-            -type f \
-            -path '*/gstreamer-1.0/*.so' \
-            -printf '%f\n' \
-            | sort
 
       # ============================================================
       # Analyze staged runtime
@@ -438,6 +368,7 @@ jobs:
           echo "============================================================"
           echo "TOTAL RUNTIME STAGE"
           echo "============================================================"
+
           du -sh RuntimeStage
 
           echo
@@ -482,7 +413,7 @@ jobs:
           EOF
 
           echo
-          echo "Total retained GStreamer plugins: $GST_COUNT"
+          echo "Total GStreamer plugins: $GST_COUNT"
 
           echo
           echo "============================================================"
@@ -538,7 +469,7 @@ jobs:
           echo "---- RuntimeStage binaries ----"
 
           find RuntimeStage -maxdepth 3 \
-            \( -name sharun -o -name retrofe -o -name mame \) \
+            \( -name sharun -o -name retrofe -o -name mame -o -name mame-runtime \) \
             -print
 
           test -x RuntimeStage/sharun
@@ -549,7 +480,15 @@ jobs:
 
           echo
           echo "Custom MAME:"
-          RuntimeStage/sharun mame -version
+
+          if RuntimeStage/sharun mame -version; then
+            :
+          elif RuntimeStage/sharun mame-runtime -version; then
+            :
+          else
+            echo "Unable to execute staged MAME."
+            exit 1
+          fi
 
       # ============================================================
       # CoinOPS runtime launcher
@@ -595,6 +534,44 @@ jobs:
           EOF
 
           chmod +x Packaging/Flatpak/coinops-launcher
+
+      # ============================================================
+      # Ensure packaged MAME command is named "mame"
+      #
+      # quick-sharun may preserve the source basename "mame-runtime".
+      #
+      # RetroFE launcher.conf uses:
+      #
+      #   executable = mame
+      #
+      # Therefore provide a stable "mame" command inside Sharun.
+      # ============================================================
+
+      - name: Ensure staged MAME command name
+        run: |
+          if [ -e RuntimeStage/bin/mame ]; then
+            echo "RuntimeStage/bin/mame already exists."
+          elif [ -e RuntimeStage/bin/mame-runtime ]; then
+            ln -s mame-runtime RuntimeStage/bin/mame
+          fi
+
+          if [ -e RuntimeStage/shared/bin/mame ]; then
+            echo "RuntimeStage/shared/bin/mame already exists."
+          elif [ -e RuntimeStage/shared/bin/mame-runtime ]; then
+            ln -s mame-runtime RuntimeStage/shared/bin/mame
+          fi
+
+          echo
+          echo "MAME command entries:"
+
+          find RuntimeStage/bin RuntimeStage/shared/bin \
+            -maxdepth 1 \
+            \( -name 'mame' -o -name 'mame-runtime' \) \
+            -ls 2>/dev/null || true
+
+          echo
+          echo "Verify final mame command:"
+          RuntimeStage/sharun mame -version
 
       # ============================================================
       # Create Flatpak manifest
@@ -685,14 +662,14 @@ jobs:
       # ============================================================
       # Cache flatpak-builder data
       #
-      # v5 because runtime staging/pruning policy changed.
+      # Cache version bumped because packaged MAME is now stripped.
       # ============================================================
 
       - name: Cache Flatpak builder
         uses: actions/cache@v4
         with:
           path: .flatpak-builder
-          key: coinops-flatpak-builder-${{ runner.os }}-25.08-v5
+          key: coinops-flatpak-builder-${{ runner.os }}-25.08-v6
           restore-keys: |
             coinops-flatpak-builder-${{ runner.os }}-25.08-
 
