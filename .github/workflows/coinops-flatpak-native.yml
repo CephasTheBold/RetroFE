@@ -52,7 +52,7 @@ jobs:
       #
       #   org.freedesktop.Sdk//25.08
       #
-      # and are NOT linked against Ubuntu runtime libraries.
+      # They are not linked against Ubuntu runtime libraries.
       # ============================================================
 
       - name: Install host build tools
@@ -92,7 +92,7 @@ jobs:
       # ============================================================
       # Inspect SDK dependency availability
       #
-      # Confirmed:
+      # Previously observed:
       #
       #   sdl2                  2.32.70
       #   SDL2_mixer           2.8.2
@@ -104,13 +104,13 @@ jobs:
       #   zlib                 1.3.1
       #   libwebp              1.6.0
       #
-      # Missing and bundled below:
+      # Missing from SDK and bundled below:
       #
       #   SDL2_image
       #   SDL2_ttf
       #   libevdev
       #   libserialport
-      #   minizip
+      #   classic minizip
       # ============================================================
 
       - name: Inspect Freedesktop SDK dependencies
@@ -336,7 +336,7 @@ jobs:
             # libevdev
             #
             # Missing from Freedesktop 25.08.
-            # RetroFE uses it for Linux input handling.
+            # Used by RetroFE for Linux input handling.
             # ======================================================
 
             - name: libevdev
@@ -384,18 +384,14 @@ jobs:
             # ======================================================
             # Classic Minizip
             #
-            # Required by:
+            # Required by ThirdParty/openhi2txt.
             #
-            #   ThirdParty/openhi2txt
-            #
-            # Provides classic API:
+            # This is the classic zlib contrib/minizip API used by:
             #
             #   unzip.h
             #   zip.h
             #   unzOpen()
             #   unzGoToFirstFile()
-            #
-            # Built from zlib 1.3.1 contrib/minizip.
             # ======================================================
 
             - name: minizip
@@ -461,11 +457,9 @@ jobs:
             # ======================================================
             # RetroFE
             #
-            # Built inside org.freedesktop.Sdk//25.08.
+            # Runtime/SDK provided:
             #
-            # Runtime-provided:
-            #
-            #   sdl2
+            #   sdl2 / sdl2-compat
             #   SDL2_mixer
             #   GStreamer
             #   fontconfig
@@ -543,17 +537,6 @@ jobs:
                     exit 1
                   fi
 
-                  echo
-                  echo "--- Module source layout ---"
-
-                  pwd
-
-                  find . \
-                    -maxdepth 2 \
-                    -type d \
-                    | sort \
-                    | head -100
-
                 - |
                   echo
                   echo "============================================================"
@@ -590,18 +573,53 @@ jobs:
             # ======================================================
             # Custom MAME
             #
-            # Built inside the same Freedesktop SDK environment.
+            # Built inside org.freedesktop.Sdk//25.08.
+            #
+            # SYMBOLS=0 / SYMLEVEL=0 are explicit because the
+            # previous full build failed at final link with:
+            #
+            #   relocation truncated to fit: R_X86_64_32
+            #
+            # against enormous DWARF sections such as:
+            #
+            #   .debug_info
+            #   .debug_aranges
+            #   .debug_loclists
+            #
+            # This is a release/runtime build, so embedded DWARF
+            # symbols are not required.
             # ======================================================
 
             - name: mame
               buildsystem: simple
 
-              build-options:
-                env:
-                  MAKEFLAGS: -j3
-
               build-commands:
                 - |
+                  echo "============================================================"
+                  echo "MAME build environment"
+                  echo "============================================================"
+
+                  echo "Compiler:"
+                  c++ --version
+
+                  echo
+                  echo "Available CPUs:"
+                  nproc
+
+                  echo
+                  echo "Environment flags:"
+                  echo "CFLAGS=${CFLAGS:-}"
+                  echo "CXXFLAGS=${CXXFLAGS:-}"
+                  echo "LDFLAGS=${LDFLAGS:-}"
+
+                  echo
+                  echo "Debug-related compiler defaults:"
+                  gcc -Q --help=common 2>/dev/null \
+                    | grep -Ei 'debug|dwarf' \
+                    || true
+
+                - |
+                  echo
                   echo "============================================================"
                   echo "Building custom MAME inside Freedesktop SDK"
                   echo "============================================================"
@@ -609,6 +627,8 @@ jobs:
                   make \
                     -j3 \
                     REGENIE=1 \
+                    SYMBOLS=0 \
+                    SYMLEVEL=0 \
                     USE_FFMPEG=0 \
                     TOOLS=0 \
                     TESTS=0 \
@@ -620,6 +640,17 @@ jobs:
                     USE_PCAP=0
 
                 - test -x mame
+
+                - |
+                  echo
+                  echo "============================================================"
+                  echo "Built MAME"
+                  echo "============================================================"
+
+                  ./mame -version
+
+                  ls -lh mame
+                  du -h mame
 
                 - install -Dm755 mame /app/bin/mame
 
@@ -657,7 +688,8 @@ jobs:
       # ============================================================
       # Cache flatpak-builder state
       #
-      # Unchanged modules should be reused between runs.
+      # Changed modules rebuild; unchanged completed modules can be
+      # restored from the Flatpak builder cache.
       # ============================================================
 
       - name: Cache Flatpak builder
@@ -709,6 +741,9 @@ jobs:
           echo "============================================================"
 
           file build-dir/files/bin/retrofe
+
+          echo
+          echo "Dynamic dependencies:"
           ldd build-dir/files/bin/retrofe || true
 
           echo
@@ -717,6 +752,9 @@ jobs:
           echo "============================================================"
 
           file build-dir/files/bin/mame
+
+          echo
+          echo "Dynamic dependencies:"
           ldd build-dir/files/bin/mame || true
 
           echo
@@ -758,7 +796,7 @@ jobs:
           du -sh repo
 
       # ============================================================
-      # Smoke tests inside built Flatpak environment
+      # Smoke tests inside the built Flatpak environment
       # ============================================================
 
       - name: Smoke test native Flatpak
