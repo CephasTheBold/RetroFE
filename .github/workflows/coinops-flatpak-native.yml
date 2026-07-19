@@ -1,0 +1,749 @@
+name: CoinOPS Native Flatpak
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-26.04
+    name: Build Native CoinOPS Flatpak x86_64
+
+    steps:
+      # ============================================================
+      # Checkout RetroFE
+      # ============================================================
+
+      - name: Checkout RetroFE
+        uses: actions/checkout@v4
+
+      # ============================================================
+      # Checkout custom MAME fork
+      # ============================================================
+
+      - name: Checkout MAME fork
+        uses: actions/checkout@v4
+        with:
+          repository: CoinOPS-Official/MAME-FFMpeg
+          ref: mame0285-local
+          path: MAME
+          token: ${{ secrets.MAME_REPO_TOKEN }}
+
+      # ============================================================
+      # Show exact source revisions
+      # ============================================================
+
+      - name: Show source revisions
+        run: |
+          echo "============================================================"
+          echo "RetroFE revision"
+          echo "============================================================"
+          git rev-parse HEAD
+
+          echo
+          echo "============================================================"
+          echo "MAME revision"
+          echo "============================================================"
+          git -C MAME rev-parse HEAD
+
+      # ============================================================
+      # Install HOST tools only
+      #
+      # These are NOT application runtime dependencies.
+      #
+      # RetroFE and MAME will be compiled inside:
+      #
+      #   org.freedesktop.Sdk//25.08
+      #
+      # rather than against Ubuntu.
+      # ============================================================
+
+      - name: Install host build tools
+        run: |
+          sudo apt-get update
+
+          sudo apt-get install -y \
+            flatpak \
+            flatpak-builder \
+            git
+
+      # ============================================================
+      # Configure Flathub
+      # ============================================================
+
+      - name: Configure Flathub
+        run: |
+          flatpak remote-add \
+            --user \
+            --if-not-exists \
+            flathub \
+            https://dl.flathub.org/repo/flathub.flatpakrepo
+
+      # ============================================================
+      # Install matching runtime + SDK
+      #
+      # Flatpak applications are intended to build against the SDK
+      # corresponding to their runtime.
+      # ============================================================
+
+      - name: Install Freedesktop 25.08 runtime and SDK
+        run: |
+          flatpak install \
+            --user \
+            --noninteractive \
+            flathub \
+            org.freedesktop.Platform//25.08 \
+            org.freedesktop.Sdk//25.08
+
+      # ============================================================
+      # Inspect the actual Freedesktop SDK
+      #
+      # This is deliberately verbose for the first native builds.
+      # It tells us exactly which RetroFE dependencies are already
+      # supplied by 25.08 rather than guessing.
+      # ============================================================
+
+      - name: Inspect Freedesktop SDK dependencies
+        run: |
+          echo "============================================================"
+          echo "SDL"
+          echo "============================================================"
+
+          flatpak run \
+            --command=sh \
+            org.freedesktop.Sdk//25.08 \
+            -c '
+              echo "--- pkg-config SDL entries ---"
+              pkg-config --list-all 2>/dev/null | grep -Ei "SDL|sdl" || true
+
+              echo
+              echo "--- SDL2 version ---"
+              pkg-config --modversion sdl2 2>/dev/null || true
+
+              echo
+              echo "--- SDL2 flags ---"
+              pkg-config --cflags --libs sdl2 2>/dev/null || true
+
+              echo
+              echo "--- SDL libraries ---"
+              ldconfig -p | grep -Ei "SDL|sdl" || true
+            '
+
+          echo
+          echo "============================================================"
+          echo "GSTREAMER"
+          echo "============================================================"
+
+          flatpak run \
+            --command=sh \
+            org.freedesktop.Sdk//25.08 \
+            -c '
+              pkg-config --modversion gstreamer-1.0 2>/dev/null || true
+              pkg-config --modversion gstreamer-app-1.0 2>/dev/null || true
+              pkg-config --modversion gstreamer-video-1.0 2>/dev/null || true
+
+              echo
+              echo "--- GStreamer pkg-config entries ---"
+              pkg-config --list-all 2>/dev/null | grep -i gstreamer || true
+
+              echo
+              echo "--- GStreamer plugin directories ---"
+              find /usr -type d -name "gstreamer-1.0" -print 2>/dev/null || true
+            '
+
+          echo
+          echo "============================================================"
+          echo "OTHER RETROFE DEPENDENCIES"
+          echo "============================================================"
+
+          flatpak run \
+            --command=sh \
+            org.freedesktop.Sdk//25.08 \
+            -c '
+              for pkg in \
+                fontconfig \
+                libcurl \
+                libusb-1.0 \
+                libevdev \
+                libudev \
+                zlib \
+                libwebp
+              do
+                printf "%-24s " "$pkg"
+                pkg-config --modversion "$pkg" 2>/dev/null || echo "not found"
+              done
+
+              echo
+              echo "--- minizip ---"
+              pkg-config --modversion minizip 2>/dev/null || true
+              ldconfig -p | grep -i minizip || true
+
+              echo
+              echo "--- libserialport ---"
+              pkg-config --modversion libserialport 2>/dev/null || true
+              ldconfig -p | grep -i serialport || true
+            '
+
+      # ============================================================
+      # Create Flatpak metadata
+      # ============================================================
+
+      - name: Create Flatpak metadata
+        run: |
+          mkdir -p Packaging/Flatpak
+
+          cat > Packaging/Flatpak/coinops-launcher <<'EOF'
+          #!/bin/sh
+          set -eu
+
+          if [ "$#" -lt 1 ]; then
+              echo "Usage:"
+              echo "  flatpak run org.coinops.Runtime <CoinOPS build folder>"
+              echo
+              echo "Example:"
+              echo '  flatpak run org.coinops.Runtime "$HOME/CoinOPS Arise"'
+              exit 1
+          fi
+
+          COINOPS_ROOT="$1"
+          shift
+
+          if [ ! -d "$COINOPS_ROOT" ]; then
+              echo "CoinOPS build folder not found:"
+              echo "  $COINOPS_ROOT"
+              exit 1
+          fi
+
+          if [ ! -f "$COINOPS_ROOT/settings.conf" ]; then
+              echo "settings.conf not found in CoinOPS build folder:"
+              echo "  $COINOPS_ROOT"
+              exit 1
+          fi
+
+          export RETROFE_PATH="$COINOPS_ROOT"
+
+          cd "$COINOPS_ROOT"
+
+          exec /app/bin/retrofe "$@"
+          EOF
+
+          chmod +x Packaging/Flatpak/coinops-launcher
+
+          cat > Packaging/Flatpak/coinops-runtime.desktop <<'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=CoinOPS Runtime
+          Comment=CoinOPS Runtime
+          Exec=coinops-launcher
+          Icon=org.coinops.Runtime
+          Terminal=false
+          Categories=Game;
+          EOF
+
+          cp \
+            Package/Environment/Common/RetroFE.png \
+            Packaging/Flatpak/coinops-runtime.png
+
+      # ============================================================
+      # Create native Flatpak manifest
+      #
+      # Important:
+      #
+      # We DO NOT bundle:
+      #
+      #   - glibc
+      #   - libstdc++
+      #   - SDL2 itself
+      #   - Mesa
+      #   - OpenGL drivers
+      #   - EGL/GLX implementation
+      #   - X11/Wayland runtime
+      #   - base GStreamer runtime
+      #
+      # Those come from org.freedesktop.Platform.
+      #
+      # We initially bundle SDL companion libraries explicitly,
+      # because RetroFE uses them and SDL2_image/SDL2_ttf were
+      # removed from the Freedesktop 25.08 project stack.
+      # ============================================================
+
+      - name: Create native Flatpak manifest
+        run: |
+          cat > org.coinops.Runtime.yml <<'EOF'
+          app-id: org.coinops.Runtime
+
+          runtime: org.freedesktop.Platform
+          runtime-version: '25.08'
+          sdk: org.freedesktop.Sdk
+
+          command: coinops-launcher
+
+          finish-args:
+            # Shared memory is important for graphics/game workloads.
+            - --share=ipc
+
+            # RetroFE/CoinOPS may launch network-capable applications.
+            - --share=network
+
+            # Native display support.
+            - --socket=wayland
+            - --socket=fallback-x11
+
+            # Audio.
+            - --socket=pulseaudio
+
+            # GPU and input device access.
+            - --device=all
+
+            # CoinOPS data is intentionally external to the Flatpak.
+            - --filesystem=home
+            - --filesystem=/run/media
+            - --filesystem=/media
+            - --filesystem=/mnt
+
+          modules:
+
+            # ======================================================
+            # SDL2_image
+            #
+            # RetroFE uses SDL_image.
+            #
+            # Build against Freedesktop's SDL2 compatibility layer.
+            # ======================================================
+
+            - name: SDL2_image
+              buildsystem: cmake-ninja
+
+              config-opts:
+                - -DCMAKE_BUILD_TYPE=Release
+                - -DCMAKE_INSTALL_PREFIX=/app
+                - -DBUILD_SHARED_LIBS=ON
+                - -DSDL2IMAGE_SAMPLES=OFF
+                - -DSDL2IMAGE_TESTS=OFF
+
+              cleanup:
+                - /include
+                - /lib/cmake
+                - /lib/pkgconfig
+                - '*.a'
+                - '*.la'
+
+              sources:
+                - type: git
+                  url: https://github.com/libsdl-org/SDL_image.git
+                  branch: SDL2
+
+            # ======================================================
+            # SDL2_ttf
+            #
+            # RetroFE uses SDL_ttf.
+            # ======================================================
+
+            - name: SDL2_ttf
+              buildsystem: cmake-ninja
+
+              config-opts:
+                - -DCMAKE_BUILD_TYPE=Release
+                - -DCMAKE_INSTALL_PREFIX=/app
+                - -DBUILD_SHARED_LIBS=ON
+                - -DSDL2TTF_SAMPLES=OFF
+
+              cleanup:
+                - /include
+                - /lib/cmake
+                - /lib/pkgconfig
+                - '*.a'
+                - '*.la'
+
+              sources:
+                - type: git
+                  url: https://github.com/libsdl-org/SDL_ttf.git
+                  branch: SDL2
+
+            # ======================================================
+            # SDL2_mixer
+            #
+            # RetroFE MusicPlayer uses SDL_mixer.
+            #
+            # Keep this explicit in the first native iteration.
+            # Once working, we can inspect which decoder libraries
+            # are actually being included and trim deliberately.
+            # ======================================================
+
+            - name: SDL2_mixer
+              buildsystem: cmake-ninja
+
+              config-opts:
+                - -DCMAKE_BUILD_TYPE=Release
+                - -DCMAKE_INSTALL_PREFIX=/app
+                - -DBUILD_SHARED_LIBS=ON
+                - -DSDL2MIXER_SAMPLES=OFF
+
+              cleanup:
+                - /include
+                - /lib/cmake
+                - /lib/pkgconfig
+                - '*.a'
+                - '*.la'
+
+              sources:
+                - type: git
+                  url: https://github.com/libsdl-org/SDL_mixer.git
+                  branch: SDL2
+
+            # ======================================================
+            # libserialport
+            #
+            # RetroFE's restrictor / hardware integration can use
+            # serial devices.
+            # ======================================================
+
+            - name: libserialport
+              buildsystem: autotools
+
+              config-opts:
+                - --disable-static
+                - --enable-shared
+
+              cleanup:
+                - /include
+                - /lib/pkgconfig
+                - '*.a'
+                - '*.la'
+
+              sources:
+                - type: git
+                  url: https://sigrok.org/git/libserialport
+                  branch: master
+
+            # ======================================================
+            # RetroFE
+            #
+            # Compiled INSIDE org.freedesktop.Sdk//25.08.
+            #
+            # This is the major architectural change from the
+            # Sharun/AppImage-style workflow.
+            # ======================================================
+
+            - name: retrofe
+              buildsystem: simple
+
+              build-commands:
+                - |
+                  echo "============================================================"
+                  echo "RetroFE build environment"
+                  echo "============================================================"
+
+                  echo
+                  echo "SDL2:"
+                  pkg-config --modversion sdl2 || true
+                  pkg-config --cflags --libs sdl2 || true
+
+                  echo
+                  echo "SDL_image:"
+                  pkg-config --modversion SDL2_image || true
+
+                  echo
+                  echo "SDL_ttf:"
+                  pkg-config --modversion SDL2_ttf || true
+
+                  echo
+                  echo "SDL_mixer:"
+                  pkg-config --modversion SDL2_mixer || true
+
+                  echo
+                  echo "GStreamer:"
+                  pkg-config --modversion gstreamer-1.0 || true
+
+                - |
+                  cmake \
+                    -S RetroFE/Source \
+                    -B RetroFE/Build \
+                    -DCMAKE_BUILD_TYPE=Release \
+                    -DCMAKE_PREFIX_PATH=/app \
+                    -DCMAKE_INSTALL_PREFIX=/app
+
+                - cmake --build RetroFE/Build --parallel
+
+                - test -x RetroFE/Build/retrofe
+
+                - install -Dm755 RetroFE/Build/retrofe /app/bin/retrofe
+
+              sources:
+                - type: dir
+                  path: RetroFE
+
+            # ======================================================
+            # Custom MAME
+            #
+            # Also compiled inside org.freedesktop.Sdk//25.08.
+            #
+            # No Ubuntu-linked binary is copied into the Flatpak.
+            # ======================================================
+
+            - name: mame
+              buildsystem: simple
+
+              build-options:
+                env:
+                  MAKEFLAGS: -j3
+
+              build-commands:
+                - |
+                  echo "============================================================"
+                  echo "Building custom MAME inside Freedesktop SDK"
+                  echo "============================================================"
+
+                  make \
+                    -j3 \
+                    REGENIE=1 \
+                    USE_FFMPEG=0 \
+                    TOOLS=0 \
+                    TESTS=0 \
+                    BENCHMARKS=0 \
+                    USE_QTDEBUG=0 \
+                    NO_USE_MIDI=1 \
+                    NO_USE_PORTAUDIO=1 \
+                    USE_TAPTUN=0 \
+                    USE_PCAP=0
+
+                - test -x mame
+
+                - install -Dm755 mame /app/bin/mame
+
+              sources:
+                - type: dir
+                  path: MAME
+
+            # ======================================================
+            # CoinOPS launcher and desktop metadata
+            # ======================================================
+
+            - name: coinops-runtime
+              buildsystem: simple
+
+              build-commands:
+                - install -Dm755 coinops-launcher /app/bin/coinops-launcher
+
+                - install -Dm644 coinops-runtime.desktop /app/share/applications/org.coinops.Runtime.desktop
+
+                - install -Dm644 coinops-runtime.png /app/share/icons/hicolor/256x256/apps/org.coinops.Runtime.png
+
+              sources:
+                - type: file
+                  path: Packaging/Flatpak/coinops-launcher
+
+                - type: file
+                  path: Packaging/Flatpak/coinops-runtime.desktop
+
+                - type: file
+                  path: Packaging/Flatpak/coinops-runtime.png
+          EOF
+
+          cat org.coinops.Runtime.yml
+
+      # ============================================================
+      # Cache flatpak-builder
+      #
+      # flatpak-builder caches completed modules.
+      #
+      # Keep this broad restore key so unchanged dependency modules
+      # can be reused between workflow runs.
+      # ============================================================
+
+      - name: Cache Flatpak builder
+        uses: actions/cache@v4
+        with:
+          path: .flatpak-builder
+          key: coinops-native-flatpak-${{ runner.os }}-25.08-${{ github.sha }}
+          restore-keys: |
+            coinops-native-flatpak-${{ runner.os }}-25.08-
+
+      # ============================================================
+      # Build native Flatpak
+      #
+      # Everything in modules: is compiled inside the Freedesktop
+      # SDK sandbox.
+      # ============================================================
+
+      - name: Build native CoinOPS Flatpak
+        run: |
+          rm -rf build-dir repo
+
+          flatpak-builder \
+            --user \
+            --force-clean \
+            --repo=repo \
+            --install-deps-from=flathub \
+            build-dir \
+            org.coinops.Runtime.yml
+
+      # ============================================================
+      # Inspect resulting native Flatpak filesystem
+      # ============================================================
+
+      - name: Analyze native Flatpak
+        run: |
+          echo "============================================================"
+          echo "TOTAL /APP PAYLOAD"
+          echo "============================================================"
+
+          du -sh build-dir/files
+
+          echo
+          echo "============================================================"
+          echo "/APP/BIN"
+          echo "============================================================"
+
+          ls -lh build-dir/files/bin
+
+          echo
+          echo "============================================================"
+          echo "RETROFE"
+          echo "============================================================"
+
+          file build-dir/files/bin/retrofe
+          ldd build-dir/files/bin/retrofe || true
+
+          echo
+          echo "============================================================"
+          echo "MAME"
+          echo "============================================================"
+
+          file build-dir/files/bin/mame
+          ldd build-dir/files/bin/mame || true
+
+          echo
+          echo "============================================================"
+          echo "BUNDLED /APP/LIB"
+          echo "============================================================"
+
+          if [ -d build-dir/files/lib ]; then
+            find build-dir/files/lib \
+              -maxdepth 2 \
+              \( -type f -o -type l \) \
+              -printf '%p\n' \
+              | sort
+
+            echo
+            du -h -d 2 build-dir/files/lib 2>/dev/null \
+              | sort -h \
+              | tail -100
+          fi
+
+          echo
+          echo "============================================================"
+          echo "50 LARGEST FILES IN /APP"
+          echo "============================================================"
+
+          find build-dir/files -type f -printf '%s %p\n' \
+            | sort -nr \
+            | head -50 \
+            | numfmt --field=1 --to=iec || true
+
+          echo
+          echo "============================================================"
+          echo "REPOSITORY SIZE"
+          echo "============================================================"
+
+          du -sh repo
+
+      # ============================================================
+      # Runtime smoke tests INSIDE the built Flatpak environment
+      # ============================================================
+
+      - name: Smoke test native Flatpak
+        run: |
+          echo "============================================================"
+          echo "RetroFE version"
+          echo "============================================================"
+
+          flatpak-builder \
+            --run \
+            build-dir \
+            org.coinops.Runtime.yml \
+            /app/bin/retrofe \
+            --version || true
+
+          echo
+          echo "============================================================"
+          echo "MAME version"
+          echo "============================================================"
+
+          flatpak-builder \
+            --run \
+            build-dir \
+            org.coinops.Runtime.yml \
+            /app/bin/mame \
+            -version
+
+          echo
+          echo "============================================================"
+          echo "PATH resolution"
+          echo "============================================================"
+
+          flatpak-builder \
+            --run \
+            build-dir \
+            org.coinops.Runtime.yml \
+            sh \
+            -c '
+              echo "$PATH"
+
+              echo
+              echo "retrofe:"
+              command -v retrofe
+
+              echo
+              echo "mame:"
+              command -v mame
+
+              echo
+              echo "coinops-launcher:"
+              command -v coinops-launcher
+            '
+
+      # ============================================================
+      # Build distributable Flatpak bundle
+      # ============================================================
+
+      - name: Build Flatpak bundle
+        run: |
+          echo "Creating native Flatpak bundle..."
+
+          (
+            while true; do
+              echo "Still building Flatpak bundle: $(date)"
+              sleep 60
+            done
+          ) &
+          HEARTBEAT_PID=$!
+
+          trap 'kill "$HEARTBEAT_PID" 2>/dev/null || true' EXIT
+
+          flatpak build-bundle \
+            repo \
+            CoinOPS-Runtime-Native-x86_64.flatpak \
+            org.coinops.Runtime \
+            --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo
+
+          kill "$HEARTBEAT_PID" 2>/dev/null || true
+          trap - EXIT
+
+          echo
+          echo "Bundle complete:"
+          ls -lh CoinOPS-Runtime-Native-x86_64.flatpak
+
+          echo
+          echo "Bundle byte size:"
+          stat --printf='%s bytes\n' CoinOPS-Runtime-Native-x86_64.flatpak
+
+      # ============================================================
+      # Upload artifact
+      # ============================================================
+
+      - name: Upload native CoinOPS Flatpak
+        uses: actions/upload-artifact@v4
+        with:
+          name: CoinOPS-Runtime-Native-x86_64.flatpak
+          path: CoinOPS-Runtime-Native-x86_64.flatpak
+          if-no-files-found: error
