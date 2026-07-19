@@ -332,7 +332,32 @@ jobs:
                 - type: git
                   url: https://github.com/libsdl-org/SDL_ttf.git
                   branch: SDL2
+                  
+            # ======================================================
+            # libevdev
+            #
+            # RetroFE uses libevdev for Linux input handling.
+            # Freedesktop 25.08 SDK does not provide it, so bundle it.
+            # ======================================================
 
+            - name: libevdev
+              buildsystem: meson
+
+              config-opts:
+                - -Dtests=disabled
+                - -Ddocumentation=disabled
+
+              cleanup:
+                - /include
+                - /lib/pkgconfig
+                - '*.a'
+                - '*.la'
+
+              sources:
+                - type: git
+                  url: https://gitlab.freedesktop.org/libevdev/libevdev.git
+                  branch: master
+                  
             # ======================================================
             # libserialport
             #
