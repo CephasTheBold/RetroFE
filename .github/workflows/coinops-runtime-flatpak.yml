@@ -44,7 +44,7 @@ jobs:
       # ============================================================
       # Restore cached MAME binary
       #
-      # The cache stores the original, unmodified MAME binary.
+      # Cache contains the original unmodified MAME executable.
       # A separate stripped copy is created later for packaging.
       # ============================================================
 
@@ -57,12 +57,6 @@ jobs:
 
       # ============================================================
       # Host build/staging dependencies
-      #
-      # These packages exist on the GitHub runner so RetroFE/MAME
-      # can build and quick-sharun can discover runtime dependencies.
-      #
-      # Their presence here does not automatically mean they are
-      # included in the final Flatpak.
       # ============================================================
 
       - name: Install dependencies
@@ -128,18 +122,7 @@ jobs:
       # ============================================================
       # Build custom MAME
       #
-      # Skipped when the exact MAME revision is restored from cache.
-      #
-      # Disabled:
-      #   - FFmpeg layout/video support
-      #   - auxiliary tools
-      #   - tests
-      #   - benchmarks
-      #   - Qt debugger
-      #   - MIDI
-      #   - PortAudio
-      #   - TAP/TUN networking
-      #   - PCAP networking
+      # Skipped when exact revision is restored from cache.
       # ============================================================
 
       - name: Build custom MAME
@@ -193,9 +176,11 @@ jobs:
       # ============================================================
       # Prepare runtime binaries
       #
-      # Keep MAME/mame untouched so the existing cache remains valid.
+      # Keep cached MAME/mame untouched.
       #
-      # Create MAME/mame-runtime as a stripped packaging copy.
+      # Create stripped packaging copy:
+      #
+      #   MAME/mame-runtime
       # ============================================================
 
       - name: Prepare runtime binaries
@@ -297,11 +282,35 @@ jobs:
 
       # ============================================================
       # Runtime metadata
+      #
+      # Two desktop files are deliberately used:
+      #
+      # 1. quick-sharun staging desktop:
+      #      Exec=retrofe
+      #
+      #    Sharun reads this while RuntimeStage is being created,
+      #    so its main binary must already exist at that point.
+      #
+      # 2. final Flatpak desktop:
+      #      Exec=coinops-launcher
+      #
+      #    coinops-launcher is installed later by flatpak-builder.
       # ============================================================
 
       - name: Create runtime metadata
         run: |
           mkdir -p Packaging/Flatpak
+
+          cat > Packaging/Flatpak/coinops-runtime-sharun.desktop <<'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=CoinOPS Runtime
+          Comment=CoinOPS Runtime
+          Exec=retrofe
+          Icon=org.coinops.Runtime
+          Terminal=false
+          Categories=Game;
+          EOF
 
           cat > Packaging/Flatpak/coinops-runtime.desktop <<'EOF'
           [Desktop Entry]
@@ -323,15 +332,16 @@ jobs:
       #
       # DEPLOY_SDL is intentionally NOT enabled.
       #
-      # SDL dependencies are discovered naturally from the binaries.
-      #
       # DEPLOY_OPENGL is intentionally NOT enabled.
-      #
-      # Explicit OpenGL deployment previously pulled a large Ubuntu
-      # Mesa/LLVM/OpenCL stack into the Flatpak.
+      # This avoids sweeping the Ubuntu Mesa/LLVM/OpenCL stack into
+      # the Flatpak.
       #
       # DEPLOY_GSTREAMER remains enabled because RetroFE dynamically
       # loads GStreamer plugins.
+      #
+      # IMPORTANT:
+      # Sharun receives the staging desktop file whose Exec is
+      # "retrofe", because coinops-launcher does not exist yet.
       # ============================================================
 
       - name: Create combined runtime stage
@@ -345,7 +355,7 @@ jobs:
 
           export DEPLOY_GSTREAMER=1
 
-          export DESKTOP="$PWD/Packaging/Flatpak/coinops-runtime.desktop"
+          export DESKTOP="$PWD/Packaging/Flatpak/coinops-runtime-sharun.desktop"
           export ICON="$PWD/Packaging/Flatpak/coinops-runtime.png"
 
           # Runtime-probe RetroFE only.
@@ -358,6 +368,56 @@ jobs:
           ./quick-sharun.sh \
             "$RETROFE_BINARY" \
             "$MAME_BINARY"
+
+      # ============================================================
+      # Ensure packaged MAME command is named "mame"
+      #
+      # Because the stripped source executable is called
+      # "mame-runtime", Sharun may expose that basename.
+      #
+      # RetroFE launcher.conf expects:
+      #
+      #   executable = mame
+      #
+      # Provide a stable alias.
+      # ============================================================
+
+      - name: Ensure staged MAME command name
+        run: |
+          echo "MAME entries before aliasing:"
+
+          find RuntimeStage/bin RuntimeStage/shared/bin \
+            -maxdepth 1 \
+            \( -name 'mame' -o -name 'mame-runtime' \) \
+            -ls 2>/dev/null || true
+
+          echo
+
+          if [ ! -e RuntimeStage/shared/bin/mame ]; then
+            if [ -e RuntimeStage/shared/bin/mame-runtime ]; then
+              ln -s mame-runtime RuntimeStage/shared/bin/mame
+            fi
+          fi
+
+          if [ ! -e RuntimeStage/bin/mame ]; then
+            if [ -e RuntimeStage/bin/mame-runtime ]; then
+              ln -s mame-runtime RuntimeStage/bin/mame
+            elif [ -e RuntimeStage/shared/bin/mame ]; then
+              ln -s ../shared/bin/mame RuntimeStage/bin/mame
+            fi
+          fi
+
+          echo "MAME entries after aliasing:"
+
+          find RuntimeStage/bin RuntimeStage/shared/bin \
+            -maxdepth 1 \
+            \( -name 'mame' -o -name 'mame-runtime' \) \
+            -ls 2>/dev/null || true
+
+          echo
+          echo "Verify final mame command:"
+
+          RuntimeStage/sharun mame -version
 
       # ============================================================
       # Analyze staged runtime
@@ -469,7 +529,12 @@ jobs:
           echo "---- RuntimeStage binaries ----"
 
           find RuntimeStage -maxdepth 3 \
-            \( -name sharun -o -name retrofe -o -name mame -o -name mame-runtime \) \
+            \( \
+              -name sharun \
+              -o -name retrofe \
+              -o -name mame \
+              -o -name mame-runtime \
+            \) \
             -print
 
           test -x RuntimeStage/sharun
@@ -480,15 +545,7 @@ jobs:
 
           echo
           echo "Custom MAME:"
-
-          if RuntimeStage/sharun mame -version; then
-            :
-          elif RuntimeStage/sharun mame-runtime -version; then
-            :
-          else
-            echo "Unable to execute staged MAME."
-            exit 1
-          fi
+          RuntimeStage/sharun mame -version
 
       # ============================================================
       # CoinOPS runtime launcher
@@ -534,44 +591,6 @@ jobs:
           EOF
 
           chmod +x Packaging/Flatpak/coinops-launcher
-
-      # ============================================================
-      # Ensure packaged MAME command is named "mame"
-      #
-      # quick-sharun may preserve the source basename "mame-runtime".
-      #
-      # RetroFE launcher.conf uses:
-      #
-      #   executable = mame
-      #
-      # Therefore provide a stable "mame" command inside Sharun.
-      # ============================================================
-
-      - name: Ensure staged MAME command name
-        run: |
-          if [ -e RuntimeStage/bin/mame ]; then
-            echo "RuntimeStage/bin/mame already exists."
-          elif [ -e RuntimeStage/bin/mame-runtime ]; then
-            ln -s mame-runtime RuntimeStage/bin/mame
-          fi
-
-          if [ -e RuntimeStage/shared/bin/mame ]; then
-            echo "RuntimeStage/shared/bin/mame already exists."
-          elif [ -e RuntimeStage/shared/bin/mame-runtime ]; then
-            ln -s mame-runtime RuntimeStage/shared/bin/mame
-          fi
-
-          echo
-          echo "MAME command entries:"
-
-          find RuntimeStage/bin RuntimeStage/shared/bin \
-            -maxdepth 1 \
-            \( -name 'mame' -o -name 'mame-runtime' \) \
-            -ls 2>/dev/null || true
-
-          echo
-          echo "Verify final mame command:"
-          RuntimeStage/sharun mame -version
 
       # ============================================================
       # Create Flatpak manifest
@@ -662,14 +681,16 @@ jobs:
       # ============================================================
       # Cache flatpak-builder data
       #
-      # Cache version bumped because packaged MAME is now stripped.
+      # v7:
+      #   - stripped MAME
+      #   - separate Sharun/final desktop files
       # ============================================================
 
       - name: Cache Flatpak builder
         uses: actions/cache@v4
         with:
           path: .flatpak-builder
-          key: coinops-flatpak-builder-${{ runner.os }}-25.08-v6
+          key: coinops-flatpak-builder-${{ runner.os }}-25.08-v7
           restore-keys: |
             coinops-flatpak-builder-${{ runner.os }}-25.08-
 
