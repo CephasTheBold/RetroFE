@@ -29,12 +29,7 @@ jobs:
           token: ${{ secrets.MAME_REPO_TOKEN }}
 
       # ============================================================
-      # Determine exact MAME source revision
-      #
-      # The cache key is tied to the actual MAME commit rather than
-      # the RetroFE repository commit. This means unrelated RetroFE,
-      # launcher, packaging, or Flatpak changes will not force MAME
-      # to rebuild.
+      # Determine exact MAME revision
       # ============================================================
 
       - name: Get MAME revision
@@ -47,16 +42,7 @@ jobs:
           echo "sha=$MAME_SHA" >> "$GITHUB_OUTPUT"
 
       # ============================================================
-      # Restore cached custom MAME binary
-      #
-      # Cache identity includes:
-      #   - exact MAME source commit
-      #   - architecture
-      #   - FFmpeg build policy
-      #   - cache format revision
-      #
-      # Increment the final v1 manually if the build configuration
-      # changes in a way that should invalidate existing binaries.
+      # Restore cached MAME binary
       # ============================================================
 
       - name: Cache custom MAME
@@ -67,7 +53,19 @@ jobs:
           key: mame-linux-x64-${{ steps.mame-rev.outputs.sha }}-ffmpeg0-v1
 
       # ============================================================
-      # Host build dependencies
+      # Host build/staging dependencies
+      #
+      # GStreamer requirements:
+      #
+      # Build:
+      #   libgstreamer1.0-dev
+      #   libgstreamer-plugins-base1.0-dev
+      #
+      # Runtime/plugin families used by RetroFE:
+      #   libgstreamer1.0-0
+      #   gstreamer1.0-plugins-base
+      #   gstreamer1.0-plugins-good
+      #   gstreamer1.0-libav
       # ============================================================
 
       - name: Install dependencies
@@ -80,12 +78,7 @@ jobs:
             python3 \
             cmake \
             zlib1g-dev \
-            libglib2.0-0 \
             libglib2.0-dev \
-            libsdl2-2.0-0 \
-            libsdl2-mixer-2.0-0 \
-            libsdl2-image-2.0-0 \
-            libsdl2-ttf-2.0-0 \
             libsdl2-dev \
             libsdl2-mixer-dev \
             libsdl2-image-dev \
@@ -100,7 +93,6 @@ jobs:
             gstreamer1.0-libav \
             libminizip-dev \
             libwebp-dev \
-            libusb-1.0-0 \
             libusb-1.0-0-dev \
             libevdev-dev \
             libudev-dev \
@@ -108,7 +100,6 @@ jobs:
             libcurl4-openssl-dev \
             patchelf \
             strace \
-            dbus-x11 \
             wget \
             flatpak \
             flatpak-builder
@@ -140,26 +131,7 @@ jobs:
       # ============================================================
       # Build custom MAME
       #
-      # This step is skipped completely when an exact cached MAME
-      # executable exists for the checked-out MAME source revision.
-      #
-      # Disabled for CoinOPS runtime:
-      #   - FFmpeg layout/video support
-      #   - auxiliary tools
-      #   - tests
-      #   - benchmarks
-      #   - Qt debugger
-      #   - MIDI
-      #   - PortAudio
-      #   - TAP/TUN networking
-      #   - PCAP networking
-      #
-      # Kept:
-      #   - SDL
-      #   - OpenGL
-      #   - BGFX
-      #   - PulseAudio
-      #   - PipeWire/default Linux audio support
+      # Skipped when exact binary is restored from cache.
       # ============================================================
 
       - name: Build custom MAME
@@ -167,7 +139,7 @@ jobs:
         working-directory: MAME
         run: |
           echo "No cached MAME binary found."
-          echo "Building custom MAME from revision:"
+          echo "Building revision:"
           git rev-parse HEAD
 
           make \
@@ -186,9 +158,7 @@ jobs:
           test -x mame
 
       # ============================================================
-      # Verify custom MAME
-      #
-      # Runs whether MAME was freshly compiled or restored from cache.
+      # Verify MAME
       # ============================================================
 
       - name: Verify custom MAME
@@ -206,6 +176,11 @@ jobs:
           echo
           echo "MAME source revision:"
           git rev-parse HEAD
+
+          echo
+          echo "MAME binary size:"
+          ls -lh mame
+          du -h mame
 
       # ============================================================
       # Locate binaries
@@ -238,6 +213,38 @@ jobs:
 
           echo "retrofe=$RETROFE_BINARY" >> "$GITHUB_OUTPUT"
           echo "mame=$MAME_BINARY" >> "$GITHUB_OUTPUT"
+
+      # ============================================================
+      # Inspect direct dependencies
+      # ============================================================
+
+      - name: Inspect binary dependencies
+        env:
+          RETROFE_BINARY: ${{ steps.binaries.outputs.retrofe }}
+          MAME_BINARY: ${{ steps.binaries.outputs.mame }}
+        run: |
+          echo "============================================================"
+          echo "RetroFE direct dependencies"
+          echo "============================================================"
+          ldd "$RETROFE_BINARY" | sort
+
+          echo
+          echo "============================================================"
+          echo "MAME direct dependencies"
+          echo "============================================================"
+          ldd "$MAME_BINARY" | sort
+
+          echo
+          echo "============================================================"
+          echo "SDL linkage"
+          echo "============================================================"
+
+          echo "RetroFE:"
+          ldd "$RETROFE_BINARY" | grep -Ei 'SDL2|SDL3' || true
+
+          echo
+          echo "MAME:"
+          ldd "$MAME_BINARY" | grep -Ei 'SDL2|SDL3' || true
 
       # ============================================================
       # Download quick-sharun
@@ -275,13 +282,54 @@ jobs:
             Packaging/Flatpak/coinops-runtime.png
 
       # ============================================================
-      # Stage RetroFE + custom MAME + dependencies
+      # Record exact GStreamer plugin whitelist
       #
-      # RuntimeStage/
-      #   sharun
-      #   shared/bin/retrofe
-      #   shared/bin/mame
-      #   shared/lib/...
+      # Keep only plugin .so files supplied by:
+      #
+      #   gstreamer1.0-plugins-base
+      #   gstreamer1.0-plugins-good
+      #   gstreamer1.0-libav
+      #
+      # Development packages contain headers/link metadata and are
+      # deliberately NOT part of the runtime plugin whitelist.
+      # ============================================================
+
+      - name: Create GStreamer plugin whitelist
+        run: |
+          mkdir -p Packaging/Flatpak
+
+          {
+            dpkg-query -L gstreamer1.0-plugins-base
+            dpkg-query -L gstreamer1.0-plugins-good
+            dpkg-query -L gstreamer1.0-libav
+          } \
+            | grep '/gstreamer-1.0/.*\.so$' \
+            | xargs -r -n1 basename \
+            | sort -u \
+            > Packaging/Flatpak/gstreamer-plugin-whitelist.txt
+
+          echo "============================================================"
+          echo "Allowed GStreamer plugins"
+          echo "============================================================"
+
+          cat Packaging/Flatpak/gstreamer-plugin-whitelist.txt
+
+          echo
+          echo "Plugin count:"
+          wc -l < Packaging/Flatpak/gstreamer-plugin-whitelist.txt
+
+      # ============================================================
+      # Stage RetroFE + MAME + dependencies
+      #
+      # DEPLOY_SDL is NOT enabled.
+      #
+      # DEPLOY_OPENGL is NOT enabled.
+      #
+      # DEPLOY_GSTREAMER remains enabled so Sharun discovers and
+      # gathers GStreamer runtime dependencies correctly.
+      #
+      # The plugin directory is pruned immediately afterward to the
+      # exact Base + Good + Libav package set RetroFE requires.
       # ============================================================
 
       - name: Create combined runtime stage
@@ -289,23 +337,197 @@ jobs:
           RETROFE_BINARY: ${{ steps.binaries.outputs.retrofe }}
           MAME_BINARY: ${{ steps.binaries.outputs.mame }}
         run: |
+          rm -rf RuntimeStage
+
           export APPDIR="$PWD/RuntimeStage"
 
-          export DEPLOY_SDL=1
           export DEPLOY_GSTREAMER=1
-          export DEPLOY_OPENGL=1
 
           export DESKTOP="$PWD/Packaging/Flatpak/coinops-runtime.desktop"
           export ICON="$PWD/Packaging/Flatpak/coinops-runtime.png"
 
-          # Runtime-probe RetroFE only.
-          # MAME is still packaged and its ELF dependencies are collected.
+          # Probe RetroFE for dynamically loaded runtime libraries.
           export STRACE_BINARY="retrofe"
           export STRACE_TIME=5
 
           ./quick-sharun.sh \
             "$RETROFE_BINARY" \
             "$MAME_BINARY"
+
+      # ============================================================
+      # Prune GStreamer plugins
+      #
+      # Sharun may deploy plugins outside the three package families
+      # RetroFE actually requires.
+      #
+      # Only plugin files are removed here.
+      #
+      # Transitive shared libraries are deliberately left untouched
+      # for this pass so we do not accidentally remove a dependency
+      # needed by one of the retained plugins.
+      # ============================================================
+
+      - name: Prune GStreamer plugins
+        run: |
+          WHITELIST="$PWD/Packaging/Flatpak/gstreamer-plugin-whitelist.txt"
+
+          echo "============================================================"
+          echo "GStreamer before pruning"
+          echo "============================================================"
+
+          BEFORE_COUNT=0
+
+          while IFS= read -r GST_DIR; do
+            [ -d "$GST_DIR" ] || continue
+
+            COUNT="$(find "$GST_DIR" -maxdepth 1 -type f -name '*.so' | wc -l)"
+            BEFORE_COUNT=$((BEFORE_COUNT + COUNT))
+
+            echo "$GST_DIR"
+            echo "  plugins: $COUNT"
+            du -sh "$GST_DIR"
+          done <<EOF
+          $(find RuntimeStage -type d -path '*/gstreamer-1.0' | sort)
+          EOF
+
+          echo
+          echo "Total plugins before: $BEFORE_COUNT"
+
+          REMOVED=0
+          KEPT=0
+
+          while IFS= read -r PLUGIN; do
+            [ -f "$PLUGIN" ] || continue
+
+            NAME="$(basename "$PLUGIN")"
+
+            if grep -Fxq "$NAME" "$WHITELIST"; then
+              KEPT=$((KEPT + 1))
+            else
+              echo "Removing unneeded GStreamer plugin: $NAME"
+              rm -f "$PLUGIN"
+              REMOVED=$((REMOVED + 1))
+            fi
+          done <<EOF
+          $(find RuntimeStage -type f -path '*/gstreamer-1.0/*.so' | sort)
+          EOF
+
+          echo
+          echo "============================================================"
+          echo "GStreamer pruning result"
+          echo "============================================================"
+
+          echo "Kept:    $KEPT"
+          echo "Removed: $REMOVED"
+
+          echo
+          echo "Remaining plugins:"
+
+          find RuntimeStage \
+            -type f \
+            -path '*/gstreamer-1.0/*.so' \
+            -printf '%f\n' \
+            | sort
+
+      # ============================================================
+      # Analyze staged runtime
+      # ============================================================
+
+      - name: Analyze runtime stage
+        run: |
+          echo "============================================================"
+          echo "TOTAL RUNTIME STAGE"
+          echo "============================================================"
+          du -sh RuntimeStage
+
+          echo
+          echo "============================================================"
+          echo "TOP DIRECTORY SIZES"
+          echo "============================================================"
+
+          du -h -d 2 RuntimeStage 2>/dev/null \
+            | sort -h \
+            | tail -80
+
+          echo
+          echo "============================================================"
+          echo "50 LARGEST FILES"
+          echo "============================================================"
+
+          find RuntimeStage -type f -printf '%s %p\n' \
+            | sort -nr \
+            | head -50 \
+            | numfmt --field=1 --to=iec || true
+
+          echo
+          echo "============================================================"
+          echo "GSTREAMER"
+          echo "============================================================"
+
+          GST_COUNT=0
+
+          while IFS= read -r GST_DIR; do
+            [ -d "$GST_DIR" ] || continue
+
+            echo
+            echo "$GST_DIR"
+
+            COUNT="$(find "$GST_DIR" -maxdepth 1 -type f -name '*.so' | wc -l)"
+            GST_COUNT=$((GST_COUNT + COUNT))
+
+            echo "Plugins: $COUNT"
+            du -sh "$GST_DIR"
+          done <<EOF
+          $(find RuntimeStage -type d -path '*/gstreamer-1.0' | sort)
+          EOF
+
+          echo
+          echo "Total retained GStreamer plugins: $GST_COUNT"
+
+          echo
+          echo "============================================================"
+          echo "SDL LIBRARIES"
+          echo "============================================================"
+
+          find RuntimeStage \
+            \( -type f -o -type l \) \
+            \( -iname '*SDL2*' -o -iname '*SDL3*' \) \
+            -print \
+            | sort || true
+
+          echo
+          echo "============================================================"
+          echo "OPENGL / MESA / LLVM / OPENCL"
+          echo "============================================================"
+
+          find RuntimeStage \
+            \( -type f -o -type l \) \
+            \( \
+              -iname '*LLVM*' \
+              -o -iname '*OpenCL*' \
+              -o -iname '*GLX*' \
+              -o -iname '*EGL*' \
+              -o -iname '*mesa*' \
+              -o -iname '*dri.so' \
+            \) \
+            -print \
+            | sort || true
+
+          echo
+          echo "============================================================"
+          echo "GLIBC / LOADER"
+          echo "============================================================"
+
+          find RuntimeStage \
+            \( -type f -o -type l \) \
+            \( \
+              -name 'libc.so*' \
+              -o -name 'ld-linux*' \
+              -o -name 'libpthread.so*' \
+              -o -name 'libm.so*' \
+            \) \
+            -print \
+            | sort || true
 
       # ============================================================
       # Verify staged runtime
@@ -462,13 +684,15 @@ jobs:
 
       # ============================================================
       # Cache flatpak-builder data
+      #
+      # v5 because runtime staging/pruning policy changed.
       # ============================================================
 
       - name: Cache Flatpak builder
         uses: actions/cache@v4
         with:
           path: .flatpak-builder
-          key: coinops-flatpak-builder-${{ runner.os }}-25.08-v3
+          key: coinops-flatpak-builder-${{ runner.os }}-25.08-v5
           restore-keys: |
             coinops-flatpak-builder-${{ runner.os }}-25.08-
 
@@ -489,15 +713,43 @@ jobs:
             org.coinops.Runtime.yml
 
       # ============================================================
+      # Analyze built Flatpak
+      # ============================================================
+
+      - name: Analyze built Flatpak
+        run: |
+          echo "============================================================"
+          echo "FLATPAK BUILD DIRECTORY"
+          echo "============================================================"
+
+          du -sh build-dir || true
+
+          echo
+          echo "============================================================"
+          echo "INSTALLED /APP PAYLOAD"
+          echo "============================================================"
+
+          if [ -d build-dir/files ]; then
+            du -sh build-dir/files
+
+            du -h -d 3 build-dir/files 2>/dev/null \
+              | sort -h \
+              | tail -80
+          fi
+
+          echo
+          echo "============================================================"
+          echo "FLATPAK REPOSITORY"
+          echo "============================================================"
+
+          du -sh repo
+
+      # ============================================================
       # Build distributable Flatpak bundle
       # ============================================================
 
       - name: Build Flatpak bundle
         run: |
-          echo "Flatpak repository size:"
-          du -sh repo
-
-          echo
           echo "Creating Flatpak bundle..."
 
           (
@@ -522,6 +774,10 @@ jobs:
           echo
           echo "Bundle complete:"
           ls -lh CoinOPS-Runtime-x86_64.flatpak
+
+          echo
+          echo "Bundle byte size:"
+          stat --printf='%s bytes\n' CoinOPS-Runtime-x86_64.flatpak
 
       # ============================================================
       # Upload artifact
