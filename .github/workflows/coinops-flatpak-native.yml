@@ -18,6 +18,9 @@ jobs:
 
       # ============================================================
       # Checkout custom MAME fork
+      #
+      # Keep authentication here rather than embedding credentials
+      # in the Flatpak manifest.
       # ============================================================
 
       - name: Checkout MAME fork
@@ -29,21 +32,31 @@ jobs:
           token: ${{ secrets.MAME_REPO_TOKEN }}
 
       # ============================================================
-      # Show exact source revisions
+      # Record exact source revisions
+      #
+      # MAME SHA is also used to prioritize restoration of a
+      # Flatpak-builder cache containing the same MAME build.
       # ============================================================
 
-      - name: Show source revisions
+      - name: Record source revisions
+        id: source-revs
         run: |
+          RETROFE_SHA="$(git rev-parse HEAD)"
+          MAME_SHA="$(git -C MAME rev-parse HEAD)"
+
+          echo "retrofe_sha=$RETROFE_SHA" >> "$GITHUB_OUTPUT"
+          echo "mame_sha=$MAME_SHA" >> "$GITHUB_OUTPUT"
+
           echo "============================================================"
           echo "RetroFE revision"
           echo "============================================================"
-          git rev-parse HEAD
+          echo "$RETROFE_SHA"
 
           echo
           echo "============================================================"
           echo "MAME revision"
           echo "============================================================"
-          git -C MAME rev-parse HEAD
+          echo "$MAME_SHA"
 
       # ============================================================
       # Install host tools only
@@ -277,8 +290,6 @@ jobs:
 
             # ======================================================
             # SDL2_image
-            #
-            # Missing from Freedesktop 25.08.
             # ======================================================
 
             - name: SDL2_image
@@ -306,8 +317,6 @@ jobs:
 
             # ======================================================
             # SDL2_ttf
-            #
-            # Missing from Freedesktop 25.08.
             # ======================================================
 
             - name: SDL2_ttf
@@ -334,9 +343,6 @@ jobs:
 
             # ======================================================
             # libevdev
-            #
-            # Missing from Freedesktop 25.08.
-            # Used by RetroFE for Linux input handling.
             # ======================================================
 
             - name: libevdev
@@ -359,8 +365,6 @@ jobs:
 
             # ======================================================
             # libserialport
-            #
-            # Required by RetroFE restrictor / hardware integration.
             # ======================================================
 
             - name: libserialport
@@ -385,13 +389,6 @@ jobs:
             # Classic Minizip
             #
             # Required by ThirdParty/openhi2txt.
-            #
-            # This is the classic zlib contrib/minizip API used by:
-            #
-            #   unzip.h
-            #   zip.h
-            #   unzOpen()
-            #   unzGoToFirstFile()
             # ======================================================
 
             - name: minizip
@@ -457,25 +454,10 @@ jobs:
             # ======================================================
             # RetroFE
             #
-            # Runtime/SDK provided:
+            # RetroFE remains a local directory source for now.
             #
-            #   sdl2 / sdl2-compat
-            #   SDL2_mixer
-            #   GStreamer
-            #   fontconfig
-            #   curl
-            #   libusb
-            #   libudev
-            #   zlib
-            #   libwebp
-            #
-            # Bundled above:
-            #
-            #   SDL2_image
-            #   SDL2_ttf
-            #   libevdev
-            #   libserialport
-            #   minizip
+            # It is relatively quick to compile. MAME is the module
+            # where caching has the largest payoff.
             # ======================================================
 
             - name: retrofe
@@ -573,21 +555,17 @@ jobs:
             # ======================================================
             # Custom MAME
             #
-            # Built inside org.freedesktop.Sdk//25.08.
+            # IMPORTANT:
             #
-            # SYMBOLS=0 / SYMLEVEL=0 are explicit because the
-            # previous full build failed at final link with:
+            # Use the already-authenticated local Git checkout as a
+            # Git source rather than a directory source.
             #
-            #   relocation truncated to fit: R_X86_64_32
+            # Flatpak-builder can cache Git sources/modules based on
+            # repository state. "type: dir" sources do not support
+            # source caching and force a rebuild each run.
             #
-            # against enormous DWARF sections such as:
-            #
-            #   .debug_info
-            #   .debug_aranges
-            #   .debug_loclists
-            #
-            # This is a release/runtime build, so embedded DWARF
-            # symbols are not required.
+            # SYMBOLS=0 / SYMLEVEL=0 prevent the enormous DWARF
+            # sections that caused the previous final-link overflow.
             # ======================================================
 
             - name: mame
@@ -616,20 +594,18 @@ jobs:
                   echo "CXXFLAGS=${CXXFLAGS:-}"
                   echo "LDFLAGS=${LDFLAGS:-}"
 
-                  echo
-                  echo "Debug-related compiler defaults:"
-                  gcc -Q --help=common 2>/dev/null \
-                    | grep -Ei 'debug|dwarf' \
-                    || true
-
                 - |
                   echo
                   echo "============================================================"
                   echo "Building custom MAME inside Freedesktop SDK"
                   echo "============================================================"
 
+                  JOBS="$(nproc)"
+
+                  echo "Building with ${JOBS} parallel jobs"
+
                   make \
-                    -j3 \
+                    -j"${JOBS}" \
                     REGENIE=1 \
                     SYMBOLS=0 \
                     SYMLEVEL=0 \
@@ -659,8 +635,9 @@ jobs:
                 - install -Dm755 mame /app/bin/mame
 
               sources:
-                - type: dir
+                - type: git
                   path: MAME
+                  branch: mame0285-local
 
             # ======================================================
             # CoinOPS launcher + desktop metadata
@@ -690,31 +667,65 @@ jobs:
           cat org.coinops.Runtime.yml
 
       # ============================================================
-      # Cache flatpak-builder state
+      # Cache Flatpak-builder state
       #
-      # Changed modules rebuild; unchanged completed modules can be
-      # restored from the Flatpak builder cache.
+      # Key strategy:
+      #
+      # Exact:
+      #   MAME SHA + current RetroFE/workflow SHA
+      #
+      # First fallback:
+      #   same exact MAME SHA
+      #
+      # This lets a new RetroFE commit restore builder state from a
+      # previous run that used the identical MAME revision.
+      #
+      # Second fallback:
+      #   any prior 25.08 native build
+      #
+      # Also contains flatpak-builder's ccache data when --ccache is
+      # enabled below.
       # ============================================================
 
       - name: Cache Flatpak builder
         uses: actions/cache@v4
         with:
           path: .flatpak-builder
-          key: coinops-native-flatpak-${{ runner.os }}-25.08-${{ github.sha }}
+          key: coinops-native-flatpak-${{ runner.os }}-25.08-${{ steps.source-revs.outputs.mame_sha }}-${{ github.sha }}
           restore-keys: |
+            coinops-native-flatpak-${{ runner.os }}-25.08-${{ steps.source-revs.outputs.mame_sha }}-
             coinops-native-flatpak-${{ runner.os }}-25.08-
 
       # ============================================================
       # Build native Flatpak
+      #
+      # --ccache gives us compiler-level reuse as an additional
+      # fallback even when a module itself needs rebuilding.
       # ============================================================
 
       - name: Build native CoinOPS Flatpak
         run: |
           rm -rf build-dir repo
 
+          echo "============================================================"
+          echo "Flatpak builder cache state"
+          echo "============================================================"
+
+          if [ -d .flatpak-builder ]; then
+            du -sh .flatpak-builder || true
+          else
+            echo "No previous .flatpak-builder state restored."
+          fi
+
+          echo
+          echo "============================================================"
+          echo "Starting native Flatpak build"
+          echo "============================================================"
+
           flatpak-builder \
             --user \
             --force-clean \
+            --ccache \
             --repo=repo \
             --install-deps-from=flathub \
             build-dir \
@@ -798,6 +809,13 @@ jobs:
           echo "============================================================"
 
           du -sh repo
+
+          echo
+          echo "============================================================"
+          echo "FLATPAK BUILDER CACHE SIZE"
+          echo "============================================================"
+
+          du -sh .flatpak-builder || true
 
       # ============================================================
       # Smoke tests inside the built Flatpak environment
