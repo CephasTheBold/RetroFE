@@ -299,6 +299,32 @@ jobs:
           modules:
 
             # ======================================================
+            # SDL2_ttf
+            # ======================================================
+
+            - name: SDL2_ttf
+              buildsystem: cmake-ninja
+              builddir: true
+
+              config-opts:
+                - -DCMAKE_BUILD_TYPE=Release
+                - -DCMAKE_INSTALL_PREFIX=/app
+                - -DBUILD_SHARED_LIBS=ON
+                - -DSDL2TTF_SAMPLES=OFF
+
+              cleanup:
+                - /include
+                - /lib/cmake
+                - /lib/pkgconfig
+                - '*.a'
+                - '*.la'
+
+              sources:
+                - type: git
+                  url: https://github.com/libsdl-org/SDL_ttf.git
+                  branch: SDL2
+
+            # ======================================================
             # Custom MAME
             #
             # Host CPU:
@@ -422,32 +448,6 @@ jobs:
               sources:
                 - type: git
                   url: https://github.com/libsdl-org/SDL_image.git
-                  branch: SDL2
-
-            # ======================================================
-            # SDL2_ttf
-            # ======================================================
-
-            - name: SDL2_ttf
-              buildsystem: cmake-ninja
-              builddir: true
-
-              config-opts:
-                - -DCMAKE_BUILD_TYPE=Release
-                - -DCMAKE_INSTALL_PREFIX=/app
-                - -DBUILD_SHARED_LIBS=ON
-                - -DSDL2TTF_SAMPLES=OFF
-
-              cleanup:
-                - /include
-                - /lib/cmake
-                - /lib/pkgconfig
-                - '*.a'
-                - '*.la'
-
-              sources:
-                - type: git
-                  url: https://github.com/libsdl-org/SDL_ttf.git
                   branch: SDL2
 
             # ======================================================
