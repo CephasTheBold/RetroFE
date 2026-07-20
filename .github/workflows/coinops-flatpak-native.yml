@@ -310,8 +310,36 @@ jobs:
                 - -DCMAKE_BUILD_TYPE=Release
                 - -DCMAKE_INSTALL_PREFIX=/app
                 - -DBUILD_SHARED_LIBS=ON
+
                 - -DSDL2IMAGE_SAMPLES=OFF
                 - -DSDL2IMAGE_TESTS=OFF
+
+                # Formats RetroFE actually uses.
+                - -DSDL2IMAGE_PNG=ON
+                - -DSDL2IMAGE_JPG=ON
+                - -DSDL2IMAGE_QOI=ON
+                - -DSDL2IMAGE_WEBP=ON
+                - -DSDL2IMAGE_GIF=ON
+
+                # PNG writing is required for generated QR codes.
+                - -DSDL2IMAGE_PNG_SAVE=ON
+
+                # JPEG writing is not required.
+                - -DSDL2IMAGE_JPG_SAVE=OFF
+
+                # Disable unused formats.
+                - -DSDL2IMAGE_AVIF=OFF
+                - -DSDL2IMAGE_BMP=OFF
+                - -DSDL2IMAGE_JXL=OFF
+                - -DSDL2IMAGE_LBM=OFF
+                - -DSDL2IMAGE_PCX=OFF
+                - -DSDL2IMAGE_PNM=OFF
+                - -DSDL2IMAGE_SVG=OFF
+                - -DSDL2IMAGE_TGA=OFF
+                - -DSDL2IMAGE_TIF=OFF
+                - -DSDL2IMAGE_XCF=OFF
+                - -DSDL2IMAGE_XPM=OFF
+                - -DSDL2IMAGE_XV=OFF
 
               cleanup:
                 - /include
