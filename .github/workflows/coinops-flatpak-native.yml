@@ -511,6 +511,9 @@ jobs:
                 - -Ddocumentation=disabled
 
               cleanup:
+                - /bin/libevdev-tweak-device
+                - /bin/mouse-dpi-tool
+                - /bin/touchpad-edge-detector
                 - /include
                 - /lib/pkgconfig
                 - '*.a'
@@ -520,7 +523,7 @@ jobs:
                 - type: git
                   url: https://gitlab.freedesktop.org/libevdev/libevdev.git
                   branch: master
-
+                  
             # ======================================================
             # libserialport
             # ======================================================
