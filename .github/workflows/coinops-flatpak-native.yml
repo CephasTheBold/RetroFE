@@ -59,7 +59,7 @@ jobs:
       # ============================================================
       # Verify host build tools
       #
-      # Install once on the self-hosted Arch/CachyOS machine:
+      # Install once on self-hosted Arch/CachyOS:
       #
       # sudo pacman -S --needed flatpak flatpak-builder git ccache
       # ============================================================
@@ -268,6 +268,23 @@ jobs:
 
       # ============================================================
       # Create native Flatpak manifest
+      #
+      # Module order is deliberate:
+      #
+      #   SDL2_ttf
+      #   MAME
+      #   SDL2_image
+      #   libevdev
+      #   libserialport
+      #   minizip
+      #   RetroFE
+      #   runtime-cleanup
+      #   launcher metadata
+      #
+      # SDL2_ttf must precede MAME because MAME requires it.
+      #
+      # SDL2_image and other RetroFE-only dependencies remain after
+      # MAME so changes to them do not invalidate the MAME module.
       # ============================================================
 
       - name: Create native Flatpak manifest
@@ -300,11 +317,17 @@ jobs:
 
             # ======================================================
             # SDL2_ttf
+            #
+            # Required by MAME and RetroFE.
             # ======================================================
 
             - name: SDL2_ttf
               buildsystem: cmake-ninja
               builddir: true
+
+              build-options:
+                strip: true
+                no-debuginfo: true
 
               config-opts:
                 - -DCMAKE_BUILD_TYPE=Release
@@ -327,18 +350,17 @@ jobs:
             # ======================================================
             # Custom MAME
             #
-            # Host CPU:
+            # MAME depends on SDL2_ttf, so it comes immediately after
+            # SDL2_ttf and before RetroFE-only dependencies.
             #
+            # Host:
             #   6 physical cores
             #   12 logical CPUs
             #
-            # Use 10 parallel jobs to leave some headroom.
+            # Use 10 jobs to leave some headroom.
             #
-            # Debug info is explicitly disabled because previous
-            # full links overflowed 32-bit DWARF relocations.
-            #
-            # MAME is supplied as a LOCAL GIT source so its source
-            # identity can be cached properly by flatpak-builder.
+            # Debug info is explicitly disabled because previous full
+            # links overflowed 32-bit DWARF relocations.
             # ======================================================
 
             - name: mame
@@ -436,8 +458,8 @@ jobs:
             # Save:
             #   PNG only
             #
-            # PNG_SAVE is required by RetroFE's IMG_SavePNG()
-            # QR-code generation.
+            # PNG_SAVE is required by RetroFE IMG_SavePNG() for
+            # generated QR codes.
             # ======================================================
 
             - name: SDL2_image
@@ -514,8 +536,10 @@ jobs:
                 - /bin/libevdev-tweak-device
                 - /bin/mouse-dpi-tool
                 - /bin/touchpad-edge-detector
+
                 - /include
                 - /lib/pkgconfig
+
                 - '*.a'
                 - '*.la'
 
@@ -523,7 +547,7 @@ jobs:
                 - type: git
                   url: https://gitlab.freedesktop.org/libevdev/libevdev.git
                   branch: master
-                  
+
             # ======================================================
             # libserialport
             # ======================================================
@@ -555,9 +579,11 @@ jobs:
             #
             # Required by ThirdParty/openhi2txt.
             #
-            # Plain one-line install/symlink commands are used here.
-            # Multi-line YAML list entries with backslashes are NOT
-            # shell continuation blocks unless expressed using "|".
+            # Headers are temporarily installed into /app/include so
+            # RetroFE can compile against them.
+            #
+            # The final runtime-cleanup module removes the headers
+            # after RetroFE has finished building.
             # ======================================================
 
             - name: minizip
@@ -723,6 +749,72 @@ jobs:
                   path: RetroFE
 
             # ======================================================
+            # Final runtime cleanup
+            #
+            # At this point MAME and RetroFE are fully built.
+            #
+            # Remove development/debug/build-only files that are not
+            # required by the installed runtime.
+            # ======================================================
+
+            - name: runtime-cleanup
+              buildsystem: simple
+
+              build-commands:
+                - |
+                  echo "============================================================"
+                  echo "Cleaning final runtime payload"
+                  echo "============================================================"
+
+                # Development headers.
+                - rm -rf /app/include
+
+                # Debug symbols and copied source trees.
+                - rm -rf /app/lib/debug
+
+                # Build-system metadata.
+                - rm -rf /app/lib/cmake
+                - rm -rf /app/lib/pkgconfig
+
+                # Documentation/man pages from helper utilities.
+                - rm -rf /app/share/man
+
+                # Static and libtool archives.
+                - |
+                  find /app \
+                    -type f \
+                    \( -name '*.a' -o -name '*.la' \) \
+                    -delete
+
+                # Remove unversioned linker-only .so symlinks.
+                #
+                # Keep runtime SONAME links such as:
+                #
+                #   libfoo.so.0
+                #   libfoo.so.1
+                #
+                # Executables load those at runtime.
+                - |
+                  find /app/lib \
+                    -maxdepth 1 \
+                    -type l \
+                    -name '*.so' \
+                    -delete
+
+                - |
+                  echo
+                  echo "============================================================"
+                  echo "Remaining /app/lib contents"
+                  echo "============================================================"
+
+                  find /app/lib \
+                    -maxdepth 2 \
+                    \( -type f -o -type l \) \
+                    -print \
+                    | sort \
+                    || true
+
+            # ======================================================
             # CoinOPS launcher + desktop metadata
             # ======================================================
 
@@ -869,6 +961,25 @@ jobs:
 
           echo
           echo "============================================================"
+          echo "BUILD-ONLY FILE CHECK"
+          echo "============================================================"
+
+          for path in \
+            build-dir/files/include \
+            build-dir/files/lib/debug \
+            build-dir/files/lib/cmake \
+            build-dir/files/lib/pkgconfig \
+            build-dir/files/share/man
+          do
+            if [ -e "$path" ]; then
+              echo "[LEFTOVER] $path"
+            else
+              echo "[CLEAN] $path"
+            fi
+          done
+
+          echo
+          echo "============================================================"
           echo "50 LARGEST FILES IN /APP"
           echo "============================================================"
 
@@ -895,6 +1006,17 @@ jobs:
           echo "============================================================"
 
           du -sh .flatpak-builder || true
+
+          echo
+          echo "============================================================"
+          echo "CCACHE STATISTICS"
+          echo "============================================================"
+
+          if command -v ccache >/dev/null 2>&1; then
+            ccache -s || true
+          else
+            echo "ccache is not installed on the host."
+          fi
 
       # ============================================================
       # Smoke tests
