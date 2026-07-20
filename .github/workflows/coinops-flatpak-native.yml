@@ -16,7 +16,8 @@ jobs:
       # ============================================================
       # Checkout RetroFE
       #
-      # clean: false preserves .flatpak-builder between runs.
+      # clean: false preserves persistent self-hosted build state,
+      # especially .flatpak-builder, between workflow runs.
       # ============================================================
 
       - name: Checkout RetroFE
@@ -56,9 +57,9 @@ jobs:
           git -C MAME rev-parse HEAD
 
       # ============================================================
-      # Verify host tools
+      # Verify host build tools
       #
-      # Install once:
+      # Install once on the self-hosted Arch/CachyOS machine:
       #
       # sudo pacman -S --needed flatpak flatpak-builder git ccache
       # ============================================================
@@ -119,7 +120,7 @@ jobs:
             https://dl.flathub.org/repo/flathub.flatpakrepo
 
       # ============================================================
-      # Install Freedesktop runtime + SDK
+      # Install matching Freedesktop runtime + SDK
       # ============================================================
 
       - name: Install Freedesktop 25.08 runtime and SDK
@@ -267,21 +268,6 @@ jobs:
 
       # ============================================================
       # Create native Flatpak manifest
-      #
-      # ORDER IS DELIBERATE:
-      #
-      #   1. MAME
-      #   2. SDL2_image
-      #   3. SDL2_ttf
-      #   4. SDL2_mixer
-      #   5. libevdev
-      #   6. libserialport
-      #   7. minizip
-      #   8. RetroFE
-      #   9. launcher
-      #
-      # MAME is first so changes to RetroFE or its dependencies do
-      # not invalidate the extremely expensive cached MAME module.
       # ============================================================
 
       - name: Create native Flatpak manifest
@@ -313,22 +299,20 @@ jobs:
           modules:
 
             # ======================================================
-            # 1. Custom MAME
+            # Custom MAME
             #
-            # FIRST intentionally.
+            # Host CPU:
             #
-            # MAME does not depend on RetroFE's SDL2_image,
-            # SDL2_ttf, SDL2_mixer, libevdev, libserialport,
-            # minizip or RetroFE itself.
-            #
-            # Putting MAME first isolates its Flatpak-builder cache
-            # from changes to all of those later modules.
-            #
-            # Host:
             #   6 physical cores
             #   12 logical CPUs
             #
-            # Use 10 jobs.
+            # Use 10 parallel jobs to leave some headroom.
+            #
+            # Debug info is explicitly disabled because previous
+            # full links overflowed 32-bit DWARF relocations.
+            #
+            # MAME is supplied as a LOCAL GIT source so its source
+            # identity can be cached properly by flatpak-builder.
             # ======================================================
 
             - name: mame
@@ -414,21 +398,7 @@ jobs:
                   branch: mame0285-local
 
             # ======================================================
-            # 2. SDL2_image
-            #
-            # Load:
-            #   PNG
-            #   JPG
-            #   QOI
-            #   WebP
-            #   GIF
-            #
-            # Save:
-            #   PNG
-            #
-            # PNG saving is required by RetroFE QR generation via:
-            #
-            #   IMG_SavePNG()
+            # SDL2_image
             # ======================================================
 
             - name: SDL2_image
@@ -439,36 +409,8 @@ jobs:
                 - -DCMAKE_BUILD_TYPE=Release
                 - -DCMAKE_INSTALL_PREFIX=/app
                 - -DBUILD_SHARED_LIBS=ON
-
                 - -DSDL2IMAGE_SAMPLES=OFF
                 - -DSDL2IMAGE_TESTS=OFF
-
-                # Required image loaders.
-                - -DSDL2IMAGE_PNG=ON
-                - -DSDL2IMAGE_JPG=ON
-                - -DSDL2IMAGE_QOI=ON
-                - -DSDL2IMAGE_WEBP=ON
-                - -DSDL2IMAGE_GIF=ON
-
-                # Required for QR-code PNG output.
-                - -DSDL2IMAGE_PNG_SAVE=ON
-
-                # JPEG output is not needed.
-                - -DSDL2IMAGE_JPG_SAVE=OFF
-
-                # Unused formats.
-                - -DSDL2IMAGE_AVIF=OFF
-                - -DSDL2IMAGE_BMP=OFF
-                - -DSDL2IMAGE_JXL=OFF
-                - -DSDL2IMAGE_LBM=OFF
-                - -DSDL2IMAGE_PCX=OFF
-                - -DSDL2IMAGE_PNM=OFF
-                - -DSDL2IMAGE_SVG=OFF
-                - -DSDL2IMAGE_TGA=OFF
-                - -DSDL2IMAGE_TIF=OFF
-                - -DSDL2IMAGE_XCF=OFF
-                - -DSDL2IMAGE_XPM=OFF
-                - -DSDL2IMAGE_XV=OFF
 
               cleanup:
                 - /include
@@ -483,7 +425,7 @@ jobs:
                   branch: SDL2
 
             # ======================================================
-            # 3. SDL2_ttf
+            # SDL2_ttf
             # ======================================================
 
             - name: SDL2_ttf
@@ -509,74 +451,7 @@ jobs:
                   branch: SDL2
 
             # ======================================================
-            # 4. SDL2_mixer
-            #
-            # Lean CoinOPS configuration:
-            #
-            #   MP3  -> minimp3
-            #   OGG  -> stb_vorbis
-            #   FLAC -> dr_flac
-            #   WAV  -> native SDL_mixer WAV support
-            #
-            # Disabled:
-            #
-            #   MIDI
-            #   MOD/XMP
-            #   Opus
-            #   WavPack
-            #   GME
-            #   external command player
-            # ======================================================
-
-            - name: SDL2_mixer
-              buildsystem: cmake-ninja
-              builddir: true
-
-              config-opts:
-                - -DCMAKE_BUILD_TYPE=Release
-                - -DCMAKE_INSTALL_PREFIX=/app
-                - -DBUILD_SHARED_LIBS=ON
-
-                - -DSDL2MIXER_SAMPLES=OFF
-                - -DSDL2MIXER_CMD=OFF
-
-                # MP3 using built-in minimp3.
-                - -DSDL2MIXER_MP3=ON
-                - -DSDL2MIXER_MP3_MINIMP3=ON
-                - -DSDL2MIXER_MP3_MPG123=OFF
-
-                # OGG Vorbis using built-in stb_vorbis.
-                - -DSDL2MIXER_VORBIS=STB
-
-                # FLAC using built-in dr_flac.
-                - -DSDL2MIXER_FLAC=ON
-                - -DSDL2MIXER_FLAC_DRFLAC=ON
-                - -DSDL2MIXER_FLAC_LIBFLAC=OFF
-
-                # WAV.
-                - -DSDL2MIXER_WAVE=ON
-
-                # Unused formats/backends.
-                - -DSDL2MIXER_GME=OFF
-                - -DSDL2MIXER_MOD=OFF
-                - -DSDL2MIXER_MIDI=OFF
-                - -DSDL2MIXER_OPUS=OFF
-                - -DSDL2MIXER_WAVPACK=OFF
-
-              cleanup:
-                - /include
-                - /lib/cmake
-                - /lib/pkgconfig
-                - '*.a'
-                - '*.la'
-
-              sources:
-                - type: git
-                  url: https://github.com/libsdl-org/SDL_mixer.git
-                  branch: SDL2
-
-            # ======================================================
-            # 5. libevdev
+            # libevdev
             # ======================================================
 
             - name: libevdev
@@ -598,7 +473,7 @@ jobs:
                   branch: master
 
             # ======================================================
-            # 6. libserialport
+            # libserialport
             # ======================================================
 
             - name: libserialport
@@ -620,9 +495,13 @@ jobs:
                   branch: master
 
             # ======================================================
-            # 7. Classic Minizip
+            # Classic Minizip
             #
             # Required by ThirdParty/openhi2txt.
+            #
+            # Plain one-line install/symlink commands are used here.
+            # Multi-line YAML list entries with backslashes are NOT
+            # shell continuation blocks unless expressed using "|".
             # ======================================================
 
             - name: minizip
@@ -681,9 +560,10 @@ jobs:
                   tag: v1.3.1
 
             # ======================================================
-            # 8. RetroFE
+            # RetroFE
             #
-            # All RetroFE-specific dependencies have now been built.
+            # Flatpak-builder copies the CONTENTS of the RetroFE
+            # directory into the module build root.
             # ======================================================
 
             - name: retrofe
@@ -779,7 +659,7 @@ jobs:
                   path: RetroFE
 
             # ======================================================
-            # 9. CoinOPS launcher + desktop metadata
+            # CoinOPS launcher + desktop metadata
             # ======================================================
 
             - name: coinops-runtime
@@ -805,6 +685,9 @@ jobs:
 
       # ============================================================
       # Inspect persistent local builder state
+      #
+      # No actions/cache step is needed on the normal self-hosted
+      # runner because .flatpak-builder remains on local storage.
       # ============================================================
 
       - name: Inspect persistent build cache
@@ -948,13 +831,6 @@ jobs:
           echo "============================================================"
 
           du -sh .flatpak-builder || true
-
-          echo
-          echo "============================================================"
-          echo "CCACHE STATISTICS"
-          echo "============================================================"
-
-          ccache -s || true
 
       # ============================================================
       # Smoke tests
