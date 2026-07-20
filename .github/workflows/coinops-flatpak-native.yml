@@ -1,26 +1,40 @@
-name: CoinOPS Native Flatpak
+name: CoinOPS Native Flatpak - Self Hosted
 
 on:
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-26.04
+    runs-on:
+      - self-hosted
+      - linux
+      - x64
+
     name: Build Native CoinOPS Flatpak x86_64
 
     steps:
       # ============================================================
       # Checkout RetroFE
+      #
+      # clean: false is important on the self-hosted runner.
+      # It prevents actions/checkout from deleting persistent
+      # untracked build state such as:
+      #
+      #   .flatpak-builder/
+      #
+      # between workflow runs.
       # ============================================================
 
       - name: Checkout RetroFE
         uses: actions/checkout@v4
+        with:
+          clean: false
 
       # ============================================================
       # Checkout custom MAME fork
       #
-      # Keep authentication here rather than embedding credentials
-      # in the Flatpak manifest.
+      # Authentication stays in actions/checkout instead of putting
+      # the token into the generated Flatpak manifest.
       # ============================================================
 
       - name: Checkout MAME fork
@@ -30,52 +44,78 @@ jobs:
           ref: mame0285-local
           path: MAME
           token: ${{ secrets.MAME_REPO_TOKEN }}
+          clean: true
+          fetch-depth: 1
 
       # ============================================================
-      # Record exact source revisions
-      #
-      # MAME SHA is also used to prioritize restoration of a
-      # Flatpak-builder cache containing the same MAME build.
+      # Show exact source revisions
       # ============================================================
 
-      - name: Record source revisions
-        id: source-revs
+      - name: Show source revisions
         run: |
-          RETROFE_SHA="$(git rev-parse HEAD)"
-          MAME_SHA="$(git -C MAME rev-parse HEAD)"
-
-          echo "retrofe_sha=$RETROFE_SHA" >> "$GITHUB_OUTPUT"
-          echo "mame_sha=$MAME_SHA" >> "$GITHUB_OUTPUT"
-
           echo "============================================================"
           echo "RetroFE revision"
           echo "============================================================"
-          echo "$RETROFE_SHA"
+          git rev-parse HEAD
 
           echo
           echo "============================================================"
           echo "MAME revision"
           echo "============================================================"
-          echo "$MAME_SHA"
+          git -C MAME rev-parse HEAD
 
       # ============================================================
-      # Install host tools only
+      # Verify host build tools
       #
-      # RetroFE and MAME are compiled inside:
+      # Install these once on the self-hosted Arch/CachyOS machine:
       #
-      #   org.freedesktop.Sdk//25.08
+      #   sudo pacman -S --needed flatpak flatpak-builder git ccache
       #
-      # They are not linked against Ubuntu runtime libraries.
+      # Do not reinstall them on every workflow run.
       # ============================================================
 
-      - name: Install host build tools
+      - name: Verify host build tools
         run: |
-          sudo apt-get update
+          set -e
 
-          sudo apt-get install -y \
-            flatpak \
-            flatpak-builder \
-            git
+          echo "============================================================"
+          echo "HOST"
+          echo "============================================================"
+
+          uname -a
+
+          echo
+          echo "CPU:"
+          lscpu | grep -E \
+            'Model name|Socket|Core\(s\)|Thread\(s\)|CPU\(s\)' \
+            || true
+
+          echo
+          echo "Available logical CPUs:"
+          nproc
+
+          echo
+          echo "Memory:"
+          free -h
+
+          echo
+          echo "Disk:"
+          df -h .
+
+          echo
+          echo "============================================================"
+          echo "TOOLS"
+          echo "============================================================"
+
+          git --version
+          flatpak --version
+          flatpak-builder --version
+
+          if command -v ccache >/dev/null 2>&1; then
+            ccache --version | head -1
+          else
+            echo "WARNING: ccache is not installed."
+          fi
 
       # ============================================================
       # Configure Flathub
@@ -91,6 +131,9 @@ jobs:
 
       # ============================================================
       # Install matching Freedesktop runtime + SDK
+      #
+      # These remain installed on the self-hosted machine between
+      # runs, so later runs should not need a full redownload.
       # ============================================================
 
       - name: Install Freedesktop 25.08 runtime and SDK
@@ -104,26 +147,6 @@ jobs:
 
       # ============================================================
       # Inspect SDK dependency availability
-      #
-      # Previously observed:
-      #
-      #   sdl2                  2.32.70
-      #   SDL2_mixer           2.8.2
-      #   gstreamer            1.26.11
-      #   fontconfig           2.17.1
-      #   libcurl              8.15.0
-      #   libusb               1.0.29
-      #   libudev              257
-      #   zlib                 1.3.1
-      #   libwebp              1.6.0
-      #
-      # Missing from SDK and bundled below:
-      #
-      #   SDL2_image
-      #   SDL2_ttf
-      #   libevdev
-      #   libserialport
-      #   classic minizip
       # ============================================================
 
       - name: Inspect Freedesktop SDK dependencies
@@ -430,21 +453,32 @@ jobs:
                     zip.o \
                     -lz
 
-                - ln -s libminizip.so.1.0.0 libminizip.so.1
+                - ln -sf libminizip.so.1.0.0 libminizip.so.1
+                - ln -sf libminizip.so.1 libminizip.so
 
-                - ln -s libminizip.so.1 libminizip.so
+                - install -Dm755 \
+                    libminizip.so.1.0.0 \
+                    /app/lib/libminizip.so.1.0.0
 
-                - install -Dm755 libminizip.so.1.0.0 /app/lib/libminizip.so.1.0.0
+                - ln -sf \
+                    libminizip.so.1.0.0 \
+                    /app/lib/libminizip.so.1
 
-                - ln -s libminizip.so.1.0.0 /app/lib/libminizip.so.1
+                - ln -sf \
+                    libminizip.so.1 \
+                    /app/lib/libminizip.so
 
-                - ln -s libminizip.so.1 /app/lib/libminizip.so
+                - install -Dm644 \
+                    unzip.h \
+                    /app/include/minizip/unzip.h
 
-                - install -Dm644 unzip.h /app/include/minizip/unzip.h
+                - install -Dm644 \
+                    zip.h \
+                    /app/include/minizip/zip.h
 
-                - install -Dm644 zip.h /app/include/minizip/zip.h
-
-                - install -Dm644 ioapi.h /app/include/minizip/ioapi.h
+                - install -Dm644 \
+                    ioapi.h \
+                    /app/include/minizip/ioapi.h
 
               sources:
                 - type: git
@@ -454,10 +488,16 @@ jobs:
             # ======================================================
             # RetroFE
             #
-            # RetroFE remains a local directory source for now.
+            # type: dir is acceptable here because RetroFE is much
+            # faster to build than MAME.
             #
-            # It is relatively quick to compile. MAME is the module
-            # where caching has the largest payoff.
+            # Flatpak-builder copies the CONTENTS of RetroFE into the
+            # module build root, hence:
+            #
+            #   Source/
+            #   Build/
+            #
+            # rather than RetroFE/Source.
             # ======================================================
 
             - name: retrofe
@@ -542,7 +582,7 @@ jobs:
 
                   cmake \
                     --build Build \
-                    --parallel
+                    --parallel 10
 
                 - test -x Build/retrofe
 
@@ -555,21 +595,32 @@ jobs:
             # ======================================================
             # Custom MAME
             #
-            # IMPORTANT:
+            # Built inside org.freedesktop.Sdk//25.08.
             #
-            # Use the already-authenticated local Git checkout as a
-            # Git source rather than a directory source.
+            # 6 physical cores / 12 logical CPUs:
             #
-            # Flatpak-builder can cache Git sources/modules based on
-            # repository state. "type: dir" sources do not support
-            # source caching and force a rebuild each run.
+            #   MAME_JOBS=10
             #
-            # SYMBOLS=0 / SYMLEVEL=0 prevent the enormous DWARF
-            # sections that caused the previous final-link overflow.
-            # ======================================================
-
-            # ======================================================
-            # Custom MAME
+            # This leaves two logical CPUs available for the host,
+            # Flatpak-builder, I/O, and other activity.
+            #
+            # SYMBOLS=0 + SYMLEVEL=0 + -g0 are all intentional.
+            #
+            # Previous full links failed because object files still
+            # contained enormous DWARF sections:
+            #
+            #   .debug_info
+            #   .debug_aranges
+            #   .debug_loclists
+            #
+            # ARCHOPTS=-g0 explicitly reaches MAME's compiler flags.
+            #
+            # The Flatpak CFLAGS/CXXFLAGS override provides a second
+            # layer ensuring debug information is disabled.
+            #
+            # MAME is fed as a LOCAL GIT SOURCE, not type: dir, so
+            # Flatpak-builder can identify/cache the exact repository
+            # state across runs.
             # ======================================================
 
             - name: mame
@@ -595,8 +646,12 @@ jobs:
                   c++ --version
 
                   echo
-                  echo "Available CPUs:"
+                  echo "Available logical CPUs:"
                   nproc
+
+                  echo
+                  echo "Configured MAME parallel jobs:"
+                  echo "10"
 
                   echo
                   echo "Environment flags:"
@@ -610,12 +665,12 @@ jobs:
                   echo "Building custom MAME inside Freedesktop SDK"
                   echo "============================================================"
 
-                  JOBS="$(nproc)"
+                  MAME_JOBS=10
 
-                  echo "Building with ${JOBS} parallel jobs"
+                  echo "Building MAME with ${MAME_JOBS} parallel jobs"
 
                   make \
-                    -j"${JOBS}" \
+                    -j"${MAME_JOBS}" \
                     REGENIE=1 \
                     SYMBOLS=0 \
                     SYMLEVEL=0 \
@@ -658,11 +713,20 @@ jobs:
               buildsystem: simple
 
               build-commands:
-                - install -Dm755 coinops-launcher /app/bin/coinops-launcher
+                - install \
+                    -Dm755 \
+                    coinops-launcher \
+                    /app/bin/coinops-launcher
 
-                - install -Dm644 coinops-runtime.desktop /app/share/applications/org.coinops.Runtime.desktop
+                - install \
+                    -Dm644 \
+                    coinops-runtime.desktop \
+                    /app/share/applications/org.coinops.Runtime.desktop
 
-                - install -Dm644 coinops-runtime.png /app/share/icons/hicolor/256x256/apps/org.coinops.Runtime.png
+                - install \
+                    -Dm644 \
+                    coinops-runtime.png \
+                    /app/share/icons/hicolor/256x256/apps/org.coinops.Runtime.png
 
               sources:
                 - type: file
@@ -678,57 +742,58 @@ jobs:
           cat org.coinops.Runtime.yml
 
       # ============================================================
-      # Cache Flatpak-builder state
+      # Show persistent local builder state
       #
-      # Key strategy:
+      # No actions/cache upload/download is needed for the normal
+      # self-hosted case.
       #
-      # Exact:
-      #   MAME SHA + current RetroFE/workflow SHA
+      # .flatpak-builder remains on the runner filesystem between
+      # workflow runs because:
       #
-      # First fallback:
-      #   same exact MAME SHA
+      #   actions/checkout clean: false
       #
-      # This lets a new RetroFE commit restore builder state from a
-      # previous run that used the identical MAME revision.
-      #
-      # Second fallback:
-      #   any prior 25.08 native build
-      #
-      # Also contains flatpak-builder's ccache data when --ccache is
-      # enabled below.
+      # and because we do NOT remove .flatpak-builder below.
       # ============================================================
 
-      - name: Cache Flatpak builder
-        uses: actions/cache@v4
-        with:
-          path: .flatpak-builder
-          key: coinops-native-flatpak-${{ runner.os }}-25.08-${{ steps.source-revs.outputs.mame_sha }}-${{ github.sha }}
-          restore-keys: |
-            coinops-native-flatpak-${{ runner.os }}-25.08-${{ steps.source-revs.outputs.mame_sha }}-
-            coinops-native-flatpak-${{ runner.os }}-25.08-
+      - name: Inspect persistent build cache
+        run: |
+          echo "============================================================"
+          echo "PERSISTENT FLATPAK-BUILDER STATE"
+          echo "============================================================"
+
+          if [ -d .flatpak-builder ]; then
+            du -sh .flatpak-builder || true
+
+            echo
+            echo "Top-level cache contents:"
+            du -h \
+              --max-depth=1 \
+              .flatpak-builder \
+              2>/dev/null \
+              | sort -h \
+              || true
+          else
+            echo "No existing .flatpak-builder cache."
+            echo "This appears to be the first local build."
+          fi
 
       # ============================================================
       # Build native Flatpak
       #
-      # --ccache gives us compiler-level reuse as an additional
-      # fallback even when a module itself needs rebuilding.
+      # IMPORTANT:
+      #
+      # build-dir and repo are disposable outputs.
+      #
+      # .flatpak-builder is deliberately NOT deleted.
+      #
+      # --ccache adds compiler-level caching in addition to
+      # Flatpak-builder's module caching.
       # ============================================================
 
       - name: Build native CoinOPS Flatpak
         run: |
           rm -rf build-dir repo
 
-          echo "============================================================"
-          echo "Flatpak builder cache state"
-          echo "============================================================"
-
-          if [ -d .flatpak-builder ]; then
-            du -sh .flatpak-builder || true
-          else
-            echo "No previous .flatpak-builder state restored."
-          fi
-
-          echo
           echo "============================================================"
           echo "Starting native Flatpak build"
           echo "============================================================"
@@ -797,7 +862,10 @@ jobs:
 
             echo
 
-            du -h -d 3 build-dir/files/lib 2>/dev/null \
+            du -h \
+              -d 3 \
+              build-dir/files/lib \
+              2>/dev/null \
               | sort -h \
               | tail -100
           fi
@@ -812,7 +880,10 @@ jobs:
             -printf '%s %p\n' \
             | sort -nr \
             | head -50 \
-            | numfmt --field=1 --to=iec || true
+            | numfmt \
+                --field=1 \
+                --to=iec \
+            || true
 
           echo
           echo "============================================================"
@@ -823,13 +894,13 @@ jobs:
 
           echo
           echo "============================================================"
-          echo "FLATPAK BUILDER CACHE SIZE"
+          echo "PERSISTENT BUILDER CACHE SIZE"
           echo "============================================================"
 
           du -sh .flatpak-builder || true
 
       # ============================================================
-      # Smoke tests inside the built Flatpak environment
+      # Smoke tests inside built Flatpak environment
       # ============================================================
 
       - name: Smoke test native Flatpak
@@ -843,7 +914,8 @@ jobs:
             build-dir \
             org.coinops.Runtime.yml \
             /app/bin/retrofe \
-            --version || true
+            --version \
+            || true
 
           echo
           echo "============================================================"
@@ -900,7 +972,9 @@ jobs:
 
           HEARTBEAT_PID=$!
 
-          trap 'kill "$HEARTBEAT_PID" 2>/dev/null || true' EXIT
+          trap \
+            'kill "$HEARTBEAT_PID" 2>/dev/null || true' \
+            EXIT
 
           flatpak build-bundle \
             repo \
@@ -917,10 +991,15 @@ jobs:
 
           echo
           echo "Bundle byte size:"
-          stat --printf='%s bytes\n' CoinOPS-Runtime-Native-x86_64.flatpak
+          stat \
+            --printf='%s bytes\n' \
+            CoinOPS-Runtime-Native-x86_64.flatpak
 
       # ============================================================
-      # Upload artifact
+      # Upload artifact to GitHub
+      #
+      # Even though the build happens locally, the resulting Flatpak
+      # is still uploaded to the GitHub Actions run as an artifact.
       # ============================================================
 
       - name: Upload native CoinOPS Flatpak
