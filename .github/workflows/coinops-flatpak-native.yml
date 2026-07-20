@@ -411,6 +411,8 @@ jobs:
 
                   make \
                     -j"${MAME_JOBS}" \
+                    SUBTARGET=coinops \
+                    SOURCEFILTER=src/mame/coinops.flt \
                     REGENIE=1 \
                     SYMBOLS=0 \
                     SYMLEVEL=0 \
