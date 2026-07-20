@@ -407,6 +407,20 @@ jobs:
 
                   MAME_JOBS=10
 
+                  # SOURCEFILTER can change which translation units belong to each
+                  # subtarget library. Remove only the generated CoinOPS archives so
+                  # stale library membership cannot survive an incremental build.
+                  #
+                  # Object files and ccache are preserved, so this is cheap compared
+                  # with a clean MAME rebuild.
+                  echo "Removing stale CoinOPS static archives..."
+                  find build \
+                    -type f \
+                    -path '*/mame_coinops/*.a' \
+                    -print \
+                    -delete \
+                    2>/dev/null \
+                    || true
                   echo "Building MAME with ${MAME_JOBS} parallel jobs"
 
                   make \
