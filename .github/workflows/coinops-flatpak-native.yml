@@ -16,13 +16,8 @@ jobs:
       # ============================================================
       # Checkout RetroFE
       #
-      # clean: false is important on the self-hosted runner.
-      # It prevents actions/checkout from deleting persistent
-      # untracked build state such as:
-      #
-      #   .flatpak-builder/
-      #
-      # between workflow runs.
+      # clean: false preserves persistent self-hosted build state,
+      # especially .flatpak-builder, between workflow runs.
       # ============================================================
 
       - name: Checkout RetroFE
@@ -32,9 +27,6 @@ jobs:
 
       # ============================================================
       # Checkout custom MAME fork
-      #
-      # Authentication stays in actions/checkout instead of putting
-      # the token into the generated Flatpak manifest.
       # ============================================================
 
       - name: Checkout MAME fork
@@ -67,11 +59,9 @@ jobs:
       # ============================================================
       # Verify host build tools
       #
-      # Install these once on the self-hosted Arch/CachyOS machine:
+      # Install once on the self-hosted Arch/CachyOS machine:
       #
-      #   sudo pacman -S --needed flatpak flatpak-builder git ccache
-      #
-      # Do not reinstall them on every workflow run.
+      # sudo pacman -S --needed flatpak flatpak-builder git ccache
       # ============================================================
 
       - name: Verify host build tools
@@ -131,9 +121,6 @@ jobs:
 
       # ============================================================
       # Install matching Freedesktop runtime + SDK
-      #
-      # These remain installed on the self-hosted machine between
-      # runs, so later runs should not need a full redownload.
       # ============================================================
 
       - name: Install Freedesktop 25.08 runtime and SDK
@@ -412,6 +399,10 @@ jobs:
             # Classic Minizip
             #
             # Required by ThirdParty/openhi2txt.
+            #
+            # Plain one-line install/symlink commands are used here.
+            # Multi-line YAML list entries with backslashes are NOT
+            # shell continuation blocks unless expressed using "|".
             # ======================================================
 
             - name: minizip
@@ -456,29 +447,13 @@ jobs:
                 - ln -sf libminizip.so.1.0.0 libminizip.so.1
                 - ln -sf libminizip.so.1 libminizip.so
 
-                - install -Dm755 \
-                    libminizip.so.1.0.0 \
-                    /app/lib/libminizip.so.1.0.0
+                - install -Dm755 libminizip.so.1.0.0 /app/lib/libminizip.so.1.0.0
+                - ln -sf libminizip.so.1.0.0 /app/lib/libminizip.so.1
+                - ln -sf libminizip.so.1 /app/lib/libminizip.so
 
-                - ln -sf \
-                    libminizip.so.1.0.0 \
-                    /app/lib/libminizip.so.1
-
-                - ln -sf \
-                    libminizip.so.1 \
-                    /app/lib/libminizip.so
-
-                - install -Dm644 \
-                    unzip.h \
-                    /app/include/minizip/unzip.h
-
-                - install -Dm644 \
-                    zip.h \
-                    /app/include/minizip/zip.h
-
-                - install -Dm644 \
-                    ioapi.h \
-                    /app/include/minizip/ioapi.h
+                - install -Dm644 unzip.h /app/include/minizip/unzip.h
+                - install -Dm644 zip.h /app/include/minizip/zip.h
+                - install -Dm644 ioapi.h /app/include/minizip/ioapi.h
 
               sources:
                 - type: git
@@ -488,16 +463,8 @@ jobs:
             # ======================================================
             # RetroFE
             #
-            # type: dir is acceptable here because RetroFE is much
-            # faster to build than MAME.
-            #
-            # Flatpak-builder copies the CONTENTS of RetroFE into the
-            # module build root, hence:
-            #
-            #   Source/
-            #   Build/
-            #
-            # rather than RetroFE/Source.
+            # Flatpak-builder copies the CONTENTS of the RetroFE
+            # directory into the module build root.
             # ======================================================
 
             - name: retrofe
@@ -595,32 +562,18 @@ jobs:
             # ======================================================
             # Custom MAME
             #
-            # Built inside org.freedesktop.Sdk//25.08.
+            # Host CPU:
             #
-            # 6 physical cores / 12 logical CPUs:
+            #   6 physical cores
+            #   12 logical CPUs
             #
-            #   MAME_JOBS=10
+            # Use 10 parallel jobs to leave some headroom.
             #
-            # This leaves two logical CPUs available for the host,
-            # Flatpak-builder, I/O, and other activity.
+            # Debug info is explicitly disabled because previous
+            # full links overflowed 32-bit DWARF relocations.
             #
-            # SYMBOLS=0 + SYMLEVEL=0 + -g0 are all intentional.
-            #
-            # Previous full links failed because object files still
-            # contained enormous DWARF sections:
-            #
-            #   .debug_info
-            #   .debug_aranges
-            #   .debug_loclists
-            #
-            # ARCHOPTS=-g0 explicitly reaches MAME's compiler flags.
-            #
-            # The Flatpak CFLAGS/CXXFLAGS override provides a second
-            # layer ensuring debug information is disabled.
-            #
-            # MAME is fed as a LOCAL GIT SOURCE, not type: dir, so
-            # Flatpak-builder can identify/cache the exact repository
-            # state across runs.
+            # MAME is supplied as a LOCAL GIT source so its source
+            # identity can be cached properly by flatpak-builder.
             # ======================================================
 
             - name: mame
@@ -713,20 +666,9 @@ jobs:
               buildsystem: simple
 
               build-commands:
-                - install \
-                    -Dm755 \
-                    coinops-launcher \
-                    /app/bin/coinops-launcher
-
-                - install \
-                    -Dm644 \
-                    coinops-runtime.desktop \
-                    /app/share/applications/org.coinops.Runtime.desktop
-
-                - install \
-                    -Dm644 \
-                    coinops-runtime.png \
-                    /app/share/icons/hicolor/256x256/apps/org.coinops.Runtime.png
+                - install -Dm755 coinops-launcher /app/bin/coinops-launcher
+                - install -Dm644 coinops-runtime.desktop /app/share/applications/org.coinops.Runtime.desktop
+                - install -Dm644 coinops-runtime.png /app/share/icons/hicolor/256x256/apps/org.coinops.Runtime.png
 
               sources:
                 - type: file
@@ -742,17 +684,10 @@ jobs:
           cat org.coinops.Runtime.yml
 
       # ============================================================
-      # Show persistent local builder state
+      # Inspect persistent local builder state
       #
-      # No actions/cache upload/download is needed for the normal
-      # self-hosted case.
-      #
-      # .flatpak-builder remains on the runner filesystem between
-      # workflow runs because:
-      #
-      #   actions/checkout clean: false
-      #
-      # and because we do NOT remove .flatpak-builder below.
+      # No actions/cache step is needed on the normal self-hosted
+      # runner because .flatpak-builder remains on local storage.
       # ============================================================
 
       - name: Inspect persistent build cache
@@ -766,7 +701,9 @@ jobs:
 
             echo
             echo "Top-level cache contents:"
-            du -h \
+
+            du \
+              -h \
               --max-depth=1 \
               .flatpak-builder \
               2>/dev/null \
@@ -780,14 +717,9 @@ jobs:
       # ============================================================
       # Build native Flatpak
       #
-      # IMPORTANT:
+      # build-dir and repo are disposable.
       #
-      # build-dir and repo are disposable outputs.
-      #
-      # .flatpak-builder is deliberately NOT deleted.
-      #
-      # --ccache adds compiler-level caching in addition to
-      # Flatpak-builder's module caching.
+      # .flatpak-builder is deliberately preserved.
       # ============================================================
 
       - name: Build native CoinOPS Flatpak
@@ -862,7 +794,8 @@ jobs:
 
             echo
 
-            du -h \
+            du \
+              -h \
               -d 3 \
               build-dir/files/lib \
               2>/dev/null \
@@ -900,7 +833,7 @@ jobs:
           du -sh .flatpak-builder || true
 
       # ============================================================
-      # Smoke tests inside built Flatpak environment
+      # Smoke tests
       # ============================================================
 
       - name: Smoke test native Flatpak
@@ -996,10 +929,7 @@ jobs:
             CoinOPS-Runtime-Native-x86_64.flatpak
 
       # ============================================================
-      # Upload artifact to GitHub
-      #
-      # Even though the build happens locally, the resulting Flatpak
-      # is still uploaded to the GitHub Actions run as an artifact.
+      # Upload artifact
       # ============================================================
 
       - name: Upload native CoinOPS Flatpak
