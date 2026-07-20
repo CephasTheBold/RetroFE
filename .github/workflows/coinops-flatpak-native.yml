@@ -441,20 +441,22 @@ jobs:
                     USE_TAPTUN=0 \
                     USE_PCAP=0
 
-                - test -x mame
+                # SUBTARGET=coinops produces a binary named "coinops".
+                - test -x coinops
 
                 - |
                   echo
                   echo "============================================================"
-                  echo "Built MAME"
+                  echo "Built CoinOPS MAME subtarget"
                   echo "============================================================"
 
-                  ./mame -version
+                  ./coinops -version
 
-                  ls -lh mame
-                  du -h mame
+                  ls -lh coinops
+                  du -h coinops
 
-                - install -Dm755 mame /app/bin/mame
+                # Install under the standard runtime name expected by RetroFE.
+                - install -Dm755 coinops /app/bin/mame
 
               sources:
                 - type: git
