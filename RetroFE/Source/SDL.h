@@ -81,6 +81,13 @@ public:
         return (index < screenCount_ ? (rotation_[index] & 3) : (rotation_[0] & 3));
     }
 private:
+    
+    enum class LayoutScaleMode {
+        Stretch,
+        Fit,
+        Fill
+    };
+
     static std::vector<SDL_Window *>   window_;
     static std::vector<SDL_Renderer *> renderer_;
     static std::vector<int>            displayWidth_;
@@ -94,4 +101,5 @@ private:
     static int                         numScreens_;
     static int                         numDisplays_;
 	static int                         screenCount_;    
+    static LayoutScaleMode             layoutScaleMode_;
 };

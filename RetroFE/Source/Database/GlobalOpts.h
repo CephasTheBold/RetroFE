@@ -62,6 +62,7 @@
 #define OPTION_MUTEVIDEO             "MuteVideo"
 #define OPTION_SDLRENDERDRIVER       "SDLRenderDriver"
 #define OPTION_SCALEQUALITY          "ScaleQuality"
+#define OPTION_LAYOUTSCALEMODE       "layoutScaleMode"
 #define OPTION_HIGHPRIORITY          "highPriority"
 #define OPTION_UNLOADSDL             "unloadSDL"
 #define OPTION_MINIMIZEONFOCUSLOSS   "minimizeOnFocusLoss"
@@ -210,6 +211,7 @@ public:
     bool mutevideo() { return bool_value(OPTION_MUTEVIDEO); }
     int sdlrenderdriver() { return int_value(OPTION_SDLRENDERDRIVER); }
     int scalequality() { return int_value(OPTION_SCALEQUALITY); }
+    const char* layoutscalemode() { return value(OPTION_LAYOUTSCALEMODE); }
     bool highpriority() { return bool_value(OPTION_HIGHPRIORITY); }
     bool unloadsdl() { return bool_value(OPTION_UNLOADSDL); }
     bool minimizeonfocusloss() { return bool_value(OPTION_MINIMIZEONFOCUSLOSS); }

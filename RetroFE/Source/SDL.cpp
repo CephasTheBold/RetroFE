@@ -29,6 +29,9 @@
 #error "Cannot find SDL_mixer header"
 #endif
 #include "Utility/Utils.h"
+#include <algorithm>
+#include <cctype>
+#include <cmath>
 
 std::vector<SDL_Window*>    SDL::window_;
 std::vector<SDL_Renderer*>  SDL::renderer_;
@@ -44,6 +47,7 @@ std::vector<bool>           SDL::mirror_;
 int                         SDL::numScreens_ = 1;
 int                         SDL::numDisplays_ = 1;
 int                         SDL::screenCount_;
+SDL::LayoutScaleMode SDL::layoutScaleMode_ = SDL::LayoutScaleMode::Stretch;
 
 // Initialize SDL
 bool SDL::initialize(Configuration& config) {
@@ -113,6 +117,47 @@ bool SDL::initialize(Configuration& config) {
 	}
 
 	SDL_SetHint(SDL_HINT_RENDER_BATCHING, "1"); // For all renderers
+
+	std::string layoutScaleModeString = "stretch";
+	config.getProperty(OPTION_LAYOUTSCALEMODE, layoutScaleModeString);
+
+	std::transform(
+		layoutScaleModeString.begin(),
+		layoutScaleModeString.end(),
+		layoutScaleModeString.begin(),
+		[](unsigned char ch) {
+			return static_cast<char>(std::tolower(ch));
+		}
+	);
+
+	if (layoutScaleModeString == "fit") {
+		layoutScaleMode_ = LayoutScaleMode::Fit;
+	}
+	else if (layoutScaleModeString == "fill") {
+		layoutScaleMode_ = LayoutScaleMode::Fill;
+	}
+	else {
+		if (layoutScaleModeString != "stretch") {
+			LOG_WARNING(
+				"SDL",
+				"Invalid layoutScaleMode '" + layoutScaleModeString +
+				"'. Valid values are stretch, fit, and fill. "
+				"Defaulting to stretch."
+			);
+		}
+
+		layoutScaleMode_ = LayoutScaleMode::Stretch;
+	}
+
+	LOG_INFO(
+		"SDL",
+		"Layout scale mode: " +
+		std::string(
+			layoutScaleMode_ == LayoutScaleMode::Fill ? "fill" :
+			layoutScaleMode_ == LayoutScaleMode::Fit ? "fit" :
+			"stretch"
+		)
+	);
 
 	if (config.getProperty(OPTION_HIDEMOUSE, hideMouse))
 		SDL_ShowCursor(hideMouse ? SDL_FALSE : SDL_TRUE);
@@ -1333,257 +1378,910 @@ bool SDL::renderCopyF(SDL_Texture* texture,
 	ViewInfo& viewInfo,
 	int layoutWidth,
 	int layoutHeight) {
+	if (!texture) {
+		return false;
+	}
 
-	if (!texture) return false;
-	if (alpha <= 0.0f) return true;
+	if (alpha <= 0.0f) {
+		return true;
+	}
+
+	if (!dest || layoutWidth <= 0 || layoutHeight <= 0) {
+		return false;
+	}
+
 	const int m = viewInfo.Monitor;
-	if (m < 0 || m >= screenCount_ || !renderer_[m]) return true;
 
-	// --- START FAST PATH SCALE CACHE ---
-	// Stores calculated metrics per monitor to avoid redundant divisions.
+	if (m < 0 || m >= screenCount_ || !renderer_[m]) {
+		return true;
+	}
+
+	// ---------------------------------------------------------
+	// Layout-to-output scale cache
+	// ---------------------------------------------------------
+
 	struct ScaleCache {
-		int lastLW = -1, lastLH = -1, lastOW = -1, lastOH = -1, lastRot = -1;
-		bool lastMir = false, lastFS = false;
-		float scaleX = 1.0f, scaleY = 1.0f, dxL = 0.0f, dyL = 0.0f;
+		int lastLW = -1;
+		int lastLH = -1;
+		int lastOW = -1;
+		int lastOH = -1;
+		int lastRot = -1;
+		int lastMode = -1;
+
+		bool lastMir = false;
+		bool lastFS = false;
+
+		float scaleX = 1.0f;
+		float scaleY = 1.0f;
+
+		// Output-pixel offset used by fit/fill.
+		float offsetX = 0.0f;
+		float offsetY = 0.0f;
+
+		// Existing fullscreen-window offset, expressed in layout units.
+		float dxL = 0.0f;
+		float dyL = 0.0f;
 	};
-	static ScaleCache cache[8]; // Simple static array for up to 8 monitors
+
+	static ScaleCache cache[8];
+
+	// Avoid indexing past the fixed cache if screenCount_ is ever raised.
+	if (m >= static_cast<int>(std::size(cache))) {
+		LOG_ERROR(
+			"SDL",
+			"renderCopyF scale cache supports at most " +
+			std::to_string(std::size(cache)) + " monitors"
+		);
+		return false;
+	}
 
 	const int outW = windowWidth_[m];
 	const int outH = windowHeight_[m];
-	const int rot = (rotation_[m] & 3);
+	const int rot = rotation_[m] & 3;
 	const bool mir = mirror_[m];
 	const bool fs = fullscreen_[m];
+	const int modeKey = static_cast<int>(layoutScaleMode_);
 
-	// Recompute only if layout, window, rotation, mirroring, or fullscreen status changed
-	if (cache[m].lastLW != layoutWidth || cache[m].lastLH != layoutHeight ||
-		cache[m].lastOW != outW || cache[m].lastOH != outH ||
-		cache[m].lastRot != rot || cache[m].lastMir != mir || cache[m].lastFS != fs)
-	{
-		cache[m].scaleX = layoutWidth > 0 ? float(outW) / float(layoutWidth) : 1.0f;
-		cache[m].scaleY = layoutHeight > 0 ? float(outH) / float(layoutHeight) : 1.0f;
+	if (outW <= 0 || outH <= 0) {
+		return true;
+	}
 
-		// Swapping scales for 90/270 degree hardware rotation
-		if ((rot & 1) == 1) {
-			cache[m].scaleX = layoutWidth > 0 ? float(outH) / float(layoutWidth) : 1.0f;
-			cache[m].scaleY = layoutHeight > 0 ? float(outW) / float(layoutHeight) : 1.0f;
+	const bool cacheInvalid =
+		cache[m].lastLW != layoutWidth ||
+		cache[m].lastLH != layoutHeight ||
+		cache[m].lastOW != outW ||
+		cache[m].lastOH != outH ||
+		cache[m].lastRot != rot ||
+		cache[m].lastMir != mir ||
+		cache[m].lastFS != fs ||
+		cache[m].lastMode != modeKey;
+
+	if (cacheInvalid) {
+		/*
+		 * Before output rotation is applied, 90/270-degree layouts render
+		 * into an output coordinate system whose dimensions are swapped.
+		 */
+		const float logicalOutW =
+			(rot & 1) ? static_cast<float>(outH)
+			: static_cast<float>(outW);
+
+		const float logicalOutH =
+			(rot & 1) ? static_cast<float>(outW)
+			: static_cast<float>(outH);
+
+		const float candidateScaleX =
+			logicalOutW / static_cast<float>(layoutWidth);
+
+		const float candidateScaleY =
+			logicalOutH / static_cast<float>(layoutHeight);
+
+		cache[m].offsetX = 0.0f;
+		cache[m].offsetY = 0.0f;
+
+		/*
+		 * Mirror mode historically renders the layout into half the output
+		 * height and then duplicates/rotates it. Preserve that behavior.
+		 *
+		 * Normal non-mirrored rendering gets stretch, fit, or fill.
+		 */
+		if (mir) {
+			cache[m].scaleX = candidateScaleX;
+			cache[m].scaleY = candidateScaleY * 0.5f;
 		}
-		if (mir) cache[m].scaleY /= 2.0f;
+		else {
+			switch (layoutScaleMode_) {
+				case LayoutScaleMode::Fit: {
+					const float scale =
+						std::min(candidateScaleX, candidateScaleY);
 
-		// Pre-calculate centered fullscreen layout offset
-		cache[m].dxL = 0.0f; cache[m].dyL = 0.0f;
+					cache[m].scaleX = scale;
+					cache[m].scaleY = scale;
+
+					cache[m].offsetX =
+						(logicalOutW -
+							static_cast<float>(layoutWidth) * scale) *
+						0.5f;
+
+					cache[m].offsetY =
+						(logicalOutH -
+							static_cast<float>(layoutHeight) * scale) *
+						0.5f;
+
+					break;
+				}
+
+				case LayoutScaleMode::Fill: {
+					const float scale =
+						std::max(candidateScaleX, candidateScaleY);
+
+					cache[m].scaleX = scale;
+					cache[m].scaleY = scale;
+
+					cache[m].offsetX =
+						(logicalOutW -
+							static_cast<float>(layoutWidth) * scale) *
+						0.5f;
+
+					cache[m].offsetY =
+						(logicalOutH -
+							static_cast<float>(layoutHeight) * scale) *
+						0.5f;
+
+					break;
+				}
+
+				case LayoutScaleMode::Stretch:
+				default:
+				cache[m].scaleX = candidateScaleX;
+				cache[m].scaleY = candidateScaleY;
+				break;
+			}
+		}
+
+		/*
+		 * Existing fullscreen handling:
+		 *
+		 * dxL/dyL remain layout-space values because they are added to the
+		 * logical destination rectangle before to_pixels() is called.
+		 */
+		cache[m].dxL = 0.0f;
+		cache[m].dyL = 0.0f;
+
 		if (fs) {
-			cache[m].dxL = 0.5f * float(displayWidth_[m] - outW) / std::max(cache[m].scaleX, 1e-6f);
-			cache[m].dyL = 0.5f * float(displayHeight_[m] - outH) / std::max(cache[m].scaleY, 1e-6f);
+			cache[m].dxL =
+				0.5f *
+				static_cast<float>(displayWidth_[m] - outW) /
+				std::max(cache[m].scaleX, 1e-6f);
+
+			cache[m].dyL =
+				0.5f *
+				static_cast<float>(displayHeight_[m] - outH) /
+				std::max(cache[m].scaleY, 1e-6f);
 		}
 
-		// Update tracking keys
-		cache[m].lastLW = layoutWidth; cache[m].lastLH = layoutHeight;
-		cache[m].lastOW = outW; cache[m].lastOH = outH;
-		cache[m].lastRot = rot; cache[m].lastMir = mir; cache[m].lastFS = fs;
+		cache[m].lastLW = layoutWidth;
+		cache[m].lastLH = layoutHeight;
+		cache[m].lastOW = outW;
+		cache[m].lastOH = outH;
+		cache[m].lastRot = rot;
+		cache[m].lastMir = mir;
+		cache[m].lastFS = fs;
+		cache[m].lastMode = modeKey;
 	}
 
 	const float scaleX = cache[m].scaleX;
 	const float scaleY = cache[m].scaleY;
-	// --- END FAST PATH SCALE CACHE ---
 
-	auto texW = (int)viewInfo.ImageWidth;
-	auto texH = (int)viewInfo.ImageHeight;
+	// ---------------------------------------------------------
+	// Texture and source/destination setup
+	// ---------------------------------------------------------
+
+	int texW = static_cast<int>(viewInfo.ImageWidth);
+	int texH = static_cast<int>(viewInfo.ImageHeight);
+
 	if (texW <= 0 || texH <= 0) {
-		SDL_QueryTexture(texture, nullptr, nullptr, &texW, &texH);
-		viewInfo.ImageWidth = (float)texW;
-		viewInfo.ImageHeight = (float)texH;
+		if (SDL_QueryTexture(
+			texture,
+			nullptr,
+			nullptr,
+			&texW,
+			&texH) != 0)
+		{
+			LOG_ERROR(
+				"SDL",
+				"SDL_QueryTexture failed in renderCopyF: " +
+				std::string(SDL_GetError())
+			);
+			return false;
+		}
+
+		viewInfo.ImageWidth = static_cast<float>(texW);
+		viewInfo.ImageHeight = static_cast<float>(texH);
 	}
 
-	SDL_Rect srcRect = src ? *src : SDL_Rect{ 0, 0, texW, texH };
+	SDL_Rect srcRect =
+		src ? *src : SDL_Rect{ 0, 0, texW, texH };
+
 	SDL_FRect dstRect = *dest;
 
-	// Use cached fullscreen offset
+	// Existing fullscreen offset is in logical layout coordinates.
 	dstRect.x += cache[m].dxL;
 	dstRect.y += cache[m].dyL;
 
-	if (dstRect.w <= 0.f || dstRect.h <= 0.f || srcRect.w <= 0 || srcRect.h <= 0)
+	if (dstRect.w <= 0.0f ||
+		dstRect.h <= 0.0f ||
+		srcRect.w <= 0 ||
+		srcRect.h <= 0)
+	{
 		return true;
+	}
 
 	SDL_FRect container{};
-	bool hasContainer = (viewInfo.ContainerWidth > 0.0f && viewInfo.ContainerHeight > 0.0f);
+
+	bool hasContainer =
+		viewInfo.ContainerWidth > 0.0f &&
+		viewInfo.ContainerHeight > 0.0f;
 
 	if (mir && !hasContainer) {
-		container = { 0.0f, 0.0f, float(layoutWidth), float(layoutHeight) };
+		container = {
+			0.0f,
+			0.0f,
+			static_cast<float>(layoutWidth),
+			static_cast<float>(layoutHeight)
+		};
+
 		hasContainer = true;
 	}
 	else if (hasContainer) {
-		container = { viewInfo.ContainerX, viewInfo.ContainerY,
-			viewInfo.ContainerWidth, viewInfo.ContainerHeight };
+		container = {
+			viewInfo.ContainerX,
+			viewInfo.ContainerY,
+			viewInfo.ContainerWidth,
+			viewInfo.ContainerHeight
+		};
 	}
 
 	const SDL_Rect src0 = srcRect;
 	const SDL_FRect dst0 = dstRect;
 
+	// ---------------------------------------------------------
 	// Helpers
-	auto clamp_int = [](int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); };
-	auto clamp_u8 = [&](float a01)->Uint8 {
-		if (a01 < 0.f) a01 = 0.f; else if (a01 > 1.f) a01 = 1.f;
-		return (Uint8)clamp_int((int)lroundf(a01 * 255.f), 0, 255);
-		};
-	auto to_pixels = [&](SDL_FRect r)->SDL_FRect { r.x *= scaleX; r.y *= scaleY; r.w *= scaleX; r.h *= scaleY; return r; };
+	// ---------------------------------------------------------
 
-	auto recompute_src_from_dst = [&](SDL_Rect& s, const SDL_Rect& sCopy, const SDL_FRect& d, const SDL_FRect& dCopy) {
-		const float sx = (dCopy.w > 0.f) ? float(sCopy.w) / dCopy.w : 0.f;
-		const float sy = (dCopy.h > 0.f) ? float(sCopy.h) / dCopy.h : 0.f;
-		s.w = (int)lroundf(d.w * sx);
-		s.h = (int)lroundf(d.h * sy);
-		s.x = sCopy.x + (int)lroundf((d.x - dCopy.x) * sx);
-		s.y = sCopy.y + (int)lroundf((d.y - dCopy.y) * sy);
-
-		const SDL_Rect limit = src ? *src : SDL_Rect{ 0,0,texW,texH };
-		if (s.x < limit.x) s.x = limit.x;
-		if (s.y < limit.y) s.y = limit.y;
-		if (s.x + s.w > limit.x + limit.w) s.w = std::max(0, limit.x + limit.w - s.x);
-		if (s.y + s.h > limit.y + limit.h) s.h = std::max(0, limit.y + limit.h - s.y);
+	auto clamp_int = [](int value, int minimum, int maximum) {
+		return value < minimum
+			? minimum
+			: value > maximum
+			? maximum
+			: value;
 		};
 
-	auto clip_to_container = [&](SDL_Rect& s, SDL_FRect& d, const SDL_Rect& sCopy, const SDL_FRect& dCopy) {
-		if (!hasContainer || dCopy.w <= 0.f || dCopy.h <= 0.f) return;
-		if (d.x < container.x) { const float newW = dCopy.w + dCopy.x - container.x; d.x = container.x; d.w = std::max(0.0f, newW); }
-		if ((d.x + d.w) > (container.x + container.w)) d.w = std::max(0.0f, (container.x + container.w) - d.x);
-		if (d.y < container.y) { const float newH = dCopy.h + dCopy.y - container.y; d.y = container.y; d.h = std::max(0.0f, newH); }
-		if ((d.y + d.h) > (container.y + container.h)) d.h = std::max(0.0f, (container.y + container.h) - d.y);
-		recompute_src_from_dst(s, sCopy, d, dCopy);
+	auto clamp_u8 = [&](float alpha01) -> Uint8 {
+		alpha01 = std::clamp(alpha01, 0.0f, 1.0f);
+
+		return static_cast<Uint8>(
+			clamp_int(
+				static_cast<int>(std::lround(alpha01 * 255.0f)),
+				0,
+				255
+			)
+			);
 		};
 
-	auto apply_output_rotation_rect = [&](SDL_FRect& dPx) {
+	/*
+	 * This is the key global layout viewport transform.
+	 *
+	 * Stretch:
+	 *   offsets are zero, scaleX and scaleY differ.
+	 *
+	 * Fit:
+	 *   scaleX == scaleY, offsets are positive.
+	 *
+	 * Fill:
+	 *   scaleX == scaleY, one offset may be negative.
+	 */
+	auto to_pixels = [&](SDL_FRect rect) -> SDL_FRect {
+		rect.x = cache[m].offsetX + rect.x * scaleX;
+		rect.y = cache[m].offsetY + rect.y * scaleY;
+		rect.w *= scaleX;
+		rect.h *= scaleY;
+		return rect;
+		};
+
+	auto recompute_src_from_dst =
+		[&](SDL_Rect& sourceRect,
+			const SDL_Rect& sourceCopy,
+			const SDL_FRect& destinationRect,
+			const SDL_FRect& destinationCopy)
+		{
+			const float sourceScaleX =
+				destinationCopy.w > 0.0f
+				? static_cast<float>(sourceCopy.w) /
+				destinationCopy.w
+				: 0.0f;
+
+			const float sourceScaleY =
+				destinationCopy.h > 0.0f
+				? static_cast<float>(sourceCopy.h) /
+				destinationCopy.h
+				: 0.0f;
+
+			sourceRect.w = static_cast<int>(
+				std::lround(destinationRect.w * sourceScaleX)
+				);
+
+			sourceRect.h = static_cast<int>(
+				std::lround(destinationRect.h * sourceScaleY)
+				);
+
+			sourceRect.x =
+				sourceCopy.x +
+				static_cast<int>(
+					std::lround(
+						(destinationRect.x - destinationCopy.x) *
+						sourceScaleX
+					)
+					);
+
+			sourceRect.y =
+				sourceCopy.y +
+				static_cast<int>(
+					std::lround(
+						(destinationRect.y - destinationCopy.y) *
+						sourceScaleY
+					)
+					);
+
+			const SDL_Rect limit =
+				src ? *src : SDL_Rect{ 0, 0, texW, texH };
+
+			if (sourceRect.x < limit.x) {
+				sourceRect.x = limit.x;
+			}
+
+			if (sourceRect.y < limit.y) {
+				sourceRect.y = limit.y;
+			}
+
+			if (sourceRect.x + sourceRect.w > limit.x + limit.w) {
+				sourceRect.w = std::max(
+					0,
+					limit.x + limit.w - sourceRect.x
+				);
+			}
+
+			if (sourceRect.y + sourceRect.h > limit.y + limit.h) {
+				sourceRect.h = std::max(
+					0,
+					limit.y + limit.h - sourceRect.y
+				);
+			}
+		};
+
+	auto clip_to_container =
+		[&](SDL_Rect& sourceRect,
+			SDL_FRect& destinationRect,
+			const SDL_Rect& sourceCopy,
+			const SDL_FRect& destinationCopy)
+		{
+			if (!hasContainer ||
+				destinationCopy.w <= 0.0f ||
+				destinationCopy.h <= 0.0f)
+			{
+				return;
+			}
+
+			if (destinationRect.x < container.x) {
+				const float newWidth =
+					destinationCopy.w +
+					destinationCopy.x -
+					container.x;
+
+				destinationRect.x = container.x;
+				destinationRect.w = std::max(0.0f, newWidth);
+			}
+
+			if (destinationRect.x + destinationRect.w >
+				container.x + container.w)
+			{
+				destinationRect.w = std::max(
+					0.0f,
+					container.x + container.w - destinationRect.x
+				);
+			}
+
+			if (destinationRect.y < container.y) {
+				const float newHeight =
+					destinationCopy.h +
+					destinationCopy.y -
+					container.y;
+
+				destinationRect.y = container.y;
+				destinationRect.h = std::max(0.0f, newHeight);
+			}
+
+			if (destinationRect.y + destinationRect.h >
+				container.y + container.h)
+			{
+				destinationRect.h = std::max(
+					0.0f,
+					container.y + container.h - destinationRect.y
+				);
+			}
+
+			recompute_src_from_dst(
+				sourceRect,
+				sourceCopy,
+				destinationRect,
+				destinationCopy
+			);
+		};
+
+	auto apply_output_rotation_rect = [&](SDL_FRect& rectPixels) {
 		switch (rot) {
-			case 1: { float tmp = dPx.x; dPx.x = float(outW) - dPx.y - dPx.h * 0.5f - dPx.w * 0.5f; dPx.y = tmp - dPx.h * 0.5f + dPx.w * 0.5f; } break;
-			case 2: dPx.x = float(outW) - dPx.x - dPx.w; dPx.y = float(outH) - dPx.y - dPx.h; break;
-			case 3: { float tmp = dPx.x; dPx.x = dPx.y + dPx.h * 0.5f - dPx.w * 0.5f; dPx.y = float(outH) - tmp - dPx.h * 0.5f - dPx.w * 0.5f; } break;
+			case 1: {
+				const float oldX = rectPixels.x;
+
+				rectPixels.x =
+					static_cast<float>(outW) -
+					rectPixels.y -
+					rectPixels.h * 0.5f -
+					rectPixels.w * 0.5f;
+
+				rectPixels.y =
+					oldX -
+					rectPixels.h * 0.5f +
+					rectPixels.w * 0.5f;
+
+				break;
+			}
+
+			case 2:
+			rectPixels.x =
+				static_cast<float>(outW) -
+				rectPixels.x -
+				rectPixels.w;
+
+			rectPixels.y =
+				static_cast<float>(outH) -
+				rectPixels.y -
+				rectPixels.h;
+
+			break;
+
+			case 3: {
+				const float oldX = rectPixels.x;
+
+				rectPixels.x =
+					rectPixels.y +
+					rectPixels.h * 0.5f -
+					rectPixels.w * 0.5f;
+
+				rectPixels.y =
+					static_cast<float>(outH) -
+					oldX -
+					rectPixels.h * 0.5f -
+					rectPixels.w * 0.5f;
+
+				break;
+			}
+
+			default:
+			break;
 		}
 		};
 
-	// FIXED: Signature changed back to taking the *source* rect 's'
-	auto draw_quad = [&](const SDL_Rect& s, const SDL_FRect& dPx, float angleDeg,
-		bool flipH, bool flipV, float alpha01) -> bool
+	auto draw_quad =
+		[&](const SDL_Rect& sourceRect,
+			const SDL_FRect& destinationPixels,
+			float angleDegrees,
+			bool flipHorizontal,
+			bool flipVertical,
+			float alpha01) -> bool
 		{
-			// FIXED: Reverted to the direct UV calculation that relies strictly on the source rect bounds
-			float u0 = (float)s.x / (float)texW;
-			float v0 = (float)s.y / (float)texH;
-			float u1 = (float)(s.x + s.w) / (float)texW;
-			float v1 = (float)(s.y + s.h) / (float)texH;
+			float u0 =
+				static_cast<float>(sourceRect.x) /
+				static_cast<float>(texW);
 
-			if (flipH) std::swap(u0, u1);
-			if (flipV) std::swap(v0, v1);
+			float v0 =
+				static_cast<float>(sourceRect.y) /
+				static_cast<float>(texH);
 
-			float cosA, sinA;
-			float remainder = fmodf(fabsf(angleDeg), 90.0f);
+			float u1 =
+				static_cast<float>(sourceRect.x + sourceRect.w) /
+				static_cast<float>(texW);
+
+			float v1 =
+				static_cast<float>(sourceRect.y + sourceRect.h) /
+				static_cast<float>(texH);
+
+			if (flipHorizontal) {
+				std::swap(u0, u1);
+			}
+
+			if (flipVertical) {
+				std::swap(v0, v1);
+			}
+
+			float cosAngle;
+			float sinAngle;
+
+			const float remainder =
+				std::fmod(std::fabs(angleDegrees), 90.0f);
+
 			if (remainder < 0.001f || remainder > 89.999f) {
-				int quarter = (int)lroundf(angleDeg / 90.0f) % 4;
-				if (quarter < 0) quarter += 4;
-				static const float cosTable[] = { 1.0f, 0.0f, -1.0f, 0.0f };
-				static const float sinTable[] = { 0.0f, 1.0f, 0.0f, -1.0f };
-				cosA = cosTable[quarter];
-				sinA = sinTable[quarter];
+				int quarter =
+					static_cast<int>(
+						std::lround(angleDegrees / 90.0f)
+						) % 4;
+
+				if (quarter < 0) {
+					quarter += 4;
+				}
+
+				static constexpr float cosTable[] = {
+					1.0f, 0.0f, -1.0f, 0.0f
+				};
+
+				static constexpr float sinTable[] = {
+					0.0f, 1.0f, 0.0f, -1.0f
+				};
+
+				cosAngle = cosTable[quarter];
+				sinAngle = sinTable[quarter];
 			}
 			else {
-				float rad = angleDeg * (3.1415926535f / 180.0f);
-				cosA = cosf(rad);
-				sinA = sinf(rad);
+				const float radians =
+					angleDegrees *
+					(3.1415926535f / 180.0f);
+
+				cosAngle = std::cos(radians);
+				sinAngle = std::sin(radians);
 			}
 
-			float cx = dPx.x + 0.5f * dPx.w;
-			float cy = dPx.y + 0.5f * dPx.h;
+			const float centerX =
+				destinationPixels.x +
+				0.5f * destinationPixels.w;
 
-			float hx = 0.5f * (fabsf(cosA) * dPx.w + fabsf(sinA) * dPx.h);
-			float hy = 0.5f * (fabsf(sinA) * dPx.w + fabsf(cosA) * dPx.h);
+			const float centerY =
+				destinationPixels.y +
+				0.5f * destinationPixels.h;
 
-			const float epsilon = 1.0f;
-			if (cx + hx < -epsilon || cy + hy < -epsilon ||
-				cx - hx >(float)outW + epsilon || cy - hy >(float)outH + epsilon) {
+			const float halfExtentX =
+				0.5f *
+				(std::fabs(cosAngle) * destinationPixels.w +
+					std::fabs(sinAngle) * destinationPixels.h);
+
+			const float halfExtentY =
+				0.5f *
+				(std::fabs(sinAngle) * destinationPixels.w +
+					std::fabs(cosAngle) * destinationPixels.h);
+
+			constexpr float epsilon = 1.0f;
+
+			if (centerX + halfExtentX < -epsilon ||
+				centerY + halfExtentY < -epsilon ||
+				centerX - halfExtentX >
+				static_cast<float>(outW) + epsilon ||
+				centerY - halfExtentY >
+				static_cast<float>(outH) + epsilon)
+			{
 				return true;
 			}
 
-			SDL_FPoint pts[4] = {
-				{dPx.x, dPx.y},
-				{dPx.x + dPx.w, dPx.y},
-				{dPx.x + dPx.w, dPx.y + dPx.h},
-				{dPx.x, dPx.y + dPx.h}
+			SDL_FPoint points[4] = {
+				{
+					destinationPixels.x,
+					destinationPixels.y
+				},
+				{
+					destinationPixels.x + destinationPixels.w,
+					destinationPixels.y
+				},
+				{
+					destinationPixels.x + destinationPixels.w,
+					destinationPixels.y + destinationPixels.h
+				},
+				{
+					destinationPixels.x,
+					destinationPixels.y + destinationPixels.h
+				}
 			};
 
-			for (int i = 0; i < 4; ++i) {
-				float tx = pts[i].x - cx;
-				float ty = pts[i].y - cy;
-				pts[i].x = (tx * cosA - ty * sinA) + cx;
-				pts[i].y = (tx * sinA + ty * cosA) + cy;
+			for (SDL_FPoint& point : points) {
+				const float translatedX = point.x - centerX;
+				const float translatedY = point.y - centerY;
+
+				point.x =
+					translatedX * cosAngle -
+					translatedY * sinAngle +
+					centerX;
+
+				point.y =
+					translatedX * sinAngle +
+					translatedY * cosAngle +
+					centerY;
 			}
 
-			Uint8 texR = 255, texG = 255, texB = 255;
-			SDL_GetTextureColorMod(texture, &texR, &texG, &texB);
+			Uint8 textureR = 255;
+			Uint8 textureG = 255;
+			Uint8 textureB = 255;
 
-			SDL_Color col = { texR, texG, texB, clamp_u8(alpha01) };
-			SDL_Vertex v[4];
+			SDL_GetTextureColorMod(
+				texture,
+				&textureR,
+				&textureG,
+				&textureB
+			);
 
-			v[0] = { pts[0], col, {u0, v0} };
-			v[1] = { pts[1], col, {u1, v0} };
-			v[2] = { pts[2], col, {u1, v1} };
-			v[3] = { pts[3], col, {u0, v1} };
+			const SDL_Color color = {
+				textureR,
+				textureG,
+				textureB,
+				clamp_u8(alpha01)
+			};
 
-			static const int idx[6] = { 0, 1, 2, 0, 2, 3 };
-			return SDL_RenderGeometry(renderer_[m], texture, v, 4, idx, 6) == 0;
+			SDL_Vertex vertices[4];
+
+			vertices[0] = {
+				points[0],
+				color,
+				{ u0, v0 }
+			};
+
+			vertices[1] = {
+				points[1],
+				color,
+				{ u1, v0 }
+			};
+
+			vertices[2] = {
+				points[2],
+				color,
+				{ u1, v1 }
+			};
+
+			vertices[3] = {
+				points[3],
+				color,
+				{ u0, v1 }
+			};
+
+			static constexpr int indices[6] = {
+				0, 1, 2,
+				0, 2, 3
+			};
+
+			return SDL_RenderGeometry(
+				renderer_[m],
+				texture,
+				vertices,
+				4,
+				indices,
+				6
+			) == 0;
 		};
 
-	auto render_path = [&](bool reflect, int kind = -1) -> bool {
-		if (dst0.x + dst0.w < 0 || dst0.y + dst0.h < 0 ||
-			dst0.x >(float)layoutWidth || dst0.y >(float)layoutHeight) {
-			return true;
-		}
-
-		SDL_Rect s = src0; SDL_FRect d = dst0;
-		float a = alpha;
-		bool fH = false, fV = false;
-
-		if (reflect) {
-			a = alpha * viewInfo.ReflectionAlpha;
-			fH = (kind == 2 || kind == 3); fV = (kind == 0 || kind == 1);
-			switch (kind) {
-				case 0: d.h *= viewInfo.ReflectionScale; d.y -= (d.h + viewInfo.ReflectionDistance); break;
-				case 1: d.y += (d.h + viewInfo.ReflectionDistance); d.h *= viewInfo.ReflectionScale; break;
-				case 2: d.w *= viewInfo.ReflectionScale; d.x -= (d.w + viewInfo.ReflectionDistance); break;
-				case 3: d.x += (d.w + viewInfo.ReflectionDistance); d.w *= viewInfo.ReflectionScale; break;
+	auto render_path =
+		[&](bool reflect, int kind = -1) -> bool
+		{
+			/*
+			 * Logical-layout culling remains in layout coordinates.
+			 *
+			 * Fill cropping is handled naturally after to_pixels(), where
+			 * negative output offsets place the excess outside the viewport.
+			 */
+			if (dst0.x + dst0.w < 0.0f ||
+				dst0.y + dst0.h < 0.0f ||
+				dst0.x > static_cast<float>(layoutWidth) ||
+				dst0.y > static_cast<float>(layoutHeight))
+			{
+				return true;
 			}
-		}
 
-		clip_to_container(s, d, src0, dst0);
-		if (d.w <= 0.f || d.h <= 0.f || s.w <= 0 || s.h <= 0) return true;
+			SDL_Rect sourceRect = src0;
+			SDL_FRect destinationRect = dst0;
 
-		float angle = viewInfo.Angle;
-		if (!mir) angle += float(rot * 90);
-		SDL_FRect dPx = to_pixels(d);
+			float pathAlpha = alpha;
+			bool flipHorizontal = false;
+			bool flipVertical = false;
 
-		bool ok = true;
-		if (mir) {
-			if ((rotation_[m] & 1) == 0) {
-				SDL_FRect r = dPx; r.y += float(outH) * 0.5f;
-				ok &= draw_quad(s, r, angle, fH, fV, a);         // FIXED: Passed 's'
-				r.x = float(outW) - r.x - r.w; r.y = float(outH) - r.y - r.h;
-				ok &= draw_quad(s, r, angle + 180.0f, fH, fV, a); // FIXED: Passed 's'
+			if (reflect) {
+				pathAlpha =
+					alpha * viewInfo.ReflectionAlpha;
+
+				flipHorizontal =
+					kind == 2 || kind == 3;
+
+				flipVertical =
+					kind == 0 || kind == 1;
+
+				switch (kind) {
+					case 0:
+					destinationRect.h *=
+						viewInfo.ReflectionScale;
+
+					destinationRect.y -=
+						destinationRect.h +
+						viewInfo.ReflectionDistance;
+
+					break;
+
+					case 1:
+					destinationRect.y +=
+						destinationRect.h +
+						viewInfo.ReflectionDistance;
+
+					destinationRect.h *=
+						viewInfo.ReflectionScale;
+
+					break;
+
+					case 2:
+					destinationRect.w *=
+						viewInfo.ReflectionScale;
+
+					destinationRect.x -=
+						destinationRect.w +
+						viewInfo.ReflectionDistance;
+
+					break;
+
+					case 3:
+					destinationRect.x +=
+						destinationRect.w +
+						viewInfo.ReflectionDistance;
+
+					destinationRect.w *=
+						viewInfo.ReflectionScale;
+
+					break;
+
+					default:
+					break;
+				}
+			}
+
+			clip_to_container(
+				sourceRect,
+				destinationRect,
+				src0,
+				dst0
+			);
+
+			if (destinationRect.w <= 0.0f ||
+				destinationRect.h <= 0.0f ||
+				sourceRect.w <= 0 ||
+				sourceRect.h <= 0)
+			{
+				return true;
+			}
+
+			float angle = viewInfo.Angle;
+
+			if (!mir) {
+				angle += static_cast<float>(rot * 90);
+			}
+
+			SDL_FRect destinationPixels =
+				to_pixels(destinationRect);
+
+			bool result = true;
+
+			if (mir) {
+				if ((rotation_[m] & 1) == 0) {
+					SDL_FRect mirroredRect =
+						destinationPixels;
+
+					mirroredRect.y +=
+						static_cast<float>(outH) * 0.5f;
+
+					result &= draw_quad(
+						sourceRect,
+						mirroredRect,
+						angle,
+						flipHorizontal,
+						flipVertical,
+						pathAlpha
+					);
+
+					mirroredRect.x =
+						static_cast<float>(outW) -
+						mirroredRect.x -
+						mirroredRect.w;
+
+					mirroredRect.y =
+						static_cast<float>(outH) -
+						mirroredRect.y -
+						mirroredRect.h;
+
+					result &= draw_quad(
+						sourceRect,
+						mirroredRect,
+						angle + 180.0f,
+						flipHorizontal,
+						flipVertical,
+						pathAlpha
+					);
+				}
+				else {
+					SDL_FRect mirroredRect =
+						destinationPixels;
+
+					const float oldX =
+						mirroredRect.x;
+
+					mirroredRect.x =
+						static_cast<float>(outW) * 0.5f -
+						mirroredRect.y -
+						mirroredRect.h * 0.5f -
+						mirroredRect.w * 0.5f;
+
+					mirroredRect.y =
+						oldX -
+						mirroredRect.h * 0.5f +
+						mirroredRect.w * 0.5f;
+
+					result &= draw_quad(
+						sourceRect,
+						mirroredRect,
+						angle + 90.0f,
+						flipHorizontal,
+						flipVertical,
+						pathAlpha
+					);
+
+					mirroredRect.x =
+						static_cast<float>(outW) -
+						mirroredRect.x -
+						mirroredRect.w;
+
+					mirroredRect.y =
+						static_cast<float>(outH) -
+						mirroredRect.y -
+						mirroredRect.h;
+
+					result &= draw_quad(
+						sourceRect,
+						mirroredRect,
+						angle + 270.0f,
+						flipHorizontal,
+						flipVertical,
+						pathAlpha
+					);
+				}
 			}
 			else {
-				SDL_FRect r = dPx; float tmpx = r.x;
-				r.x = float(outW) * 0.5f - r.y - r.h * 0.5f - r.w * 0.5f;
-				r.y = tmpx - r.h * 0.5f + r.w * 0.5f;
-				ok &= draw_quad(s, r, angle + 90.0f, fH, fV, a);  // FIXED: Passed 's'
-				r.x = float(outW) - r.x - r.w; r.y = float(outH) - r.y - r.h;
-				ok &= draw_quad(s, r, angle + 270.0f, fH, fV, a); // FIXED: Passed 's'
+				apply_output_rotation_rect(destinationPixels);
+
+				result &= draw_quad(
+					sourceRect,
+					destinationPixels,
+					angle,
+					flipHorizontal,
+					flipVertical,
+					pathAlpha
+				);
 			}
-		}
-		else {
-			apply_output_rotation_rect(dPx);
-			ok &= draw_quad(s, dPx, angle, fH, fV, a);           // FIXED: Passed 's'
-		}
-		return ok;
+
+			return result;
 		};
 
-	bool ok = render_path(false);
+	bool result = render_path(false);
+
 	if (viewInfo.hasReflection) {
-		for (int i = 0; i < 4; ++i) if (viewInfo.reflectionMask & (1 << i)) ok &= render_path(true, i);
+		for (int reflectionKind = 0;
+			reflectionKind < 4;
+			++reflectionKind)
+		{
+			if (viewInfo.reflectionMask &
+				(1 << reflectionKind))
+			{
+				result &=
+					render_path(true, reflectionKind);
+			}
+		}
 	}
-	return ok;
+
+	return result;
 }
