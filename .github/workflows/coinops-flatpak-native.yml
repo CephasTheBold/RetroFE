@@ -892,8 +892,6 @@ jobs:
                   path: Packaging/Flatpak/coinops-runtime.png
           EOF
 
-          cat org.coinops.Runtime.yml
-
       # ============================================================
       # Inspect persistent local builder state
       #
