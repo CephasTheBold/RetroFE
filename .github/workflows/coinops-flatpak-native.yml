@@ -802,6 +802,9 @@ jobs:
               sources:
                 - type: dir
                   path: RetroFE
+                  skip:
+                    - .git
+                    - .github
 
             # ======================================================
             # Final runtime cleanup
