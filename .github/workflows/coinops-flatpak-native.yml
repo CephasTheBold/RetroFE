@@ -945,6 +945,7 @@ jobs:
             --user \
             --force-clean \
             --ccache \
+            --keep-build-dirs \
             --repo=repo \
             --install-deps-from=flathub \
             build-dir \
