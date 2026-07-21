@@ -455,7 +455,7 @@ jobs:
                     2>&1 \
                     | tee mame-build.log \
                     | awk '
-                        /Compiling/ || /Archiving/ {
+                        /Compiling/ || /Archiving/ || /Compressing/ || /Generating/ {
                           progress++
 
                           if (progress == 1 || progress % 100 == 0) {
