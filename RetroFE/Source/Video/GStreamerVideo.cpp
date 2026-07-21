@@ -925,46 +925,75 @@ bool GStreamerVideo::open(const std::string& file) {
     return true;
 }
 
-GstPadProbeReturn GStreamerVideo::padProbeCallback(GstPad* /*pad*/, GstPadProbeInfo* info, gpointer user_data) {
+GstPadProbeReturn GStreamerVideo::padProbeCallback(
+    GstPad* /*pad*/,
+    GstPadProbeInfo* info,
+    gpointer user_data) {
     auto* ctx = static_cast<CallbackCtx*>(user_data);
-    if (!ctx) return GST_PAD_PROBE_REMOVE;
+    if (!ctx)
+        return GST_PAD_PROBE_OK;
 
-    auto video = ctx->self.load().lock(); // PIN memory
-    if (!video) return GST_PAD_PROBE_REMOVE;
+    // Pin the GStreamerVideo instance for the duration of this callback.
+    auto video = ctx->self.load().lock();
+    if (!video)
+        return GST_PAD_PROBE_OK;
 
     const uint64_t epoch = ctx->epoch.load(std::memory_order_acquire);
+
+    // Ignore events belonging to a stale playback generation.
     if (epoch != video->playbackEpoch_.load(std::memory_order_acquire))
         return GST_PAD_PROBE_OK;
 
     GstEvent* ev = GST_PAD_PROBE_INFO_EVENT(info);
-    if (!ev) return GST_PAD_PROBE_OK;
+    if (!ev)
+        return GST_PAD_PROBE_OK;
 
     if (GST_EVENT_TYPE(ev) == GST_EVENT_CAPS) {
         GstCaps* caps = nullptr;
         gst_event_parse_caps(ev, &caps);
-        if (!caps) return GST_PAD_PROBE_OK;
+
+        if (!caps)
+            return GST_PAD_PROBE_OK;
 
         const GstStructure* s = gst_caps_get_structure(caps, 0);
-        int w = 0, h = 0;
-        if (gst_structure_get_int(s, "width", &w) && gst_structure_get_int(s, "height", &h) && w > 0 && h > 0) {
 
+        int w = 0;
+        int h = 0;
+
+        if (gst_structure_get_int(s, "width", &w) &&
+            gst_structure_get_int(s, "height", &h) &&
+            w > 0 && h > 0)
+        {
+            // Playback may have changed while processing the event.
             if (epoch != video->playbackEpoch_.load(std::memory_order_acquire))
                 return GST_PAD_PROBE_OK;
 
             video->dimensions_.store({ w, h }, std::memory_order_release);
 
             if (video->hasPerspective_) {
-                if (w != video->lastPerspectiveW_ || h != video->lastPerspectiveH_) {
+                if (w != video->lastPerspectiveW_ ||
+                    h != video->lastPerspectiveH_)
+                {
                     video->lastPerspectiveW_ = w;
                     video->lastPerspectiveH_ = h;
 
                     std::array<Point2D, 4> box = {
-                        Point2D(double(video->perspectiveCorners_[0]), double(video->perspectiveCorners_[1])),
-                        Point2D(double(video->perspectiveCorners_[2]), double(video->perspectiveCorners_[3])),
-                        Point2D(double(video->perspectiveCorners_[4]), double(video->perspectiveCorners_[5])),
-                        Point2D(double(video->perspectiveCorners_[6]), double(video->perspectiveCorners_[7]))
+                        Point2D(
+                            double(video->perspectiveCorners_[0]),
+                            double(video->perspectiveCorners_[1])),
+                        Point2D(
+                            double(video->perspectiveCorners_[2]),
+                            double(video->perspectiveCorners_[3])),
+                        Point2D(
+                            double(video->perspectiveCorners_[4]),
+                            double(video->perspectiveCorners_[5])),
+                        Point2D(
+                            double(video->perspectiveCorners_[6]),
+                            double(video->perspectiveCorners_[7]))
                     };
-                    const auto mat = computePerspectiveMatrixFromCorners(w, h, box);
+
+                    const auto mat =
+                        computePerspectiveMatrixFromCorners(w, h, box);
 
                     struct Task {
                         std::weak_ptr<GStreamerVideo> self;
@@ -982,36 +1011,53 @@ GstPadProbeReturn GStreamerVideo::padProbeCallback(GstPad* /*pad*/, GstPadProbeI
                         GlibLoop::instance().context(),
                         G_PRIORITY_DEFAULT,
                         [](gpointer data) -> gboolean {
-                            Task* t = static_cast<Task*>(data);
-                            if (!t) return G_SOURCE_REMOVE;
+                            auto* t = static_cast<Task*>(data);
+                            if (!t)
+                                return G_SOURCE_REMOVE;
 
                             auto v = t->self.lock();
                             if (!v || !v->perspective_)
                                 return G_SOURCE_REMOVE;
 
-                            if (t->epoch != v->playbackEpoch_.load(std::memory_order_acquire))
+                            if (t->epoch !=
+                                v->playbackEpoch_.load(
+                                    std::memory_order_acquire))
+                            {
                                 return G_SOURCE_REMOVE;
+                            }
 
                             if (v->perspective_gva_) {
                                 g_value_array_free(v->perspective_gva_);
                                 v->perspective_gva_ = nullptr;
                             }
-                            v->perspective_gva_ = g_value_array_new(9);
+
+                            v->perspective_gva_ =
+                                g_value_array_new(9);
 
                             GValue val = G_VALUE_INIT;
                             g_value_init(&val, G_TYPE_DOUBLE);
 
                             for (double e : t->matrix) {
                                 g_value_set_double(&val, e);
-                                g_value_array_append(v->perspective_gva_, &val);
+                                g_value_array_append(
+                                    v->perspective_gva_,
+                                    &val);
                             }
+
                             g_value_unset(&val);
 
-                            g_object_set(G_OBJECT(v->perspective_), "matrix", v->perspective_gva_, nullptr);
+                            g_object_set(
+                                G_OBJECT(v->perspective_),
+                                "matrix",
+                                v->perspective_gva_,
+                                nullptr);
+
                             return G_SOURCE_REMOVE;
                         },
                         task,
-                        [](gpointer data) { delete static_cast<Task*>(data); }
+                        [](gpointer data) {
+                            delete static_cast<Task*>(data);
+                        }
                     );
                 }
             }
