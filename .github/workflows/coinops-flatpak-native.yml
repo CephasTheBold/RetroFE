@@ -21,7 +21,7 @@ jobs:
       # ============================================================
 
       - name: Checkout RetroFE
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           clean: false
 
@@ -30,7 +30,7 @@ jobs:
       # ============================================================
 
       - name: Checkout MAME fork
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: CoinOPS-Official/MAME-FFMpeg
           ref: mame0285-local
@@ -61,7 +61,7 @@ jobs:
       #
       # Install once on self-hosted Arch/CachyOS:
       #
-      # sudo pacman -S --needed flatpak flatpak-builder git ccache
+      # sudo pacman -S --needed flatpak flatpak-builder git
       # ============================================================
 
       - name: Verify host build tools
@@ -100,12 +100,6 @@ jobs:
           git --version
           flatpak --version
           flatpak-builder --version
-
-          if command -v ccache >/dev/null 2>&1; then
-            ccache --version | head -1
-          else
-            echo "WARNING: ccache is not installed."
-          fi
 
       # ============================================================
       # Configure Flathub
@@ -204,6 +198,20 @@ jobs:
                   echo "NOT FOUND"
                 fi
               done
+
+              echo
+              echo "============================================================"
+              echo "CCACHE"
+              echo "============================================================"
+
+              if command -v ccache >/dev/null 2>&1; then
+                echo "ccache found:"
+                command -v ccache
+                ccache --version | head -1
+              else
+                echo "ERROR: ccache not found in Freedesktop SDK"
+                exit 1
+              fi
             '
 
       # ============================================================
@@ -399,7 +407,6 @@ jobs:
                   echo "CXXFLAGS=${CXXFLAGS:-}"
                   echo "LDFLAGS=${LDFLAGS:-}"
 
-                - |
                   echo
                   echo "============================================================"
                   echo "Building custom MAME inside Freedesktop SDK"
@@ -414,6 +421,7 @@ jobs:
                   # Object files and ccache are preserved, so this is cheap compared
                   # with a clean MAME rebuild.
                   echo "Removing stale CoinOPS static archives..."
+
                   find build \
                     -type f \
                     -path '*/mame_coinops/*.a' \
@@ -421,9 +429,13 @@ jobs:
                     -delete \
                     2>/dev/null \
                     || true
+
+                  echo
                   echo "Building MAME with ${MAME_JOBS} parallel jobs"
 
-                  make \
+                  set -o pipefail
+
+                  if ! make \
                     -j"${MAME_JOBS}" \
                     SUBTARGET=coinops \
                     SOURCEFILTER=src/mame/coinops.flt \
@@ -439,24 +451,49 @@ jobs:
                     NO_USE_MIDI=1 \
                     NO_USE_PORTAUDIO=1 \
                     USE_TAPTUN=0 \
-                    USE_PCAP=0
+                    USE_PCAP=0 \
+                    2>&1 \
+                    | tee mame-build.log \
+                    | awk '
+                        /Compiling/ || /Archiving/ {
+                          progress++
 
-                # SUBTARGET=coinops produces a binary named "coinops".
-                - test -x coinops
+                          if (progress == 1 || progress % 100 == 0) {
+                            printf "[MAME] %d build steps completed... %s\\n", progress, $0
+                            fflush()
+                          }
 
-                - |
+                          next
+                        }
+
+                        {
+                          print
+                          fflush()
+                        }
+                      '
+                  then
+                    echo
+                    echo "============================================================"
+                    echo "MAME BUILD FAILED - LAST 200 LOG LINES"
+                    echo "============================================================"
+
+                    tail -200 mame-build.log || true
+                    exit 1
+                  fi
+
+                  test -x coinops
+
                   echo
                   echo "============================================================"
                   echo "Built CoinOPS MAME subtarget"
                   echo "============================================================"
 
                   ./coinops -version
-
                   ls -lh coinops
                   du -h coinops
 
-                # Install under the standard runtime name expected by RetroFE.
-                - install -Dm755 coinops /app/bin/mame
+                  # Install under the standard runtime name expected by RetroFE.
+                  install -Dm755 coinops /app/bin/mame
 
               sources:
                 - type: git
@@ -1025,17 +1062,6 @@ jobs:
 
           du -sh .flatpak-builder || true
 
-          echo
-          echo "============================================================"
-          echo "CCACHE STATISTICS"
-          echo "============================================================"
-
-          if command -v ccache >/dev/null 2>&1; then
-            ccache -s || true
-          else
-            echo "ccache is not installed on the host."
-          fi
-
       # ============================================================
       # Smoke tests
       # ============================================================
@@ -1137,7 +1163,7 @@ jobs:
       # ============================================================
 
       - name: Upload native CoinOPS Flatpak
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: CoinOPS-Runtime-Native-x86_64.flatpak
           path: CoinOPS-Runtime-Native-x86_64.flatpak
