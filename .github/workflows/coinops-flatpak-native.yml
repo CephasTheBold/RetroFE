@@ -68,6 +68,12 @@ jobs:
           echo "============================================================"
           echo "fa50bb1976065c4f8b1b47af227d367fe9771555"
 
+          echo
+          echo "============================================================"
+          echo "Flycast revision (CoinOPS fork, upstream v2.6 base)"
+          echo "============================================================"
+          echo "e7426bb864157a4c45866d6253bd24ae89f7d046"
+
       # ============================================================
       # Verify host build tools
       #
@@ -306,6 +312,7 @@ jobs:
       #   Hypseus Singe 2.12.1
       #   Mesa GLU 9.0.3
       #   PPSSPP 1.20.4
+      #   Flycast 2.6 + CoinOPS patches
       #   runtime-cleanup
       #   launcher metadata
       #
@@ -322,6 +329,11 @@ jobs:
       # pinned to a stable release and reuses the existing SDL2/libzip stack.
       # GLU is the small upstream Linux build dependency required by PPSSPP's
       # bundled GLEW headers.
+      #
+      # Flycast follows PPSSPP so changes to the CoinOPS Flycast fork do not
+      # invalidate MAME, RetroFE, Hypseus or PPSSPP caches. The build uses the
+      # same Freedesktop 25.08 host SDL/glslang strategy as the official Flycast
+      # Flatpak, while reusing the libzip already present in /app.
       # ============================================================
 
       - name: Create native Flatpak manifest
@@ -1233,9 +1245,119 @@ jobs:
                   commit: fa50bb1976065c4f8b1b47af227d367fe9771555
 
             # ======================================================
+            # Flycast
+            #
+            # CoinOPS fork based on upstream stable Flycast v2.6.
+            #
+            # Pinned commit:
+            #
+            #   e7426bb864157a4c45866d6253bd24ae89f7d046
+            #
+            # This includes the CoinOPS bezel/viewport support and the Linux
+            # portable-path behavior where RetroFE's currentDirectory becomes
+            # Flycast's config/data root.
+            #
+            # The official Flycast Flatpak for Freedesktop 25.08 builds against
+            # host SDL and host glslang. We follow that proven configuration and
+            # also reuse the libzip already installed in /app.
+            #
+            # Only /app/bin/flycast is installed into the immutable runtime.
+            # CoinOPS support/config files are packaged separately under:
+            #
+            #   emulators/flycast/
+            # ======================================================
+
+            - name: flycast
+              buildsystem: simple
+
+              build-options:
+                strip: true
+                no-debuginfo: true
+
+                cflags-override: true
+                cxxflags-override: true
+
+                cflags: -O2 -g0
+                cxxflags: -O2 -g0
+
+              build-commands:
+                - |
+                  echo "============================================================"
+                  echo "Checking required Flycast host dependencies"
+                  echo "============================================================"
+
+                  check_pkg() {
+                    PKG="$1"
+
+                    if pkg-config --exists "$PKG"; then
+                      VERSION="$(pkg-config --modversion "$PKG")"
+                      echo "[FOUND] $PKG $VERSION"
+                    else
+                      echo "[MISSING] $PKG"
+                      exit 1
+                    fi
+                  }
+
+                  check_pkg sdl2
+                  check_pkg libzip
+                  check_pkg libcurl
+
+                - |
+                  echo
+                  echo "============================================================"
+                  echo "Configuring CoinOPS Flycast"
+                  echo "============================================================"
+
+                  rm -rf build
+
+                  cmake \
+                    -S . \
+                    -B build \
+                    -G Ninja \
+                    -DCMAKE_BUILD_TYPE=Release \
+                    -DCMAKE_PREFIX_PATH=/app \
+                    -DCMAKE_INSTALL_PREFIX=/app \
+                    -DUSE_HOST_GLSLANG=TRUE \
+                    -DUSE_HOST_SDL=TRUE \
+                    -DUSE_HOST_LIBZIP=TRUE
+
+                - |
+                  echo
+                  echo "============================================================"
+                  echo "Building CoinOPS Flycast"
+                  echo "============================================================"
+
+                  cmake \
+                    --build build \
+                    --target flycast \
+                    --parallel 10
+
+                - test -x build/flycast
+
+                - |
+                  echo
+                  echo "============================================================"
+                  echo "Built CoinOPS Flycast"
+                  echo "============================================================"
+
+                  file build/flycast
+                  ldd build/flycast || true
+
+                # Install only the executable. Do not run cmake --install:
+                # desktop metadata/icons/manpages are not part of the CoinOPS
+                # runtime, and Flycast's required internal resources are embedded.
+                - install -Dm755 build/flycast /app/bin/flycast
+
+              sources:
+                - type: git
+                  url: https://github.com/CoinOPS-Official/flycast.git
+                  commit: e7426bb864157a4c45866d6253bd24ae89f7d046
+                  disable-submodules: false
+
+            # ======================================================
             # Final runtime cleanup
             #
-            # At this point MAME, RetroFE, Hypseus, GLU and PPSSPP are fully built.
+            # At this point MAME, RetroFE, Hypseus, GLU, PPSSPP and Flycast are fully built.
             #
             # Remove development/debug/build-only files that are not
             # required by the installed runtime.
@@ -1443,6 +1565,17 @@ jobs:
 
           echo
           echo "============================================================"
+          echo "FLYCAST"
+          echo "============================================================"
+
+          file build-dir/files/bin/flycast
+
+          echo
+          echo "Dynamic dependencies:"
+          ldd build-dir/files/bin/flycast || true
+
+          echo
+          echo "============================================================"
           echo "BUNDLED /APP/LIB"
           echo "============================================================"
 
@@ -1577,6 +1710,22 @@ jobs:
 
           echo
           echo "============================================================"
+          echo "Flycast binary"
+          echo "============================================================"
+
+          flatpak-builder \
+            --run \
+            build-dir \
+            org.coinops.Runtime.yml \
+            sh \
+            -c '
+              test -x /app/bin/flycast
+              file /app/bin/flycast
+              ldd /app/bin/flycast
+            '
+
+          echo
+          echo "============================================================"
           echo "PATH resolution"
           echo "============================================================"
 
@@ -1603,6 +1752,10 @@ jobs:
               echo
               echo "ppsspp:"
               command -v ppsspp
+
+              echo
+              echo "flycast:"
+              command -v flycast
 
               echo
               echo "coinops-launcher:"
@@ -1749,6 +1902,53 @@ jobs:
             | sort
 
       # ============================================================
+      # Package CoinOPS Flycast 2.6 support/config files
+      #
+      # The Flycast executable contains its required built-in resources.
+      # This package supplies the portable external layout expected when:
+      #
+      #   currentDirectory = emulators/flycast
+      #
+      # BIOS files and bezel artwork are intentionally NOT bundled.
+      # ============================================================
+
+      - name: Package Flycast 2.6 CoinOPS assets
+        run: |
+          set -e
+
+          rm -rf flycast-emulator-files
+          rm -f Flycast-2.6-CoinOPS-assets.tar.gz
+
+          mkdir -p             flycast-emulator-files/emulators/flycast/data             flycast-emulator-files/emulators/flycast/mappings             flycast-emulator-files/emulators/flycast/saves             flycast-emulator-files/emulators/flycast/states             flycast-emulator-files/emulators/flycast/textures             flycast-emulator-files/emulators/flycast/bezels
+
+          cat > flycast-emulator-files/emulators/flycast/emu.cfg <<'EOF'
+          [config]
+          Dreamcast.VMUPath = saves
+          Dreamcast.SavePath = saves
+          Dreamcast.SavestatePath = states
+          Dreamcast.TexturePath = textures
+          Dreamcast.MappingsPath = mappings
+          EOF
+
+          echo "Flycast portable emu.cfg:"
+          cat flycast-emulator-files/emulators/flycast/emu.cfg
+
+          echo
+          echo "Flycast support layout:"
+          find             flycast-emulator-files/emulators/flycast             -maxdepth 2             -printf '%P\n'             | sort
+
+          # Preserve empty support directories in the archive.
+          tar             -C flycast-emulator-files             -czf Flycast-2.6-CoinOPS-assets.tar.gz             emulators/flycast
+
+          echo
+          echo "Flycast support package:"
+          ls -lh Flycast-2.6-CoinOPS-assets.tar.gz
+
+          echo
+          echo "Archive contents:"
+          tar -tzf Flycast-2.6-CoinOPS-assets.tar.gz | sort
+
+      # ============================================================
       # Build distributable Flatpak bundle
       # ============================================================
 
@@ -1804,6 +2004,13 @@ jobs:
         with:
           name: PPSSPP-1.20.4-assets
           path: PPSSPP-1.20.4-assets.tar.gz
+          if-no-files-found: error
+
+      - name: Upload Flycast 2.6 CoinOPS assets
+        uses: actions/upload-artifact@v7
+        with:
+          name: Flycast-2.6-CoinOPS-assets
+          path: Flycast-2.6-CoinOPS-assets.tar.gz
           if-no-files-found: error
 
       - name: Upload native CoinOPS Flatpak
