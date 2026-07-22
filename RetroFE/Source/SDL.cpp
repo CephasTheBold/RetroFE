@@ -399,10 +399,8 @@ bool SDL::initialize(Configuration& config) {
 		{
 #ifdef WIN32
 			// No additional flags needed for borderless fullscreen on Windows
-#elif defined(__APPLE__)
-			windowFlags |= SDL_WINDOW_BORDERLESS;
 #else
-			windowFlags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
+			windowFlags |= SDL_WINDOW_BORDERLESS;
 #endif
 		}
 
@@ -718,6 +716,215 @@ SDL_Window* SDL::getWindow(int index) {
 SDL_Texture* SDL::getRenderTarget(int index) {
 	if (renderTargets_.empty()) return nullptr;
 	return (index < screenCount_ ? renderTargets_[index] : renderTargets_[0]);
+}
+
+void SDL::drawFitBars(
+	int monitor,
+	int layoutWidth,
+	int layoutHeight) {
+	// Stretch and Fill have no letterbox/pillarbox area.
+	if (layoutScaleMode_ != LayoutScaleMode::Fit) {
+		return;
+	}
+
+	if (monitor < 0 ||
+		monitor >= screenCount_ ||
+		!renderer_[monitor] ||
+		layoutWidth <= 0 ||
+		layoutHeight <= 0)
+	{
+		return;
+	}
+
+	/*
+	 * Mirror mode uses its own historical scaling path in renderCopyF()
+	 * and does not apply Fit/Fill scaling.
+	 */
+	if (mirror_[monitor]) {
+		return;
+	}
+
+	SDL_Renderer* rr = renderer_[monitor];
+
+	const int outW = windowWidth_[monitor];
+	const int outH = windowHeight_[monitor];
+	const int rot = rotation_[monitor] & 3;
+
+	if (outW <= 0 || outH <= 0) {
+		return;
+	}
+
+	/*
+	 * Match renderCopyF():
+	 *
+	 * For 90/270-degree output rotation, scaling is calculated against
+	 * a logical output whose width/height are swapped.
+	 */
+	const float logicalOutW =
+		(rot & 1)
+		? static_cast<float>(outH)
+		: static_cast<float>(outW);
+
+	const float logicalOutH =
+		(rot & 1)
+		? static_cast<float>(outW)
+		: static_cast<float>(outH);
+
+	const float scaleX =
+		logicalOutW /
+		static_cast<float>(layoutWidth);
+
+	const float scaleY =
+		logicalOutH /
+		static_cast<float>(layoutHeight);
+
+	const float scale =
+		std::min(scaleX, scaleY);
+
+	/*
+	 * Size of the fitted virtual layout before output rotation.
+	 */
+	const float logicalViewportW =
+		static_cast<float>(layoutWidth) * scale;
+
+	const float logicalViewportH =
+		static_cast<float>(layoutHeight) * scale;
+
+	/*
+	 * Convert fitted dimensions to final physical output orientation.
+	 */
+	const float viewportW =
+		(rot & 1)
+		? logicalViewportH
+		: logicalViewportW;
+
+	const float viewportH =
+		(rot & 1)
+		? logicalViewportW
+		: logicalViewportH;
+
+	/*
+	 * Fit centers the virtual layout in the physical output.
+	 */
+	const float viewportX =
+		(static_cast<float>(outW) - viewportW) * 0.5f;
+
+	const float viewportY =
+		(static_cast<float>(outH) - viewportH) * 0.5f;
+
+	/*
+	 * Round inward toward the visible viewport.
+	 *
+	 * This deliberately allows the black mask to cover at most a
+	 * fractional edge pixel, preventing thin slivers of arbitrarily
+	 * rotated geometry from leaking into the bars.
+	 */
+	const int left =
+		std::clamp(
+			static_cast<int>(std::ceil(viewportX)),
+			0,
+			outW
+		);
+
+	const int top =
+		std::clamp(
+			static_cast<int>(std::ceil(viewportY)),
+			0,
+			outH
+		);
+
+	const int right =
+		std::clamp(
+			static_cast<int>(
+				std::floor(viewportX + viewportW)
+				),
+			0,
+			outW
+		);
+
+	const int bottom =
+		std::clamp(
+			static_cast<int>(
+				std::floor(viewportY + viewportH)
+				),
+			0,
+			outH
+		);
+
+	SDL_Rect bars[4];
+	int barCount = 0;
+
+	// Top
+	if (top > 0) {
+		bars[barCount++] = {
+			0,
+			0,
+			outW,
+			top
+		};
+	}
+
+	// Bottom
+	if (bottom < outH) {
+		bars[barCount++] = {
+			0,
+			bottom,
+			outW,
+			outH - bottom
+		};
+	}
+
+	// Left
+	if (left > 0 &&
+		bottom > top)
+	{
+		bars[barCount++] = {
+			0,
+			top,
+			left,
+			bottom - top
+		};
+	}
+
+	// Right
+	if (right < outW &&
+		bottom > top)
+	{
+		bars[barCount++] = {
+			right,
+			top,
+			outW - right,
+			bottom - top
+		};
+	}
+
+	// Exact aspect-ratio match: nothing to mask.
+	if (barCount == 0) {
+		return;
+	}
+
+	SDL_SetRenderDrawColor(
+		rr,
+		0,
+		0,
+		0,
+		255
+	);
+
+	/*
+	 * Usually only two rectangles:
+	 *
+	 *   top + bottom
+	 *        or
+	 *   left + right
+	 *
+	 * One renderer call masks them all.
+	 */
+	SDL_RenderFillRects(
+		rr,
+		bars,
+		barCount
+	);
 }
 
 // Render a copy of a texture
@@ -1378,6 +1585,7 @@ bool SDL::renderCopyF(SDL_Texture* texture,
 	ViewInfo& viewInfo,
 	int layoutWidth,
 	int layoutHeight) {
+
 	if (!texture) {
 		return false;
 	}
@@ -1462,11 +1670,13 @@ bool SDL::renderCopyF(SDL_Texture* texture,
 		 * into an output coordinate system whose dimensions are swapped.
 		 */
 		const float logicalOutW =
-			(rot & 1) ? static_cast<float>(outH)
+			(rot & 1)
+			? static_cast<float>(outH)
 			: static_cast<float>(outW);
 
 		const float logicalOutH =
-			(rot & 1) ? static_cast<float>(outW)
+			(rot & 1)
+			? static_cast<float>(outW)
 			: static_cast<float>(outH);
 
 		const float candidateScaleX =
@@ -1598,6 +1808,25 @@ bool SDL::renderCopyF(SDL_Texture* texture,
 		viewInfo.ImageWidth = static_cast<float>(texW);
 		viewInfo.ImageHeight = static_cast<float>(texH);
 	}
+
+	const float invTexW =
+		1.0f / static_cast<float>(texW);
+
+	const float invTexH =
+		1.0f / static_cast<float>(texH);
+
+	// Texture color modulation is invariant for every quad emitted by
+	// this renderCopyF() call, including reflections and mirror copies.
+	Uint8 textureR = 255;
+	Uint8 textureG = 255;
+	Uint8 textureB = 255;
+
+	SDL_GetTextureColorMod(
+		texture,
+		&textureR,
+		&textureG,
+		&textureB
+	);
 
 	SDL_Rect srcRect =
 		src ? *src : SDL_Rect{ 0, 0, texW, texH };
@@ -1743,14 +1972,18 @@ bool SDL::renderCopyF(SDL_Texture* texture,
 				sourceRect.y = limit.y;
 			}
 
-			if (sourceRect.x + sourceRect.w > limit.x + limit.w) {
+			if (sourceRect.x + sourceRect.w >
+				limit.x + limit.w)
+			{
 				sourceRect.w = std::max(
 					0,
 					limit.x + limit.w - sourceRect.x
 				);
 			}
 
-			if (sourceRect.y + sourceRect.h > limit.y + limit.h) {
+			if (sourceRect.y + sourceRect.h >
+				limit.y + limit.h)
+			{
 				sourceRect.h = std::max(
 					0,
 					limit.y + limit.h - sourceRect.y
@@ -1758,56 +1991,84 @@ bool SDL::renderCopyF(SDL_Texture* texture,
 			}
 		};
 
-	auto clip_to_container =
+	/*
+	 * Clip one axis-aligned logical destination rectangle to another and
+	 * adjust the source rectangle so texture mapping remains unchanged.
+	 *
+	 * This stays entirely in layout space, so Fit/Fill scaling, output
+	 * rotation, and SDL_RenderGeometry batching are unaffected.
+	 */
+	auto clip_to_rect =
 		[&](SDL_Rect& sourceRect,
 			SDL_FRect& destinationRect,
-			const SDL_Rect& sourceCopy,
-			const SDL_FRect& destinationCopy)
+			const SDL_FRect& clipRect)
 		{
-			if (!hasContainer ||
-				destinationCopy.w <= 0.0f ||
-				destinationCopy.h <= 0.0f)
+			if (destinationRect.w <= 0.0f ||
+				destinationRect.h <= 0.0f ||
+				clipRect.w <= 0.0f ||
+				clipRect.h <= 0.0f)
+			{
+				destinationRect.w = 0.0f;
+				destinationRect.h = 0.0f;
+				sourceRect.w = 0;
+				sourceRect.h = 0;
+				return;
+			}
+
+			const float clipRight =
+				clipRect.x + clipRect.w;
+
+			const float clipBottom =
+				clipRect.y + clipRect.h;
+
+			const float destinationRight =
+				destinationRect.x + destinationRect.w;
+
+			const float destinationBottom =
+				destinationRect.y + destinationRect.h;
+
+			// Fully outside: reject without doing source-coordinate math.
+			if (destinationRight <= clipRect.x ||
+				destinationBottom <= clipRect.y ||
+				destinationRect.x >= clipRight ||
+				destinationRect.y >= clipBottom)
+			{
+				destinationRect.w = 0.0f;
+				destinationRect.h = 0.0f;
+				sourceRect.w = 0;
+				sourceRect.h = 0;
+				return;
+			}
+
+			// Common case: already fully contained, so clipping is a no-op.
+			if (destinationRect.x >= clipRect.x &&
+				destinationRect.y >= clipRect.y &&
+				destinationRight <= clipRight &&
+				destinationBottom <= clipBottom)
 			{
 				return;
 			}
 
-			if (destinationRect.x < container.x) {
-				const float newWidth =
-					destinationCopy.w +
-					destinationCopy.x -
-					container.x;
+			const SDL_Rect sourceCopy = sourceRect;
+			const SDL_FRect destinationCopy = destinationRect;
 
-				destinationRect.x = container.x;
-				destinationRect.w = std::max(0.0f, newWidth);
-			}
+			const float clippedRight =
+				std::min(destinationRight, clipRight);
 
-			if (destinationRect.x + destinationRect.w >
-				container.x + container.w)
-			{
-				destinationRect.w = std::max(
-					0.0f,
-					container.x + container.w - destinationRect.x
-				);
-			}
+			const float clippedBottom =
+				std::min(destinationBottom, clipBottom);
 
-			if (destinationRect.y < container.y) {
-				const float newHeight =
-					destinationCopy.h +
-					destinationCopy.y -
-					container.y;
+			destinationRect.x =
+				std::max(destinationCopy.x, clipRect.x);
 
-				destinationRect.y = container.y;
-				destinationRect.h = std::max(0.0f, newHeight);
-			}
+			destinationRect.y =
+				std::max(destinationCopy.y, clipRect.y);
 
-			if (destinationRect.y + destinationRect.h >
-				container.y + container.h)
-			{
-				destinationRect.h = std::max(
-					0.0f,
-					container.y + container.h - destinationRect.y
-				);
-			}
+			destinationRect.w =
+				clippedRight - destinationRect.x;
+
+			destinationRect.h =
+				clippedBottom - destinationRect.y;
 
 			recompute_src_from_dst(
 				sourceRect,
@@ -1817,58 +2078,60 @@ bool SDL::renderCopyF(SDL_Texture* texture,
 			);
 		};
 
-	auto apply_output_rotation_rect = [&](SDL_FRect& rectPixels) {
-		switch (rot) {
-			case 1: {
-				const float oldX = rectPixels.x;
+	auto apply_output_rotation_rect =
+		[&](SDL_FRect& rectPixels)
+		{
+			switch (rot) {
+				case 1: {
+					const float oldX = rectPixels.x;
 
+					rectPixels.x =
+						static_cast<float>(outW) -
+						rectPixels.y -
+						rectPixels.h * 0.5f -
+						rectPixels.w * 0.5f;
+
+					rectPixels.y =
+						oldX -
+						rectPixels.h * 0.5f +
+						rectPixels.w * 0.5f;
+
+					break;
+				}
+
+				case 2:
 				rectPixels.x =
 					static_cast<float>(outW) -
-					rectPixels.y -
-					rectPixels.h * 0.5f -
-					rectPixels.w * 0.5f;
-
-				rectPixels.y =
-					oldX -
-					rectPixels.h * 0.5f +
-					rectPixels.w * 0.5f;
-
-				break;
-			}
-
-			case 2:
-			rectPixels.x =
-				static_cast<float>(outW) -
-				rectPixels.x -
-				rectPixels.w;
-
-			rectPixels.y =
-				static_cast<float>(outH) -
-				rectPixels.y -
-				rectPixels.h;
-
-			break;
-
-			case 3: {
-				const float oldX = rectPixels.x;
-
-				rectPixels.x =
-					rectPixels.y +
-					rectPixels.h * 0.5f -
-					rectPixels.w * 0.5f;
+					rectPixels.x -
+					rectPixels.w;
 
 				rectPixels.y =
 					static_cast<float>(outH) -
-					oldX -
-					rectPixels.h * 0.5f -
-					rectPixels.w * 0.5f;
+					rectPixels.y -
+					rectPixels.h;
 
 				break;
-			}
 
-			default:
-			break;
-		}
+				case 3: {
+					const float oldX = rectPixels.x;
+
+					rectPixels.x =
+						rectPixels.y +
+						rectPixels.h * 0.5f -
+						rectPixels.w * 0.5f;
+
+					rectPixels.y =
+						static_cast<float>(outH) -
+						oldX -
+						rectPixels.h * 0.5f -
+						rectPixels.w * 0.5f;
+
+					break;
+				}
+
+				default:
+				break;
+			}
 		};
 
 	auto draw_quad =
@@ -1879,21 +2142,170 @@ bool SDL::renderCopyF(SDL_Texture* texture,
 			bool flipVertical,
 			float alpha01) -> bool
 		{
+			constexpr float epsilon = 1.0f;
+
+			SDL_FPoint points[4];
+
+			/*
+			 * Fast path for the overwhelmingly common unrotated case.
+			 *
+			 * This avoids fmod(), trig/table selection, rotated AABB math,
+			 * center calculations, and the four-point rotation loop.
+			 */
+			if (angleDegrees == 0.0f) {
+				if (destinationPixels.x + destinationPixels.w < -epsilon ||
+					destinationPixels.y + destinationPixels.h < -epsilon ||
+					destinationPixels.x >
+					static_cast<float>(outW) + epsilon ||
+					destinationPixels.y >
+					static_cast<float>(outH) + epsilon)
+				{
+					return true;
+				}
+
+				points[0] = {
+					destinationPixels.x,
+					destinationPixels.y
+				};
+
+				points[1] = {
+					destinationPixels.x + destinationPixels.w,
+					destinationPixels.y
+				};
+
+				points[2] = {
+					destinationPixels.x + destinationPixels.w,
+					destinationPixels.y + destinationPixels.h
+				};
+
+				points[3] = {
+					destinationPixels.x,
+					destinationPixels.y + destinationPixels.h
+				};
+			}
+			else {
+				float cosAngle;
+				float sinAngle;
+
+				const float remainder =
+					std::fmod(std::fabs(angleDegrees), 90.0f);
+
+				if (remainder < 0.001f ||
+					remainder > 89.999f)
+				{
+					int quarter =
+						static_cast<int>(
+							std::lround(angleDegrees / 90.0f)
+							) % 4;
+
+					if (quarter < 0) {
+						quarter += 4;
+					}
+
+					static constexpr float cosTable[] = {
+						1.0f, 0.0f, -1.0f, 0.0f
+					};
+
+					static constexpr float sinTable[] = {
+						0.0f, 1.0f, 0.0f, -1.0f
+					};
+
+					cosAngle = cosTable[quarter];
+					sinAngle = sinTable[quarter];
+				}
+				else {
+					const float radians =
+						angleDegrees *
+						(3.1415926535f / 180.0f);
+
+					cosAngle = std::cos(radians);
+					sinAngle = std::sin(radians);
+				}
+
+				const float centerX =
+					destinationPixels.x +
+					0.5f * destinationPixels.w;
+
+				const float centerY =
+					destinationPixels.y +
+					0.5f * destinationPixels.h;
+
+				const float halfExtentX =
+					0.5f *
+					(std::fabs(cosAngle) *
+						destinationPixels.w +
+						std::fabs(sinAngle) *
+						destinationPixels.h);
+
+				const float halfExtentY =
+					0.5f *
+					(std::fabs(sinAngle) *
+						destinationPixels.w +
+						std::fabs(cosAngle) *
+						destinationPixels.h);
+
+				if (centerX + halfExtentX < -epsilon ||
+					centerY + halfExtentY < -epsilon ||
+					centerX - halfExtentX >
+					static_cast<float>(outW) + epsilon ||
+					centerY - halfExtentY >
+					static_cast<float>(outH) + epsilon)
+				{
+					return true;
+				}
+
+				points[0] = {
+					destinationPixels.x,
+					destinationPixels.y
+				};
+
+				points[1] = {
+					destinationPixels.x + destinationPixels.w,
+					destinationPixels.y
+				};
+
+				points[2] = {
+					destinationPixels.x + destinationPixels.w,
+					destinationPixels.y + destinationPixels.h
+				};
+
+				points[3] = {
+					destinationPixels.x,
+					destinationPixels.y + destinationPixels.h
+				};
+
+				for (SDL_FPoint& point : points) {
+					const float translatedX =
+						point.x - centerX;
+
+					const float translatedY =
+						point.y - centerY;
+
+					point.x =
+						translatedX * cosAngle -
+						translatedY * sinAngle +
+						centerX;
+
+					point.y =
+						translatedX * sinAngle +
+						translatedY * cosAngle +
+						centerY;
+				}
+			}
+
 			float u0 =
-				static_cast<float>(sourceRect.x) /
-				static_cast<float>(texW);
+				static_cast<float>(sourceRect.x) * invTexW;
 
 			float v0 =
-				static_cast<float>(sourceRect.y) /
-				static_cast<float>(texH);
+				static_cast<float>(sourceRect.y) * invTexH;
 
 			float u1 =
-				static_cast<float>(sourceRect.x + sourceRect.w) /
-				static_cast<float>(texW);
+				static_cast<float>(sourceRect.x + sourceRect.w) *
+				invTexW;
 
 			float v1 =
-				static_cast<float>(sourceRect.y + sourceRect.h) /
-				static_cast<float>(texH);
+				static_cast<float>(sourceRect.y + sourceRect.h) *
+				invTexH;
 
 			if (flipHorizontal) {
 				std::swap(u0, u1);
@@ -1902,117 +2314,6 @@ bool SDL::renderCopyF(SDL_Texture* texture,
 			if (flipVertical) {
 				std::swap(v0, v1);
 			}
-
-			float cosAngle;
-			float sinAngle;
-
-			const float remainder =
-				std::fmod(std::fabs(angleDegrees), 90.0f);
-
-			if (remainder < 0.001f || remainder > 89.999f) {
-				int quarter =
-					static_cast<int>(
-						std::lround(angleDegrees / 90.0f)
-						) % 4;
-
-				if (quarter < 0) {
-					quarter += 4;
-				}
-
-				static constexpr float cosTable[] = {
-					1.0f, 0.0f, -1.0f, 0.0f
-				};
-
-				static constexpr float sinTable[] = {
-					0.0f, 1.0f, 0.0f, -1.0f
-				};
-
-				cosAngle = cosTable[quarter];
-				sinAngle = sinTable[quarter];
-			}
-			else {
-				const float radians =
-					angleDegrees *
-					(3.1415926535f / 180.0f);
-
-				cosAngle = std::cos(radians);
-				sinAngle = std::sin(radians);
-			}
-
-			const float centerX =
-				destinationPixels.x +
-				0.5f * destinationPixels.w;
-
-			const float centerY =
-				destinationPixels.y +
-				0.5f * destinationPixels.h;
-
-			const float halfExtentX =
-				0.5f *
-				(std::fabs(cosAngle) * destinationPixels.w +
-					std::fabs(sinAngle) * destinationPixels.h);
-
-			const float halfExtentY =
-				0.5f *
-				(std::fabs(sinAngle) * destinationPixels.w +
-					std::fabs(cosAngle) * destinationPixels.h);
-
-			constexpr float epsilon = 1.0f;
-
-			if (centerX + halfExtentX < -epsilon ||
-				centerY + halfExtentY < -epsilon ||
-				centerX - halfExtentX >
-				static_cast<float>(outW) + epsilon ||
-				centerY - halfExtentY >
-				static_cast<float>(outH) + epsilon)
-			{
-				return true;
-			}
-
-			SDL_FPoint points[4] = {
-				{
-					destinationPixels.x,
-					destinationPixels.y
-				},
-				{
-					destinationPixels.x + destinationPixels.w,
-					destinationPixels.y
-				},
-				{
-					destinationPixels.x + destinationPixels.w,
-					destinationPixels.y + destinationPixels.h
-				},
-				{
-					destinationPixels.x,
-					destinationPixels.y + destinationPixels.h
-				}
-			};
-
-			for (SDL_FPoint& point : points) {
-				const float translatedX = point.x - centerX;
-				const float translatedY = point.y - centerY;
-
-				point.x =
-					translatedX * cosAngle -
-					translatedY * sinAngle +
-					centerX;
-
-				point.y =
-					translatedX * sinAngle +
-					translatedY * cosAngle +
-					centerY;
-			}
-
-			Uint8 textureR = 255;
-			Uint8 textureG = 255;
-			Uint8 textureB = 255;
-
-			SDL_GetTextureColorMod(
-				texture,
-				&textureR,
-				&textureG,
-				&textureB
-			);
 
 			const SDL_Color color = {
 				textureR,
@@ -2066,17 +2367,21 @@ bool SDL::renderCopyF(SDL_Texture* texture,
 		[&](bool reflect, int kind = -1) -> bool
 		{
 			/*
-			 * Logical-layout culling remains in layout coordinates.
+			 * Cheap logical-space rejection is only safe for an unrotated
+			 * base element. An arbitrarily rotated quad can swing a corner
+			 * back into view even when its unrotated rectangle is outside.
 			 *
-			 * Fill cropping is handled naturally after to_pixels(), where
-			 * negative output offsets place the excess outside the viewport.
+			 * Reflections are also excluded because their derived position
+			 * may re-enter the layout even when the base element does not.
 			 */
-			if (dst0.x + dst0.w < 0.0f ||
-				dst0.y + dst0.h < 0.0f ||
-				dst0.x > static_cast<float>(layoutWidth) ||
-				dst0.y > static_cast<float>(layoutHeight))
-			{
-				return true;
+			if (!reflect && viewInfo.Angle == 0.0f) {
+				if (dst0.x + dst0.w <= 0.0f ||
+					dst0.y + dst0.h <= 0.0f ||
+					dst0.x >= static_cast<float>(layoutWidth) ||
+					dst0.y >= static_cast<float>(layoutHeight))
+				{
+					return true;
+				}
 			}
 
 			SDL_Rect sourceRect = src0;
@@ -2142,12 +2447,19 @@ bool SDL::renderCopyF(SDL_Texture* texture,
 				}
 			}
 
-			clip_to_container(
-				sourceRect,
-				destinationRect,
-				src0,
-				dst0
-			);
+			/*
+			 * Preserve explicit component/container clipping first.
+			 *
+			 * clip_to_rect snapshots the current source/destination pair,
+			 * so this also maps reflected geometry correctly.
+			 */
+			if (hasContainer) {
+				clip_to_rect(
+					sourceRect,
+					destinationRect,
+					container
+				);
+			}
 
 			if (destinationRect.w <= 0.0f ||
 				destinationRect.h <= 0.0f ||
@@ -2156,6 +2468,7 @@ bool SDL::renderCopyF(SDL_Texture* texture,
 			{
 				return true;
 			}
+
 
 			float angle = viewInfo.Angle;
 
@@ -2252,7 +2565,9 @@ bool SDL::renderCopyF(SDL_Texture* texture,
 				}
 			}
 			else {
-				apply_output_rotation_rect(destinationPixels);
+				apply_output_rotation_rect(
+					destinationPixels
+				);
 
 				result &= draw_quad(
 					sourceRect,
@@ -2278,7 +2593,10 @@ bool SDL::renderCopyF(SDL_Texture* texture,
 				(1 << reflectionKind))
 			{
 				result &=
-					render_path(true, reflectionKind);
+					render_path(
+						true,
+						reflectionKind
+					);
 			}
 		}
 	}

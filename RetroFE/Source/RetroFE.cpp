@@ -169,53 +169,191 @@ void RetroFE::render() {
 
 	const uint64_t r_startTicks = SDL_GetPerformanceCounter();
 
-	// --- 1. Clear render targets & draw ---
+	// ---------------------------------------------------------
+	// 1. Clear render targets and draw the current page
+	// ---------------------------------------------------------
+
 	for (int i = 0; i < SDL::getScreenCount(); ++i) {
 		SDL_Renderer* rr = SDL::getRenderer(i);
 		SDL_Texture* rt = SDL::getRenderTarget(i);
-		if (!rr || !rt) continue;
 
-		if (SDL_SetRenderTarget(rr, rt) < 0 || SDL_RenderClear(rr) < 0) {
-			LOG_ERROR("SDL", "Render state failed: " + std::string(SDL_GetError()));
+		if (!rr || !rt) {
+			continue;
+		}
+
+		if (SDL_SetRenderTarget(rr, rt) < 0) {
+			LOG_ERROR(
+				"SDL",
+				"SetRenderTarget failed: " +
+				std::string(SDL_GetError())
+			);
+
 			reboot_ = true;
 			setState(RETROFE_QUIT_REQUEST);
 			break;
 		}
-		SDL_SetRenderDrawColor(rr, 0, 0, 0, 255);
-		SDL_RenderClear(rr);
 
-		if (currentPage_) currentPage_->draw(i);
+		SDL_SetRenderDrawColor(
+			rr,
+			0,
+			0,
+			0,
+			255
+		);
 
-		// Draw overlay into the render target (screen 0 only)
-		// We only draw if the texture exists; we no longer create it here.
-		if (showFps_ && i == 0 && fpsOverlayTexture_) {
-			SDL_Rect dst{ 20, 20, fpsOverlayW_, fpsOverlayH_ };
-			SDL_RenderCopy(rr, fpsOverlayTexture_, nullptr, &dst);
+		if (SDL_RenderClear(rr) < 0) {
+			LOG_ERROR(
+				"SDL",
+				"RenderClear failed: " +
+				std::string(SDL_GetError())
+			);
+
+			reboot_ = true;
+			setState(RETROFE_QUIT_REQUEST);
+			break;
 		}
+
+		if (currentPage_) {
+			currentPage_->draw(i);
+		}
+
+		/*
+		 * FPS overlay is intentionally not drawn into the virtual
+		 * layout render target anymore.
+		 *
+		 * It is drawn directly to the physical backbuffer after
+		 * Fit-mode masking so it always remains visible.
+		 */
 	}
 
-	// --- 2. Blit to backbuffer & present ---
+	// ---------------------------------------------------------
+	// 2. Blit to backbuffer, mask Fit bars, draw HUD, present
+	// ---------------------------------------------------------
+
 	for (int i = 0; i < SDL::getScreenCount(); ++i) {
 		SDL_Renderer* rr = SDL::getRenderer(i);
 		SDL_Texture* rt = SDL::getRenderTarget(i);
-		if (!rr || !rt) continue;
 
-		SDL_SetRenderTarget(rr, nullptr);
-		SDL_RenderCopy(rr, rt, nullptr, nullptr);
+		if (!rr || !rt) {
+			continue;
+		}
+
+		if (SDL_SetRenderTarget(rr, nullptr) < 0) {
+			LOG_ERROR(
+				"SDL",
+				"SetRenderTarget(backbuffer) failed: " +
+				std::string(SDL_GetError())
+			);
+
+			reboot_ = true;
+			setState(RETROFE_QUIT_REQUEST);
+			break;
+		}
+
+		/*
+		 * Copy the completed virtual-screen render target to the
+		 * physical output.
+		 */
+		if (SDL_RenderCopy(
+			rr,
+			rt,
+			nullptr,
+			nullptr
+		) < 0)
+		{
+			LOG_ERROR(
+				"SDL",
+				"Final RenderCopy failed: " +
+				std::string(SDL_GetError())
+			);
+
+			reboot_ = true;
+			setState(RETROFE_QUIT_REQUEST);
+			break;
+		}
+
+		/*
+		 * Mask anything extending outside the virtual screen when
+		 * layoutScaleMode == Fit.
+		 *
+		 * Page owns the authoritative per-monitor virtual layout
+		 * dimensions. If currentPage_ is null, the render target was
+		 * already cleared to black, so no masking is necessary.
+		 *
+		 * Stretch -> drawFitBars() is a no-op.
+		 * Fill    -> drawFitBars() is a no-op.
+		 * Fit     -> black letterbox/pillarbox masks are drawn.
+		 */
+		if (currentPage_) {
+			const int layoutWidth =
+				currentPage_->getLayoutWidthByMonitor(i);
+
+			const int layoutHeight =
+				currentPage_->getLayoutHeightByMonitor(i);
+
+			SDL::drawFitBars(
+				i,
+				layoutWidth,
+				layoutHeight
+			);
+		}
+
+		/*
+		 * Debug FPS overlay is physical-screen UI.
+		 * Draw it after Fit masking so the bars cannot cover it.
+		 */
+		if (showFps_ &&
+			i == 0 &&
+			fpsOverlayTexture_)
+		{
+			SDL_Rect dst{
+				20,
+				20,
+				fpsOverlayW_,
+				fpsOverlayH_
+			};
+
+			SDL_RenderCopy(
+				rr,
+				fpsOverlayTexture_,
+				nullptr,
+				&dst
+			);
+		}
+
 		SDL_RenderPresent(rr);
 	}
 
-	// --- 3. Timing for THIS render() call ---
-	const uint64_t r_endTicks = SDL_GetPerformanceCounter();
-	const double currentRenderDurationMs = (double)(r_endTicks - r_startTicks) * 1000.0 / (double)freq_;
+	// ---------------------------------------------------------
+	// 3. Timing for THIS render() call
+	// ---------------------------------------------------------
 
-	// --- 4. FPS display logic ---
-	const bool showFpsJustEnabled = (!prevShowFps && showFps_);
+	const uint64_t r_endTicks =
+		SDL_GetPerformanceCounter();
+
+	const double currentRenderDurationMs =
+		static_cast<double>(
+			r_endTicks - r_startTicks
+			) *
+		1000.0 /
+		static_cast<double>(freq_);
+
+	// ---------------------------------------------------------
+	// 4. FPS display logic
+	// ---------------------------------------------------------
+
+	const bool showFpsJustEnabled =
+		(!prevShowFps && showFps_);
+
 	prevShowFps = showFps_;
 
 	if (showFpsJustEnabled) {
-		lastFpsUpdateTimestamp = SDL_GetTicks64();
-		lastVisualUpdateTimestamp = SDL_GetTicks64();
+		lastFpsUpdateTimestamp =
+			SDL_GetTicks64();
+
+		lastVisualUpdateTimestamp =
+			SDL_GetTicks64();
+
 		framesSinceFpsUpdate = 0;
 		accumulatedRenderMs = 0.0;
 		waitingForFpsData = true;
@@ -230,28 +368,72 @@ void RetroFE::render() {
 	}
 
 	if (showFps_) {
-		const uint64_t now_ticks64 = SDL_GetTicks64();
+		const uint64_t now_ticks64 =
+			SDL_GetTicks64();
 
-		// --- A. Per-frame math (always runs for accuracy) ---
+		// --- A. Per-frame math ---
 		framesSinceFpsUpdate++;
-		accumulatedRenderMs += currentRenderDurationMs;
-		workSumMsInWindow += this->lastWorkMs_;
-		lateSumUsInWindow += this->lastLateUs_;
-		lateMaxUsInWindow = std::max(lateMaxUsInWindow, this->lastLateUs_);
+
+		accumulatedRenderMs +=
+			currentRenderDurationMs;
+
+		workSumMsInWindow +=
+			this->lastWorkMs_;
+
+		lateSumUsInWindow +=
+			this->lastLateUs_;
+
+		lateMaxUsInWindow =
+			std::max(
+				lateMaxUsInWindow,
+				this->lastLateUs_
+			);
 
 		// --- B. 1-Second Averaging Window ---
-		if (now_ticks64 - lastFpsUpdateTimestamp >= 1000) {
-			const uint64_t windowMs = now_ticks64 - lastFpsUpdateTimestamp;
+		if (now_ticks64 -
+			lastFpsUpdateTimestamp >= 1000)
+		{
+			const uint64_t windowMs =
+				now_ticks64 -
+				lastFpsUpdateTimestamp;
 
-			displayedFps = (windowMs > 0) ? (framesSinceFpsUpdate * 1000.0 / (double)windowMs) : 0.0;
-			displayedRenderMs = accumulatedRenderMs / std::max(1, framesSinceFpsUpdate);
+			displayedFps =
+				(windowMs > 0)
+				? (
+					framesSinceFpsUpdate *
+					1000.0 /
+					static_cast<double>(windowMs)
+					)
+				: 0.0;
 
-			const int denom = std::max(1, framesSinceFpsUpdate);
-			displayedLateAvgUs = lateSumUsInWindow / (double)denom;
-			displayedLateMaxUs = lateMaxUsInWindow;
-			displayedMemMB = Utils::getMemoryUsage() / 1024;
+			displayedRenderMs =
+				accumulatedRenderMs /
+				std::max(
+					1,
+					framesSinceFpsUpdate
+				);
 
-			lastFpsUpdateTimestamp = now_ticks64 - (windowMs % 1000);
+			const int denom =
+				std::max(
+					1,
+					framesSinceFpsUpdate
+				);
+
+			displayedLateAvgUs =
+				lateSumUsInWindow /
+				static_cast<double>(denom);
+
+			displayedLateMaxUs =
+				lateMaxUsInWindow;
+
+			displayedMemMB =
+				Utils::getMemoryUsage() /
+				1024;
+
+			lastFpsUpdateTimestamp =
+				now_ticks64 -
+				(windowMs % 1000);
+
 			framesSinceFpsUpdate = 0;
 			accumulatedRenderMs = 0.0;
 			waitingForFpsData = false;
@@ -262,32 +444,75 @@ void RetroFE::render() {
 		}
 
 		// --- C. Live Work Update (10Hz) ---
-		const uint64_t nowPerfTicks = SDL_GetPerformanceCounter();
-		const uint64_t updateIntervalTicks = (uint64_t)((double)freq_ * 0.1);
-		if (lastWorkLateUpdatePerfTicks == 0 || (nowPerfTicks - lastWorkLateUpdatePerfTicks) >= updateIntervalTicks) {
-			lastWorkLateUpdatePerfTicks = nowPerfTicks;
-			displayedWorkMsLive = std::round(this->lastWorkMs_ * 100.0) / 100.0;
+		const uint64_t nowPerfTicks =
+			SDL_GetPerformanceCounter();
+
+		const uint64_t updateIntervalTicks =
+			static_cast<uint64_t>(
+				static_cast<double>(freq_) *
+				0.1
+				);
+
+		if (lastWorkLateUpdatePerfTicks == 0 ||
+			(nowPerfTicks -
+				lastWorkLateUpdatePerfTicks) >=
+			updateIntervalTicks)
+		{
+			lastWorkLateUpdatePerfTicks =
+				nowPerfTicks;
+
+			displayedWorkMsLive =
+				std::round(
+					this->lastWorkMs_ *
+					100.0
+				) /
+				100.0;
 		}
 
-		// --- D. Visual Coalescing Gate (The Performance Fix) ---
-		if (now_ticks64 - lastVisualUpdateTimestamp >= visualUpdateInterval) {
-			lastVisualUpdateTimestamp = now_ticks64;
+		// --- D. Visual Coalescing Gate ---
+		if (now_ticks64 -
+			lastVisualUpdateTimestamp >=
+			visualUpdateInterval)
+		{
+			lastVisualUpdateTimestamp =
+				now_ticks64;
 
 			char overlayText[420];
-			int outW = 0, outH = 0;
-			SDL_Renderer* renderer0 = SDL::getRenderer(0);
+
+			int outW = 0;
+			int outH = 0;
+
+			SDL_Renderer* renderer0 =
+				SDL::getRenderer(0);
+
 			if (renderer0) {
-				SDL_GetRendererOutputSize(renderer0, &outW, &outH);
+				SDL_GetRendererOutputSize(
+					renderer0,
+					&outW,
+					&outH
+				);
 			}
 
 			if (waitingForFpsData) {
-				snprintf(overlayText, sizeof(overlayText),
-					"FPS: -- | Frame: -- ms | Work: -- ms | Late(avg/max): --/-- us | Draw: -- ms | Mem: -- MB | Res: %dx%d",
-					outW, outH);
+				snprintf(
+					overlayText,
+					sizeof(overlayText),
+					"FPS: -- | Frame: -- ms | Work: -- ms | "
+					"Late(avg/max): --/-- us | Draw: -- ms | "
+					"Mem: -- MB | Res: %dx%d",
+					outW,
+					outH
+				);
 			}
 			else {
-				snprintf(overlayText, sizeof(overlayText),
-					"FPS: %.1f | Frame: %.2f ms | Work: %.2f ms | Late(avg/max): %.1f/%.0f us | Draw: %.2f ms | Mem: %zu MB | Res: %dx%d",
+				snprintf(
+					overlayText,
+					sizeof(overlayText),
+					"FPS: %.1f | Frame: %.2f ms | "
+					"Work: %.2f ms | "
+					"Late(avg/max): %.1f/%.0f us | "
+					"Draw: %.2f ms | Mem: %zu MB | "
+					"Res: %dx%d",
 					displayedFps,
 					this->lastFrameTimeMs_,
 					displayedWorkMsLive,
@@ -295,28 +520,55 @@ void RetroFE::render() {
 					displayedLateMaxUs,
 					displayedRenderMs,
 					displayedMemMB,
-					outW, outH);
+					outW,
+					outH
+				);
 			}
 
-			// Only swap the texture if the string actually changed
+			// Only swap the texture if the string actually changed.
 			if (lastOverlayText_ != overlayText) {
-				lastOverlayText_ = overlayText;
+				lastOverlayText_ =
+					overlayText;
 
 				if (fpsOverlayTexture_) {
-					SDL_DestroyTexture(fpsOverlayTexture_);
-					fpsOverlayTexture_ = nullptr;
+					SDL_DestroyTexture(
+						fpsOverlayTexture_
+					);
+
+					fpsOverlayTexture_ =
+						nullptr;
 				}
 
 				if (debugFont_) {
-					SDL_Color color{ 255, 255, 0, 255 };
-					// Using RenderText_Solid as it's the fastest path for debug text
-					SDL_Surface* surf = TTF_RenderText_Solid(debugFont_, overlayText, color);
+					SDL_Color color{
+						255,
+						255,
+						0,
+						255
+					};
+
+					SDL_Surface* surf =
+						TTF_RenderText_Solid(
+							debugFont_,
+							overlayText,
+							color
+						);
+
 					if (surf) {
 						if (renderer0) {
-							fpsOverlayTexture_ = SDL_CreateTextureFromSurface(renderer0, surf);
-							fpsOverlayW_ = surf->w;
-							fpsOverlayH_ = surf->h;
+							fpsOverlayTexture_ =
+								SDL_CreateTextureFromSurface(
+									renderer0,
+									surf
+								);
+
+							fpsOverlayW_ =
+								surf->w;
+
+							fpsOverlayH_ =
+								surf->h;
 						}
+
 						SDL_FreeSurface(surf);
 					}
 				}
@@ -324,14 +576,24 @@ void RetroFE::render() {
 		}
 	}
 	else {
-		// --- 5. Cleanup when disabled ---
+		// ---------------------------------------------------------
+		// 5. Cleanup when disabled
+		// ---------------------------------------------------------
+
 		if (fpsOverlayTexture_) {
-			SDL_DestroyTexture(fpsOverlayTexture_);
-			fpsOverlayTexture_ = nullptr;
+			SDL_DestroyTexture(
+				fpsOverlayTexture_
+			);
+
+			fpsOverlayTexture_ =
+				nullptr;
 		}
+
 		fpsOverlayW_ = 0;
 		fpsOverlayH_ = 0;
+
 		lastOverlayText_.clear();
+
 		lastVisualUpdateTimestamp = 0;
 
 		accumulatedRenderMs = 0.0;
@@ -340,11 +602,14 @@ void RetroFE::render() {
 		displayedRenderMs = 0.0;
 		lastFpsUpdateTimestamp = 0;
 		waitingForFpsData = false;
+
 		displayedWorkMsLive = 0.0;
 		lastWorkLateUpdatePerfTicks = 0;
+
 		workSumMsInWindow = 0.0;
 		lateSumUsInWindow = 0.0;
 		lateMaxUsInWindow = 0.0;
+
 		displayedLateAvgUs = 0.0;
 		displayedLateMaxUs = 0.0;
 	}
