@@ -1070,8 +1070,12 @@ jobs:
                 cflags-override: true
                 cxxflags-override: true
 
-                cflags: -O2 -g0 -I/app/include
-                cxxflags: -O2 -g0 -I/app/include
+                # /app/include is needed for Mesa GLU (<GL/glu.h>).
+                # SDL2_ttf is installed in /app/include/SDL2 and its header
+                # includes "SDL.h", which lives in the SDK's /usr/include/SDL2.
+                # Put both SDL2 include directories on the compiler search path.
+                cflags: -O2 -g0 -I/app/include -I/app/include/SDL2 -I/usr/include/SDL2
+                cxxflags: -O2 -g0 -I/app/include -I/app/include/SDL2 -I/usr/include/SDL2
 
               build-commands:
                 - |
@@ -1098,6 +1102,8 @@ jobs:
                   check_pkg glu
 
                   test -f /app/include/GL/glu.h
+                  test -f /app/include/SDL2/SDL_ttf.h
+                  test -f /usr/include/SDL2/SDL.h
                   test -d assets
                   test -f assets/gamecontrollerdb.txt
                   test -d assets/flash0
