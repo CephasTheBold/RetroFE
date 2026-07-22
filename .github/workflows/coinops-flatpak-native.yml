@@ -62,6 +62,12 @@ jobs:
           echo "============================================================"
           echo "4cfd20d834ee6cf42c1c347ffd2627d87aaf8e2f"
 
+          echo
+          echo "============================================================"
+          echo "PPSSPP revision (stable v1.20.4)"
+          echo "============================================================"
+          echo "fa50bb1976065c4f8b1b47af227d367fe9771555"
+
       # ============================================================
       # Verify host build tools
       #
@@ -298,6 +304,7 @@ jobs:
       #   RetroFE
       #   libzip
       #   Hypseus Singe 2.12.1
+      #   PPSSPP 1.20.4
       #   runtime-cleanup
       #   launcher metadata
       #
@@ -309,6 +316,9 @@ jobs:
       # Hypseus is deliberately after RetroFE. It reuses the existing
       # SDL2 stack, while changes to the pinned Hypseus module do not
       # invalidate the expensive MAME or RetroFE build caches.
+      #
+      # PPSSPP follows Hypseus for the same reason. It is pinned to a
+      # stable release and reuses the existing SDL2/libzip runtime stack.
       # ============================================================
 
       - name: Create native Flatpak manifest
@@ -991,9 +1001,202 @@ jobs:
                   commit: 4cfd20d834ee6cf42c1c347ffd2627d87aaf8e2f
 
             # ======================================================
+            # PPSSPP
+            #
+            # Stable release only:
+            #
+            #   v1.20.4
+            #   fa50bb1976065c4f8b1b47af227d367fe9771555
+            #
+            # Only the SDL executable belongs in the immutable runtime:
+            #
+            #   /app/bin/ppsspp
+            #
+            # The matching upstream assets remain external in:
+            #
+            #   emulators/ppsspp/assets/
+            #
+            # RetroFE sets:
+            #
+            #   currentDirectory = emulators/ppsspp
+            #
+            # The small CoinOPS path patch below makes PPSSPP use:
+            #
+            #   ./assets/            emulator assets / flash0
+            #   ./PSP/SYSTEM/        config
+            #   ./PSP/SAVEDATA/      saves
+            #   ./PSP/PPSSPP_STATE/  savestates
+            #   ./PSP/TEXTURES/      texture packs
+            # ======================================================
+
+            - name: ppsspp
+              buildsystem: simple
+
+              build-options:
+                strip: true
+                no-debuginfo: true
+
+                cflags-override: true
+                cxxflags-override: true
+
+                cflags: -O2 -g0
+                cxxflags: -O2 -g0
+
+              build-commands:
+                - |
+                  echo "============================================================"
+                  echo "Checking required PPSSPP dependencies"
+                  echo "============================================================"
+
+                  check_pkg() {
+                    PKG="$1"
+
+                    if pkg-config --exists "$PKG"; then
+                      VERSION="$(pkg-config --modversion "$PKG")"
+                      echo "[FOUND] $PKG $VERSION"
+                    else
+                      echo "[MISSING] $PKG"
+                      exit 1
+                    fi
+                  }
+
+                  check_pkg sdl2
+                  check_pkg SDL2_ttf
+                  check_pkg fontconfig
+                  check_pkg libzip
+
+                  test -d assets
+                  test -f assets/gamecontrollerdb.txt
+                  test -d assets/flash0
+
+                - |
+                  echo
+                  echo "============================================================"
+                  echo "Applying CoinOPS portable PPSSPP path integration"
+                  echo "============================================================"
+
+                  python3 - <<'PY'
+                  from pathlib import Path
+
+                  cmake_path = Path("CMakeLists.txt")
+                  cmake_text = cmake_path.read_text()
+
+                  old_assets = 'add_compile_definitions(ASSETS_DIR="${CMAKE_INSTALL_FULL_DATADIR}/ppsspp/assets/")'
+                  new_assets = 'add_compile_definitions(ASSETS_DIR="assets/")'
+
+                  if old_assets not in cmake_text:
+                      raise SystemExit("PPSSPP ASSETS_DIR definition not found")
+
+                  cmake_path.write_text(
+                      cmake_text.replace(old_assets, new_assets, 1)
+                  )
+
+                  native_path = Path("UI/NativeApp.cpp")
+                  native_text = native_path.read_text()
+
+                  old_linux_paths = (
+                      '#elif !PPSSPP_PLATFORM(WINDOWS)\n'
+                      '\tstd::string config;\n'
+                      '\tif (getenv("XDG_CONFIG_HOME") != NULL)\n'
+                      '\t\tconfig = getenv("XDG_CONFIG_HOME");\n'
+                      '\telse if (getenv("HOME") != NULL)\n'
+                      '\t\tconfig = getenv("HOME") + std::string("/.config");\n'
+                      '\telse // Just in case\n'
+                      '\t\tconfig = "./config";\n'
+                      '\n'
+                      '\tg_Config.memStickDirectory = Path(config) / "ppsspp";\n'
+                      '\tg_Config.flash0Directory = File::GetExeDirectory() / "assets/flash0";\n'
+                      '\tif (getenv("HOME") != nullptr) {\n'
+                      '\t\tg_Config.defaultCurrentDirectory = Path(getenv("HOME"));\n'
+                      '\t} else {\n'
+                      '\t\t// Hm, should probably actually explicitly set the current directory..\n'
+                      "\t\t// Though it's not many platforms that'll land us here.\n"
+                      '\t\tg_Config.currentDirectory = Path(".");\n'
+                      '\t}\n'
+                      '#endif'
+                  )
+
+                  new_linux_paths = (
+                      '#elif !PPSSPP_PLATFORM(WINDOWS)\n'
+                      '\t// CoinOPS portable layout. RetroFE sets the process working\n'
+                      '\t// directory to emulators/ppsspp before launching PPSSPP.\n'
+                      '\tg_Config.internalDataDirectory = Path(".");\n'
+                      '\tg_Config.memStickDirectory = Path(".");\n'
+                      '\tg_Config.flash0Directory = Path("assets/flash0");\n'
+                      '\tg_Config.defaultCurrentDirectory = Path(".");\n'
+                      '#endif'
+                  )
+
+                  if old_linux_paths not in native_text:
+                      raise SystemExit("PPSSPP Linux path block not found")
+
+                  native_path.write_text(
+                      native_text.replace(old_linux_paths, new_linux_paths, 1)
+                  )
+                  PY
+
+                - |
+                  echo
+                  echo "============================================================"
+                  echo "Configuring PPSSPP 1.20.4"
+                  echo "============================================================"
+
+                  rm -rf build
+
+                  cmake \
+                    -S . \
+                    -B build \
+                    -G Ninja \
+                    -DCMAKE_BUILD_TYPE=Release \
+                    -DCMAKE_PREFIX_PATH=/app \
+                    -DCMAKE_INSTALL_PREFIX=/app \
+                    -DUSING_QT_UI=OFF \
+                    -DHEADLESS=OFF \
+                    -DATLAS_TOOL=OFF \
+                    -DUNITTEST=OFF \
+                    -DLIBRETRO=OFF \
+                    -DUSE_DISCORD=OFF \
+                    -DUSE_SYSTEM_LIBSDL2=ON \
+                    -DUSE_SYSTEM_LIBZIP=ON \
+                    -DUSE_CCACHE=ON
+
+                - |
+                  echo
+                  echo "============================================================"
+                  echo "Building PPSSPP"
+                  echo "============================================================"
+
+                  cmake \
+                    --build build \
+                    --parallel 10
+
+                - test -x build/PPSSPPSDL
+
+                - |
+                  echo
+                  echo "============================================================"
+                  echo "Built PPSSPP"
+                  echo "============================================================"
+
+                  build/PPSSPPSDL --version || true
+                  file build/PPSSPPSDL
+                  ldd build/PPSSPPSDL || true
+
+                # Deliberately do not run "cmake --install": upstream install
+                # would copy assets into /app/share/ppsspp. CoinOPS keeps the
+                # matching stable assets external under emulators/ppsspp/assets.
+                - install -Dm755 build/PPSSPPSDL /app/bin/ppsspp
+
+              sources:
+                - type: git
+                  url: https://github.com/hrydgard/ppsspp.git
+                  tag: v1.20.4
+                  commit: fa50bb1976065c4f8b1b47af227d367fe9771555
+
+            # ======================================================
             # Final runtime cleanup
             #
-            # At this point MAME, RetroFE and Hypseus are fully built.
+            # At this point MAME, RetroFE, Hypseus and PPSSPP are fully built.
             #
             # Remove development/debug/build-only files that are not
             # required by the installed runtime.
@@ -1190,6 +1393,17 @@ jobs:
 
           echo
           echo "============================================================"
+          echo "PPSSPP"
+          echo "============================================================"
+
+          file build-dir/files/bin/ppsspp
+
+          echo
+          echo "Dynamic dependencies:"
+          ldd build-dir/files/bin/ppsspp || true
+
+          echo
+          echo "============================================================"
           echo "BUNDLED /APP/LIB"
           echo "============================================================"
 
@@ -1307,6 +1521,23 @@ jobs:
 
           echo
           echo "============================================================"
+          echo "PPSSPP binary"
+          echo "============================================================"
+
+          flatpak-builder \
+            --run \
+            build-dir \
+            org.coinops.Runtime.yml \
+            sh \
+            -c '
+              test -x /app/bin/ppsspp
+              /app/bin/ppsspp --version
+              file /app/bin/ppsspp
+              ldd /app/bin/ppsspp
+            '
+
+          echo
+          echo "============================================================"
           echo "PATH resolution"
           echo "============================================================"
 
@@ -1331,9 +1562,59 @@ jobs:
               command -v hypseus
 
               echo
+              echo "ppsspp:"
+              command -v ppsspp
+
+              echo
               echo "coinops-launcher:"
               command -v coinops-launcher
             '
+
+      # ============================================================
+      # Package matching PPSSPP 1.20.4 assets for the CoinOPS build
+      #
+      # --keep-build-dirs preserves the module source tree. The stable
+      # assets are packaged with the exact directory layout expected by:
+      #
+      #   currentDirectory = emulators/ppsspp
+      # ============================================================
+
+      - name: Package PPSSPP 1.20.4 assets
+        run: |
+          set -e
+
+          PPSSPP_BUILD_DIR="$(readlink -f .flatpak-builder/build/ppsspp)"
+
+          test -n "$PPSSPP_BUILD_DIR"
+          test -d "$PPSSPP_BUILD_DIR/assets"
+          test -f "$PPSSPP_BUILD_DIR/assets/gamecontrollerdb.txt"
+          test -d "$PPSSPP_BUILD_DIR/assets/flash0"
+
+          rm -rf ppsspp-emulator-files
+          rm -f PPSSPP-1.20.4-assets.tar.gz
+
+          mkdir -p ppsspp-emulator-files/emulators/ppsspp
+
+          cp -a \
+            "$PPSSPP_BUILD_DIR/assets" \
+            ppsspp-emulator-files/emulators/ppsspp/
+
+          tar \
+            -C ppsspp-emulator-files \
+            -czf PPSSPP-1.20.4-assets.tar.gz \
+            emulators/ppsspp/assets
+
+          echo "PPSSPP assets package:"
+          ls -lh PPSSPP-1.20.4-assets.tar.gz
+
+          echo
+          echo "Top-level asset contents:"
+          find \
+            ppsspp-emulator-files/emulators/ppsspp/assets \
+            -maxdepth 1 \
+            -mindepth 1 \
+            -printf '%f\n' \
+            | sort
 
       # ============================================================
       # Build distributable Flatpak bundle
@@ -1376,8 +1657,15 @@ jobs:
             CoinOPS-Runtime-Native-x86_64.flatpak
 
       # ============================================================
-      # Upload artifact
+      # Upload artifacts
       # ============================================================
+
+      - name: Upload PPSSPP 1.20.4 assets
+        uses: actions/upload-artifact@v7
+        with:
+          name: PPSSPP-1.20.4-assets
+          path: PPSSPP-1.20.4-assets.tar.gz
+          if-no-files-found: error
 
       - name: Upload native CoinOPS Flatpak
         uses: actions/upload-artifact@v7
