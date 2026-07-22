@@ -920,6 +920,35 @@ jobs:
                   echo "Configuring Hypseus Singe 2.12.1"
                   echo "============================================================"
 
+                  # Hypseus 2.12.1 discovers the SDL2 extension libraries,
+                  # but its top-level CMake only adds the base SDL2 include path.
+                  # Add pkg-config discovery for SDL2_image and make all SDL2
+                  # extension header directories visible to subdirectories.
+                  python3 - <<'PY'
+                  from pathlib import Path
+
+                  path = Path("src/CMakeLists.txt")
+                  text = path.read_text()
+
+                  text = text.replace(
+                      "PKG_SEARCH_MODULE(SDL2_MIXER REQUIRED SDL2_mixer)\n",
+                      "PKG_SEARCH_MODULE(SDL2_MIXER REQUIRED SDL2_mixer)\n"
+                      "PKG_SEARCH_MODULE(SDL2_IMAGE REQUIRED SDL2_image)\n",
+                      1,
+                  )
+
+                  text = text.replace(
+                      "    ${SDL2_INCLUDE_DIRS}\n",
+                      "    ${SDL2_INCLUDE_DIRS}\n"
+                      "    ${SDL2_TTF_INCLUDE_DIRS}\n"
+                      "    ${SDL2_MIXER_INCLUDE_DIRS}\n"
+                      "    ${SDL2_IMAGE_INCLUDE_DIRS}\n",
+                      1,
+                  )
+
+                  path.write_text(text)
+                  PY
+
                   # Hypseus 2.12.1's bundled libmpeg2 ExternalProject does not
                   # declare 3rdparty/lib/libmpeg2.a as a Ninja byproduct.
                   # Use Unix Makefiles, matching the upstream 2.12.1 workflow.
