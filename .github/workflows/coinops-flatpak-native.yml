@@ -1610,6 +1610,94 @@ jobs:
             '
 
       # ============================================================
+      # Package matching Hypseus Singe 2.12.1 support files
+      #
+      # Upstream's own 2.12.1 AppImage workflow distributes:
+      #
+      #   fonts/
+      #   midi/
+      #   roms/
+      #   sound/
+      #   pics/
+      #   hypinput.ini
+      #
+      # Keep those external in the CoinOPS build while /app/bin/hypseus
+      # remains in the immutable Flatpak runtime.
+      # ============================================================
+
+      - name: Package Hypseus Singe 2.12.1 assets
+        run: |
+          set -e
+
+          HYPSEUS_BUILD_DIR="$(readlink -f .flatpak-builder/build/hypseus-singe)"
+
+          test -n "$HYPSEUS_BUILD_DIR"
+          test -d "$HYPSEUS_BUILD_DIR/fonts"
+          test -d "$HYPSEUS_BUILD_DIR/midi"
+          test -d "$HYPSEUS_BUILD_DIR/roms"
+          test -d "$HYPSEUS_BUILD_DIR/sound"
+          test -d "$HYPSEUS_BUILD_DIR/pics"
+
+          rm -rf hypseus-emulator-files
+          rm -f Hypseus-Singe-2.12.1-assets.tar.gz
+
+          mkdir -p hypseus-emulator-files/emulators/hypseus
+
+          cp -a \
+            "$HYPSEUS_BUILD_DIR/fonts" \
+            "$HYPSEUS_BUILD_DIR/midi" \
+            "$HYPSEUS_BUILD_DIR/roms" \
+            "$HYPSEUS_BUILD_DIR/sound" \
+            "$HYPSEUS_BUILD_DIR/pics" \
+            hypseus-emulator-files/emulators/hypseus/
+
+          cat > hypseus-emulator-files/emulators/hypseus/hypinput.ini <<'EOF'
+          # Steam Deck Buttons: A=1, B=2, X=3, Y=4
+          # Start=8, Select=7, L1=5, R1=6, L3=10, R3=11
+
+          [KEYBOARD]
+          KEY_UP = SDLK_UP SDLK_r 0 -002
+          KEY_DOWN = SDLK_DOWN SDLK_f 0 +002
+          KEY_LEFT = SDLK_LEFT SDLK_d 0 -001
+          KEY_RIGHT = SDLK_RIGHT SDLK_g 0 +001
+          KEY_COIN1 = SDLK_5 0 7
+          KEY_COIN2 = SDLK_6 0 0
+          KEY_START1 = SDLK_1 0 8
+          KEY_START2 = SDLK_2 0 0
+          KEY_BUTTON1 = SDLK_LCTRL SDLK_a 1
+          KEY_BUTTON2 = SDLK_LALT SDLK_s 0
+          KEY_BUTTON3 = SDLK_SPACE SDLK_d 11
+          KEY_SKILL1 = SDLK_LSHIFT SDLK_w 3
+          KEY_SKILL2 = SDLK_z SDLK_i 4
+          KEY_SKILL3 = SDLK_x SDLK_k 2
+          KEY_SERVICE = SDLK_9 0 0
+          KEY_TEST = SDLK_F2 0 0
+          KEY_RESET = SDLK_0 0 0
+          KEY_SCREENSHOT = SDLK_F12 0 0
+          KEY_QUIT = SDLK_ESCAPE SDLK_q 17
+          KEY_PAUSE = SDLK_p 0 0
+          KEY_CONSOLE = SDLK_BACKSLASH 0 0
+          KEY_TILT = SDLK_t 0 0
+          END
+          EOF
+
+          tar \
+            -C hypseus-emulator-files \
+            -czf Hypseus-Singe-2.12.1-assets.tar.gz \
+            emulators/hypseus
+
+          echo "Hypseus Singe assets package:"
+          ls -lh Hypseus-Singe-2.12.1-assets.tar.gz
+
+          echo
+          echo "Packaged Hypseus layout:"
+          find \
+            hypseus-emulator-files/emulators/hypseus \
+            -maxdepth 2 \
+            -printf '%P\n' \
+            | sort
+
+      # ============================================================
       # Package matching PPSSPP 1.20.4 assets for the CoinOPS build
       #
       # --keep-build-dirs preserves the module source tree. The stable
@@ -1703,6 +1791,13 @@ jobs:
       # ============================================================
       # Upload artifacts
       # ============================================================
+
+      - name: Upload Hypseus Singe 2.12.1 assets
+        uses: actions/upload-artifact@v7
+        with:
+          name: Hypseus-Singe-2.12.1-assets
+          path: Hypseus-Singe-2.12.1-assets.tar.gz
+          if-no-files-found: error
 
       - name: Upload PPSSPP 1.20.4 assets
         uses: actions/upload-artifact@v7
