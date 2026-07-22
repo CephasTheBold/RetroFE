@@ -304,6 +304,7 @@ jobs:
       #   RetroFE
       #   libzip
       #   Hypseus Singe 2.12.1
+      #   Mesa GLU 9.0.3
       #   PPSSPP 1.20.4
       #   runtime-cleanup
       #   launcher metadata
@@ -317,8 +318,10 @@ jobs:
       # SDL2 stack, while changes to the pinned Hypseus module do not
       # invalidate the expensive MAME or RetroFE build caches.
       #
-      # PPSSPP follows Hypseus for the same reason. It is pinned to a
-      # stable release and reuses the existing SDL2/libzip runtime stack.
+      # Mesa GLU and PPSSPP follow Hypseus for the same reason. PPSSPP is
+      # pinned to a stable release and reuses the existing SDL2/libzip stack.
+      # GLU is the small upstream Linux build dependency required by PPSSPP's
+      # bundled GLEW headers.
       # ============================================================
 
       - name: Create native Flatpak manifest
@@ -1001,6 +1004,34 @@ jobs:
                   commit: 4cfd20d834ee6cf42c1c347ffd2627d87aaf8e2f
 
             # ======================================================
+            # Mesa GLU
+            #
+            # PPSSPP's upstream Linux build installs libglu1-mesa-dev.
+            # Freedesktop SDK 25.08 provides OpenGL but not the GL/glu.h
+            # development header needed by PPSSPP's bundled GLEW.
+            #
+            # Stable Mesa GLU release:
+            #
+            #   9.0.3
+            # ======================================================
+
+            - name: libglu
+              buildsystem: meson
+
+              build-options:
+                strip: true
+                no-debuginfo: true
+
+              config-opts:
+                - -Dgl_provider=gl
+                - --default-library=shared
+
+              sources:
+                - type: archive
+                  url: https://archive.mesa3d.org/glu/glu-9.0.3.tar.xz
+                  sha256: bd43fe12f374b1192eb15fe20e45ff456b9bc26ab57f0eee919f96ca0f8a330f
+
+            # ======================================================
             # PPSSPP
             #
             # Stable release only:
@@ -1039,8 +1070,8 @@ jobs:
                 cflags-override: true
                 cxxflags-override: true
 
-                cflags: -O2 -g0
-                cxxflags: -O2 -g0
+                cflags: -O2 -g0 -I/app/include
+                cxxflags: -O2 -g0 -I/app/include
 
               build-commands:
                 - |
@@ -1064,7 +1095,9 @@ jobs:
                   check_pkg SDL2_ttf
                   check_pkg fontconfig
                   check_pkg libzip
+                  check_pkg glu
 
+                  test -f /app/include/GL/glu.h
                   test -d assets
                   test -f assets/gamecontrollerdb.txt
                   test -d assets/flash0
@@ -1196,7 +1229,7 @@ jobs:
             # ======================================================
             # Final runtime cleanup
             #
-            # At this point MAME, RetroFE, Hypseus and PPSSPP are fully built.
+            # At this point MAME, RetroFE, Hypseus, GLU and PPSSPP are fully built.
             #
             # Remove development/debug/build-only files that are not
             # required by the installed runtime.
@@ -1586,9 +1619,9 @@ jobs:
           PPSSPP_BUILD_DIR="$(readlink -f .flatpak-builder/build/ppsspp)"
 
           test -n "$PPSSPP_BUILD_DIR"
-          test -d "$PPSSPP_BUILD_DIR/assets"
-          test -f "$PPSSPP_BUILD_DIR/assets/gamecontrollerdb.txt"
-          test -d "$PPSSPP_BUILD_DIR/assets/flash0"
+          test -d "$PPSSPP_BUILD_DIR/build/assets"
+          test -f "$PPSSPP_BUILD_DIR/build/assets/gamecontrollerdb.txt"
+          test -d "$PPSSPP_BUILD_DIR/build/assets/flash0"
 
           rm -rf ppsspp-emulator-files
           rm -f PPSSPP-1.20.4-assets.tar.gz
@@ -1596,8 +1629,13 @@ jobs:
           mkdir -p ppsspp-emulator-files/emulators/ppsspp
 
           cp -a \
-            "$PPSSPP_BUILD_DIR/assets" \
+            "$PPSSPP_BUILD_DIR/build/assets" \
             ppsspp-emulator-files/emulators/ppsspp/
+
+          find \
+            ppsspp-emulator-files/emulators/ppsspp/assets \
+            -name '.git*' \
+            -exec rm -rf '{}' + 2>/dev/null || true
 
           tar \
             -C ppsspp-emulator-files \
