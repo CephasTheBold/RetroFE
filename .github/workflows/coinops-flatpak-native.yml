@@ -56,6 +56,12 @@ jobs:
           echo "============================================================"
           git -C MAME rev-parse HEAD
 
+          echo
+          echo "============================================================"
+          echo "Hypseus Singe revision (pinned Flatpak module)"
+          echo "============================================================"
+          echo "4cfd20d834ee6cf42c1c347ffd2627d87aaf8e2f"
+
       # ============================================================
       # Verify host build tools
       #
@@ -187,6 +193,10 @@ jobs:
                 libudev \
                 zlib \
                 libwebp \
+                ogg \
+                vorbis \
+                vorbisfile \
+                libzip \
                 minizip \
                 libserialport
               do
@@ -286,6 +296,8 @@ jobs:
       #   libserialport
       #   minizip
       #   RetroFE
+      #   libzip
+      #   Hypseus Singe 2.12.1
       #   runtime-cleanup
       #   launcher metadata
       #
@@ -293,6 +305,10 @@ jobs:
       #
       # SDL2_image and other RetroFE-only dependencies remain after
       # MAME so changes to them do not invalidate the MAME module.
+      #
+      # Hypseus is deliberately after RetroFE. It reuses the existing
+      # SDL2 stack, while changes to the pinned Hypseus module do not
+      # invalidate the expensive MAME or RetroFE build caches.
       # ============================================================
 
       - name: Create native Flatpak manifest
@@ -807,9 +823,143 @@ jobs:
                     - .github
 
             # ======================================================
+            # libzip
+            #
+            # Hypseus Singe requires libzip. Keep this module after
+            # RetroFE so changes here do not invalidate RetroFE/MAME.
+            #
+            # Headers and pkg-config metadata remain available for the
+            # following Hypseus build, then runtime-cleanup removes them.
+            # ======================================================
+
+            - name: libzip
+              buildsystem: cmake-ninja
+              builddir: true
+
+              build-options:
+                strip: true
+                no-debuginfo: true
+
+              config-opts:
+                - -DCMAKE_BUILD_TYPE=Release
+                - -DCMAKE_INSTALL_PREFIX=/app
+                - -DBUILD_SHARED_LIBS=ON
+                - -DBUILD_TOOLS=OFF
+                - -DBUILD_REGRESS=OFF
+                - -DBUILD_OSSFUZZ=OFF
+                - -DBUILD_EXAMPLES=OFF
+                - -DBUILD_DOC=OFF
+
+              sources:
+                - type: git
+                  url: https://github.com/nih-at/libzip.git
+                  tag: v1.11.4
+
+            # ======================================================
+            # Hypseus Singe
+            #
+            # Pinned to v2.12.1, the final SDL2 release immediately
+            # before the SDL3 migration:
+            #
+            #   4cfd20d834ee6cf42c1c347ffd2627d87aaf8e2f
+            #
+            # Only the emulator executable belongs in the immutable
+            # Flatpak runtime. The CoinOPS build can keep its mutable
+            # Hypseus config/data under:
+            #
+            #   emulators/hypseus/
+            #
+            # RetroFE can launch "hypseus" from PATH, just like MAME.
+            # Use Hypseus path arguments such as -homedir, -datadir,
+            # -romdir and -keymapfile to point at that external folder.
+            # ======================================================
+
+            - name: hypseus-singe
+              buildsystem: simple
+
+              build-options:
+                strip: true
+                no-debuginfo: true
+
+                cflags-override: true
+                cxxflags-override: true
+
+                cflags: -O2 -g0
+                cxxflags: -O2 -g0
+
+              build-commands:
+                - |
+                  echo "============================================================"
+                  echo "Checking required Hypseus Singe dependencies"
+                  echo "============================================================"
+
+                  check_pkg() {
+                    PKG="$1"
+
+                    if pkg-config --exists "$PKG"; then
+                      VERSION="$(pkg-config --modversion "$PKG")"
+                      echo "[FOUND] $PKG $VERSION"
+                    else
+                      echo "[MISSING] $PKG"
+                      exit 1
+                    fi
+                  }
+
+                  check_pkg sdl2
+                  check_pkg SDL2_image
+                  check_pkg SDL2_ttf
+                  check_pkg SDL2_mixer
+                  check_pkg ogg
+                  check_pkg vorbis
+                  check_pkg vorbisfile
+                  check_pkg libzip
+
+                - |
+                  echo
+                  echo "============================================================"
+                  echo "Configuring Hypseus Singe 2.12.1"
+                  echo "============================================================"
+
+                  cmake \
+                    -S src \
+                    -B build \
+                    -G Ninja \
+                    -DCMAKE_BUILD_TYPE=Release \
+                    -DCMAKE_PREFIX_PATH=/app \
+                    -DCMAKE_INSTALL_PREFIX=/app
+
+                - |
+                  echo
+                  echo "============================================================"
+                  echo "Building Hypseus Singe"
+                  echo "============================================================"
+
+                  cmake \
+                    --build build \
+                    --parallel 10
+
+                - test -x build/hypseus
+
+                - |
+                  echo
+                  echo "============================================================"
+                  echo "Built Hypseus Singe"
+                  echo "============================================================"
+
+                  file build/hypseus
+                  ldd build/hypseus || true
+
+                - install -Dm755 build/hypseus /app/bin/hypseus
+
+              sources:
+                - type: git
+                  url: https://github.com/DirtBagXon/hypseus-singe.git
+                  commit: 4cfd20d834ee6cf42c1c347ffd2627d87aaf8e2f
+
+            # ======================================================
             # Final runtime cleanup
             #
-            # At this point MAME and RetroFE are fully built.
+            # At this point MAME, RetroFE and Hypseus are fully built.
             #
             # Remove development/debug/build-only files that are not
             # required by the installed runtime.
@@ -995,6 +1145,17 @@ jobs:
 
           echo
           echo "============================================================"
+          echo "HYPSEUS SINGE"
+          echo "============================================================"
+
+          file build-dir/files/bin/hypseus
+
+          echo
+          echo "Dynamic dependencies:"
+          ldd build-dir/files/bin/hypseus || true
+
+          echo
+          echo "============================================================"
           echo "BUNDLED /APP/LIB"
           echo "============================================================"
 
@@ -1096,6 +1257,22 @@ jobs:
 
           echo
           echo "============================================================"
+          echo "Hypseus Singe binary"
+          echo "============================================================"
+
+          flatpak-builder \
+            --run \
+            build-dir \
+            org.coinops.Runtime.yml \
+            sh \
+            -c '
+              test -x /app/bin/hypseus
+              file /app/bin/hypseus
+              ldd /app/bin/hypseus
+            '
+
+          echo
+          echo "============================================================"
           echo "PATH resolution"
           echo "============================================================"
 
@@ -1114,6 +1291,10 @@ jobs:
               echo
               echo "mame:"
               command -v mame
+
+              echo
+              echo "hypseus:"
+              command -v hypseus
 
               echo
               echo "coinops-launcher:"
