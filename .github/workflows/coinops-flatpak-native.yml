@@ -743,6 +743,12 @@ jobs:
                 # pinned source minimally before configuration.
                 - |
                   python3 -c 'from pathlib import Path; p=Path("runloop.c"); s=p.read_text(); old="#else\n   bool core_paused                       = (runloop_st->flags & RUNLOOP_FLAG_PAUSED) ? true : false;\n#endif\n"; new="#else\n#ifdef HAVE_NETWORKING\n   bool netplay_allow_timeskip            = netplay_driver_ctl(RARCH_NETPLAY_CTL_ALLOW_TIMESKIP, NULL);\n   bool netplay_allow_pause               = netplay_driver_ctl(RARCH_NETPLAY_CTL_ALLOW_PAUSE, NULL);\n#else\n   bool netplay_allow_timeskip            = false;\n   bool netplay_allow_pause               = false;\n#endif\n   bool core_paused                       = (runloop_st->flags & RUNLOOP_FLAG_PAUSED) ? true : false;\n#endif\n"; assert old in s, "Expected RetroArch v1.22.2 no-menu runloop block not found"; p.write_text(s.replace(old,new,1)); print("Applied CoinOPS RetroArch no-menu runloop fix")'
+                # RetroArch v1.22.2 no-menu regression: runtime_file.c uses
+                # runloop_state_t/runloop_state_get_ptr(), but only receives
+                # runloop.h transitively through menu headers in normal builds.
+                # Include the dependency directly for a no-menu build.
+                - |
+                  python3 -c 'from pathlib import Path; p=Path("runtime_file.c"); s=p.read_text(); old="#include \"msg_hash.h\"\n"; new="#include \"msg_hash.h\"\n#include \"runloop.h\"\n"; assert old in s, "Expected RetroArch v1.22.2 runtime_file include block not found"; p.write_text(s.replace(old,new,1)); print("Applied CoinOPS RetroArch runtime_file no-menu include fix")'
                 - |
                   echo "============================================================"
                   echo "Configuring stripped RetroArch runtime"
