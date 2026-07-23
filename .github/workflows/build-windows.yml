@@ -15,13 +15,14 @@ jobs:
 
       - name: Install GStreamer
         run: |
-          choco install -y gstreamer --version 1.24.11
-          choco install -y gstreamer-devel --version 1.24.11
+          curl -L -o gst.exe https://gstreamer.freedesktop.org/data/pkg/windows/1.28.5/msvc/gstreamer-1.0-msvc-x86_64-1.28.5.exe
+          Start-Process -Wait .\gst.exe -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/TYPE=full','/DIR=D:\gstreamer\1.0\msvc_x86_64'
+          Get-ChildItem D:\gstreamer -Depth 3 -Directory | Select-Object -First 20 -ExpandProperty FullName
 
       - name: Configure environment
         run: |
           cmake -A x64 -B .\RetroFE\Build -D GSTREAMER_ROOT=D:\gstreamer\1.0\msvc_x86_64 -S .\RetroFE\Source
-  
+
       - name: Build RetroFE
         run: |
           cmake --build RetroFE/Build --config Release
@@ -40,4 +41,3 @@ jobs:
           path: |
             D:\a\RetroFE\RetroFE\RetroFE\Build\Release\retrofe
             D:\a\RetroFE\RetroFE\RetroFE\Build\Release\RetroFE.lnk
-
