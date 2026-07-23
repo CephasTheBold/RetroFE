@@ -737,6 +737,12 @@ jobs:
                 cflags: -O2 -g0
                 cxxflags: -O2 -g0
               build-commands:
+                # RetroArch v1.22.2 no-menu regression: these netplay state
+                # variables are declared only in the HAVE_MENU branch but are
+                # used unconditionally later in runloop_iterate(). Patch the
+                # pinned source minimally before configuration.
+                - |
+                  python3 -c 'from pathlib import Path; p=Path("runloop.c"); s=p.read_text(); old="#else\n   bool core_paused                       = (runloop_st->flags & RUNLOOP_FLAG_PAUSED) ? true : false;\n#endif\n"; new="#else\n#ifdef HAVE_NETWORKING\n   bool netplay_allow_timeskip            = netplay_driver_ctl(RARCH_NETPLAY_CTL_ALLOW_TIMESKIP, NULL);\n   bool netplay_allow_pause               = netplay_driver_ctl(RARCH_NETPLAY_CTL_ALLOW_PAUSE, NULL);\n#else\n   bool netplay_allow_timeskip            = false;\n   bool netplay_allow_pause               = false;\n#endif\n   bool core_paused                       = (runloop_st->flags & RUNLOOP_FLAG_PAUSED) ? true : false;\n#endif\n"; assert old in s, "Expected RetroArch v1.22.2 no-menu runloop block not found"; p.write_text(s.replace(old,new,1)); print("Applied CoinOPS RetroArch no-menu runloop fix")'
                 - |
                   echo "============================================================"
                   echo "Configuring stripped RetroArch runtime"
@@ -744,7 +750,7 @@ jobs:
                   ./configure \
                     --prefix=/app \
                     --disable-menu \
-                    --disable-gfx_widgets \
+                    --enable-gfx_widgets \
                     --disable-rgui \
                     --disable-materialui \
                     --disable-xmb \
