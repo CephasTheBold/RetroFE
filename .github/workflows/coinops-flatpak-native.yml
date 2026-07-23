@@ -787,7 +787,7 @@ jobs:
                     --disable-audiomixer \
                     --disable-videoprocessor \
                     --disable-langextra \
-                    --disable-shaderpipeline \
+                    --enable-shaderpipeline \
                     --disable-opengl1 \
                     --disable-vulkan_display \
                     --disable-vg \
