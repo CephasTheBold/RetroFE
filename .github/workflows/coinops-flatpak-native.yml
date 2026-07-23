@@ -1221,63 +1221,81 @@ jobs:
                 echo "found: $symbol"
               done
 
-              cat > build-libretro/coinops_core_dlopen_test.c <<'"'"'EOF'"'"'
-              #include <dlfcn.h>
-              #include <stdio.h>
+            '
 
-              typedef unsigned (*retro_api_version_fn)(void);
+          # Create the tiny dlopen validator in the OUTER GitHub shell.
+          # Keeping this heredoc out of the nested `sh -c '...'` avoids
+          # heredoc-delimiter/quoting problems.
+          cat > FlycastCore/build-libretro/coinops_core_dlopen_test.c <<'EOF'
+          #include <dlfcn.h>
+          #include <stdio.h>
 
-              int main(int argc, char **argv)
+          typedef unsigned (*retro_api_version_fn)(void);
+
+          int main(int argc, char **argv)
+          {
+              void *handle;
+              retro_api_version_fn api_version;
+              const char *error;
+
+              if (argc != 2)
               {
-                  void *handle;
-                  retro_api_version_fn api_version;
-                  const char *error;
-
-                  if (argc != 2)
-                  {
-                      fprintf(stderr, "usage: %s <libretro-core.so>\n", argv[0]);
-                      return 2;
-                  }
-
-                  dlerror();
-                  handle = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
-                  if (!handle)
-                  {
-                      fprintf(stderr, "dlopen failed: %s\n", dlerror());
-                      return 1;
-                  }
-
-                  dlerror();
-                  *(void **)(&api_version) = dlsym(handle, "retro_api_version");
-                  error = dlerror();
-
-                  if (error != NULL || api_version == NULL)
-                  {
-                      fprintf(stderr, "dlsym failed: %s\n",
-                              error ? error : "retro_api_version missing");
-                      dlclose(handle);
-                      return 1;
-                  }
-
-                  printf("Flycast core loaded successfully; libretro API version: %u\n",
-                         api_version());
-
-                  dlclose(handle);
-                  return 0;
+                  fprintf(stderr, "usage: %s <libretro-core.so>\n", argv[0]);
+                  return 2;
               }
-              EOF
 
+              dlerror();
+              handle = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+              if (!handle)
+              {
+                  fprintf(stderr, "dlopen failed: %s\n", dlerror());
+                  return 1;
+              }
+
+              dlerror();
+              *(void **)(&api_version) = dlsym(handle, "retro_api_version");
+              error = dlerror();
+
+              if (error != NULL || api_version == NULL)
+              {
+                  fprintf(stderr, "dlsym failed: %s\n",
+                          error ? error : "retro_api_version missing");
+                  dlclose(handle);
+                  return 1;
+              }
+
+              printf("Flycast core loaded successfully; libretro API version: %u\n",
+                     api_version());
+
+              dlclose(handle);
+              return 0;
+          }
+          EOF
+
+          # Compile the validator with the same Freedesktop 25.08 SDK.
+          flatpak run \
+            --filesystem="$GITHUB_WORKSPACE" \
+            --env=GITHUB_WORKSPACE="$GITHUB_WORKSPACE" \
+            --command=sh \
+            org.freedesktop.Sdk//25.08 \
+            -c '
+              set -eu
+              cd "$GITHUB_WORKSPACE/FlycastCore"
               cc \
                 -O2 \
                 -o build-libretro/coinops_core_dlopen_test \
                 build-libretro/coinops_core_dlopen_test.c \
                 -ldl
+              test -x build-libretro/coinops_core_dlopen_test
             '
 
           echo
           echo "Built core:"
           ls -lh FlycastCore/build-libretro/flycast_libretro.so
           sha256sum FlycastCore/build-libretro/flycast_libretro.so
+          echo
+          echo "Built dlopen validator:"
+          ls -lh FlycastCore/build-libretro/coinops_core_dlopen_test
 
       - name: Validate Flycast core inside assembled CoinOPS Flatpak
         run: |
@@ -1469,3 +1487,4 @@ jobs:
           path: CoinOPS-Libretro-Flycast-linux-x86_64
           if-no-files-found: error
           compression-level: 6
+
