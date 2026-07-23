@@ -1123,6 +1123,303 @@ jobs:
               command -v coinops-launcher
             '
       # ============================================================
+      # Build Flycast libretro core as a MUTABLE external package
+      #
+      # The core is intentionally NOT installed under /app.
+      # It is built with the same Freedesktop 25.08 SDK, validated
+      # by dlopen() inside the assembled CoinOPS Flatpak sandbox,
+      # then uploaded as a separate mutable artifact.
+      # ============================================================
+
+      - name: Checkout CoinOPS Flycast core source
+        uses: actions/checkout@v6
+        with:
+          repository: CoinOPS-Official/flycast
+          ref: e7426bb864157a4c45866d6253bd24ae89f7d046
+          path: FlycastCore
+          clean: true
+          fetch-depth: 1
+          submodules: recursive
+
+      - name: Show Flycast core revision
+        run: |
+          echo "============================================================"
+          echo "Flycast libretro source revision"
+          echo "============================================================"
+          git -C FlycastCore rev-parse HEAD
+          git -C FlycastCore describe --tags --always || true
+
+      - name: Build Flycast libretro core in Freedesktop 25.08 SDK
+        run: |
+          set -euo pipefail
+
+          rm -rf FlycastCore/build-libretro
+
+          flatpak run \
+            --filesystem="$GITHUB_WORKSPACE" \
+            --env=GITHUB_WORKSPACE="$GITHUB_WORKSPACE" \
+            --command=sh \
+            org.freedesktop.Sdk//25.08 \
+            -c '
+              set -eu
+              cd "$GITHUB_WORKSPACE/FlycastCore"
+
+              echo "============================================================"
+              echo "Configuring Flycast libretro core"
+              echo "============================================================"
+
+              cmake \
+                -S . \
+                -B build-libretro \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DLIBRETRO=ON \
+                -DUSE_VULKAN=ON \
+                -DUSE_OPENGL=ON \
+                -DUSE_OPENMP=ON \
+                -DUSE_HOST_GLSLANG=OFF \
+                -DUSE_HOST_LIBZIP=OFF \
+                -DUSE_HOST_LIBCHDR=OFF \
+                -DUSE_BREAKPAD=OFF \
+                -DUSE_LUA=OFF \
+                -DUSE_LIBCDIO=OFF \
+                -DENABLE_CTEST=OFF
+
+              echo
+              echo "============================================================"
+              echo "Building Flycast libretro core"
+              echo "============================================================"
+
+              cmake --build build-libretro --parallel 10
+
+              test -f build-libretro/flycast_libretro.so
+              strip --strip-unneeded build-libretro/flycast_libretro.so
+
+              echo
+              echo "============================================================"
+              echo "Flycast core ELF dependencies (SDK view)"
+              echo "============================================================"
+              ldd build-libretro/flycast_libretro.so || true
+
+              echo
+              echo "============================================================"
+              echo "Flycast libretro exports"
+              echo "============================================================"
+
+              for symbol in \
+                retro_api_version \
+                retro_init \
+                retro_deinit \
+                retro_load_game \
+                retro_unload_game \
+                retro_run
+              do
+                if ! nm -D build-libretro/flycast_libretro.so \
+                  | grep -Eq "[[:space:]]${symbol}$"; then
+                  echo "ERROR: missing required libretro export: $symbol"
+                  exit 1
+                fi
+                echo "found: $symbol"
+              done
+
+              cat > build-libretro/coinops_core_dlopen_test.c <<'"'"'EOF'"'"'
+              #include <dlfcn.h>
+              #include <stdio.h>
+
+              typedef unsigned (*retro_api_version_fn)(void);
+
+              int main(int argc, char **argv)
+              {
+                  void *handle;
+                  retro_api_version_fn api_version;
+                  const char *error;
+
+                  if (argc != 2)
+                  {
+                      fprintf(stderr, "usage: %s <libretro-core.so>\n", argv[0]);
+                      return 2;
+                  }
+
+                  dlerror();
+                  handle = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+                  if (!handle)
+                  {
+                      fprintf(stderr, "dlopen failed: %s\n", dlerror());
+                      return 1;
+                  }
+
+                  dlerror();
+                  *(void **)(&api_version) = dlsym(handle, "retro_api_version");
+                  error = dlerror();
+
+                  if (error != NULL || api_version == NULL)
+                  {
+                      fprintf(stderr, "dlsym failed: %s\n",
+                              error ? error : "retro_api_version missing");
+                      dlclose(handle);
+                      return 1;
+                  }
+
+                  printf("Flycast core loaded successfully; libretro API version: %u\n",
+                         api_version());
+
+                  dlclose(handle);
+                  return 0;
+              }
+              EOF
+
+              cc \
+                -O2 \
+                -o build-libretro/coinops_core_dlopen_test \
+                build-libretro/coinops_core_dlopen_test.c \
+                -ldl
+            '
+
+          echo
+          echo "Built core:"
+          ls -lh FlycastCore/build-libretro/flycast_libretro.so
+          sha256sum FlycastCore/build-libretro/flycast_libretro.so
+
+      - name: Validate Flycast core inside assembled CoinOPS Flatpak
+        run: |
+          set -euo pipefail
+
+          TEST_DIR="build-dir/files/tmp/coinops-core-test"
+          rm -rf "$TEST_DIR"
+          mkdir -p "$TEST_DIR"
+
+          cp \
+            FlycastCore/build-libretro/flycast_libretro.so \
+            "$TEST_DIR/"
+
+          cp \
+            FlycastCore/build-libretro/coinops_core_dlopen_test \
+            "$TEST_DIR/"
+
+          echo "============================================================"
+          echo "Testing external Flycast .so in exact CoinOPS runtime"
+          echo "============================================================"
+
+          flatpak-builder \
+            --run \
+            build-dir \
+            org.coinops.Runtime.yml \
+            /app/tmp/coinops-core-test/coinops_core_dlopen_test \
+            /app/tmp/coinops-core-test/flycast_libretro.so
+
+          echo
+          echo "============================================================"
+          echo "Runtime dependency check"
+          echo "============================================================"
+
+          DEP_REPORT="$(
+            flatpak-builder \
+              --run \
+              build-dir \
+              org.coinops.Runtime.yml \
+              sh \
+              -c '
+                if command -v ldd >/dev/null 2>&1; then
+                  ldd /app/tmp/coinops-core-test/flycast_libretro.so
+                else
+                  echo "ldd unavailable in runtime; dlopen test already passed"
+                fi
+              '
+          )"
+
+          printf '%s\n' "$DEP_REPORT"
+
+          if printf '%s\n' "$DEP_REPORT" | grep -q "not found"; then
+            echo "ERROR: Flycast core has unresolved runtime dependencies."
+            exit 1
+          fi
+
+          rm -rf "$TEST_DIR"
+
+      - name: Package mutable Flycast core
+        run: |
+          set -euo pipefail
+
+          PACKAGE_ROOT="CoinOPS-Libretro-Flycast-linux-x86_64"
+          MUTABLE_ROOT="$PACKAGE_ROOT/emulators/libretro"
+
+          rm -rf "$PACKAGE_ROOT"
+
+          mkdir -p \
+            "$MUTABLE_ROOT/cores" \
+            "$MUTABLE_ROOT/system/dc" \
+            "$MUTABLE_ROOT/manifests" \
+            "$PACKAGE_ROOT/licenses"
+
+          cp \
+            FlycastCore/build-libretro/flycast_libretro.so \
+            "$MUTABLE_ROOT/cores/flycast_libretro.so"
+
+          cp \
+            FlycastCore/LICENSE \
+            "$PACKAGE_ROOT/licenses/Flycast-GPL-2.0.txt"
+
+          CORE_SHA256="$(
+            sha256sum "$MUTABLE_ROOT/cores/flycast_libretro.so" \
+              | awk "{print \$1}"
+          )"
+
+          cat > "$MUTABLE_ROOT/manifests/flycast.json" <<EOF
+          {
+            "name": "Flycast",
+            "type": "libretro-core",
+            "platform": "linux-x86_64",
+            "source_repository": "CoinOPS-Official/flycast",
+            "source_commit": "e7426bb864157a4c45866d6253bd24ae89f7d046",
+            "upstream_base": "Flycast v2.6",
+            "flatpak_runtime": "org.freedesktop.Platform/25.08",
+            "core_path": "cores/flycast_libretro.so",
+            "sha256": "$CORE_SHA256"
+          }
+          EOF
+
+          cat > "$MUTABLE_ROOT/system/dc/README-BIOS.txt" <<'EOF'
+          Flycast firmware / arcade BIOS directory
+
+          Place required firmware in this directory.
+
+          Common filenames:
+            dc_boot.bin   Dreamcast BIOS (optional; HLE BIOS is available)
+            dc_flash.bin  Dreamcast flash
+            naomi.zip     NAOMI BIOS
+            naomi2.zip    NAOMI 2 BIOS
+            awbios.zip    Atomiswave BIOS
+            segasp.zip    Sega System SP BIOS
+
+          BIOS files are not distributed with CoinOPS.
+          EOF
+
+          cat > "$PACKAGE_ROOT/README.txt" <<'EOF'
+          CoinOPS Flycast libretro core - Linux x86_64
+
+          This package is intentionally separate from the immutable CoinOPS
+          Flatpak runtime.
+
+          Merge the included "emulators" directory into the movable CoinOPS
+          data root.
+
+          Result:
+            <CoinOPS>/emulators/libretro/cores/flycast_libretro.so
+            <CoinOPS>/emulators/libretro/system/dc/
+
+          The core was built against the same Freedesktop 25.08 SDK used by
+          org.coinops.Runtime and was dlopen-tested inside the assembled
+          CoinOPS Flatpak before packaging.
+          EOF
+
+          echo "============================================================"
+          echo "Flycast mutable package"
+          echo "============================================================"
+          find "$PACKAGE_ROOT" -maxdepth 6 -type f -printf '%p\n'
+          echo
+          du -sh "$PACKAGE_ROOT"
+          sha256sum "$MUTABLE_ROOT/cores/flycast_libretro.so"
+
+      # ============================================================
       # Build distributable Flatpak bundle
       # ============================================================
 
@@ -1164,3 +1461,11 @@ jobs:
           name: CoinOPS-Runtime-Native-x86_64.flatpak
           path: CoinOPS-Runtime-Native-x86_64.flatpak
           if-no-files-found: error
+
+      - name: Upload mutable Flycast libretro core
+        uses: actions/upload-artifact@v7
+        with:
+          name: CoinOPS-Libretro-Flycast-linux-x86_64
+          path: CoinOPS-Libretro-Flycast-linux-x86_64
+          if-no-files-found: error
+          compression-level: 6
