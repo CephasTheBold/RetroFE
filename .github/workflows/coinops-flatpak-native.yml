@@ -49,31 +49,11 @@ jobs:
           echo "RetroFE revision"
           echo "============================================================"
           git rev-parse HEAD
-
           echo
           echo "============================================================"
           echo "MAME revision"
           echo "============================================================"
           git -C MAME rev-parse HEAD
-
-          echo
-          echo "============================================================"
-          echo "Hypseus Singe revision (pinned Flatpak module)"
-          echo "============================================================"
-          echo "4cfd20d834ee6cf42c1c347ffd2627d87aaf8e2f"
-
-          echo
-          echo "============================================================"
-          echo "PPSSPP revision (stable v1.20.4)"
-          echo "============================================================"
-          echo "fa50bb1976065c4f8b1b47af227d367fe9771555"
-
-          echo
-          echo "============================================================"
-          echo "Flycast revision (CoinOPS fork, upstream v2.6 base)"
-          echo "============================================================"
-          echo "e7426bb864157a4c45866d6253bd24ae89f7d046"
-
       # ============================================================
       # Verify host build tools
       #
@@ -85,40 +65,31 @@ jobs:
       - name: Verify host build tools
         run: |
           set -e
-
           echo "============================================================"
           echo "HOST"
           echo "============================================================"
-
           uname -a
-
           echo
           echo "CPU:"
           lscpu | grep -E \
             'Model name|Socket|Core\(s\)|Thread\(s\)|CPU\(s\)' \
             || true
-
           echo
           echo "Available logical CPUs:"
           nproc
-
           echo
           echo "Memory:"
           free -h
-
           echo
           echo "Disk:"
           df -h .
-
           echo
           echo "============================================================"
           echo "TOOLS"
           echo "============================================================"
-
           git --version
           flatpak --version
           flatpak-builder --version
-
       # ============================================================
       # Configure Flathub
       # ============================================================
@@ -130,7 +101,6 @@ jobs:
             --if-not-exists \
             flathub \
             https://dl.flathub.org/repo/flathub.flatpakrepo
-
       # ============================================================
       # Install matching Freedesktop runtime + SDK
       # ============================================================
@@ -143,7 +113,6 @@ jobs:
             flathub \
             org.freedesktop.Platform//25.08 \
             org.freedesktop.Sdk//25.08
-
       # ============================================================
       # Inspect SDK dependency availability
       # ============================================================
@@ -157,7 +126,6 @@ jobs:
               echo "============================================================"
               echo "SDL"
               echo "============================================================"
-
               for pkg in \
                 sdl2 \
                 SDL2_image \
@@ -165,38 +133,32 @@ jobs:
                 SDL2_mixer
               do
                 printf "%-24s " "$pkg"
-
                 if pkg-config --exists "$pkg"; then
                   pkg-config --modversion "$pkg"
                 else
                   echo "NOT FOUND"
                 fi
               done
-
               echo
               echo "============================================================"
               echo "GSTREAMER"
               echo "============================================================"
-
               for pkg in \
                 gstreamer-1.0 \
                 gstreamer-app-1.0 \
                 gstreamer-video-1.0
               do
                 printf "%-24s " "$pkg"
-
                 if pkg-config --exists "$pkg"; then
                   pkg-config --modversion "$pkg"
                 else
                   echo "NOT FOUND"
                 fi
               done
-
               echo
               echo "============================================================"
               echo "OTHER DEPENDENCIES"
               echo "============================================================"
-
               for pkg in \
                 fontconfig \
                 libcurl \
@@ -205,27 +167,41 @@ jobs:
                 libudev \
                 zlib \
                 libwebp \
-                ogg \
-                vorbis \
-                vorbisfile \
-                libzip \
                 minizip \
                 libserialport
               do
                 printf "%-24s " "$pkg"
-
                 if pkg-config --exists "$pkg"; then
                   pkg-config --modversion "$pkg"
                 else
                   echo "NOT FOUND"
                 fi
               done
-
+              echo
+              echo "============================================================"
+              echo "RETROARCH RENDERING / INPUT"
+              echo "============================================================"
+              for pkg in \
+                vulkan \
+                egl \
+                gl \
+                x11 \
+                wayland-client \
+                libpulse \
+                libudev \
+                sdl2
+              do
+                printf "%-24s " "$pkg"
+                if pkg-config --exists "$pkg"; then
+                  pkg-config --modversion "$pkg"
+                else
+                  echo "NOT FOUND"
+                fi
+              done
               echo
               echo "============================================================"
               echo "CCACHE"
               echo "============================================================"
-
               if command -v ccache >/dev/null 2>&1; then
                 echo "ccache found:"
                 command -v ccache
@@ -235,7 +211,6 @@ jobs:
                 exit 1
               fi
             '
-
       # ============================================================
       # Create launcher + desktop metadata
       # ============================================================
@@ -243,11 +218,9 @@ jobs:
       - name: Create Flatpak metadata
         run: |
           mkdir -p Packaging/Flatpak
-
           cat > Packaging/Flatpak/coinops-launcher <<'EOF'
           #!/bin/sh
           set -eu
-
           if [ "$#" -lt 1 ]; then
               echo "Usage:"
               echo "  flatpak run org.coinops.Runtime <CoinOPS build folder>"
@@ -256,31 +229,23 @@ jobs:
               echo '  flatpak run org.coinops.Runtime "$HOME/CoinOPS Arise"'
               exit 1
           fi
-
           COINOPS_ROOT="$1"
           shift
-
           if [ ! -d "$COINOPS_ROOT" ]; then
               echo "CoinOPS build folder not found:"
               echo "  $COINOPS_ROOT"
               exit 1
           fi
-
           if [ ! -f "$COINOPS_ROOT/settings.conf" ]; then
               echo "settings.conf not found in CoinOPS build folder:"
               echo "  $COINOPS_ROOT"
               exit 1
           fi
-
           export RETROFE_PATH="$COINOPS_ROOT"
-
           cd "$COINOPS_ROOT"
-
           exec /app/bin/retrofe "$@"
           EOF
-
           chmod +x Packaging/Flatpak/coinops-launcher
-
           cat > Packaging/Flatpak/coinops-runtime.desktop <<'EOF'
           [Desktop Entry]
           Type=Application
@@ -291,11 +256,9 @@ jobs:
           Terminal=false
           Categories=Game;
           EOF
-
           cp \
             Package/Environment/Common/RetroFE.png \
             Packaging/Flatpak/coinops-runtime.png
-
       # ============================================================
       # Create native Flatpak manifest
       #
@@ -308,11 +271,7 @@ jobs:
       #   libserialport
       #   minizip
       #   RetroFE
-      #   libzip
-      #   Hypseus Singe 2.12.1
-      #   Mesa GLU 9.0.3
-      #   PPSSPP 1.20.4
-      #   Flycast 2.6 + CoinOPS patches
+      #   stripped RetroArch runtime
       #   runtime-cleanup
       #   launcher metadata
       #
@@ -321,81 +280,58 @@ jobs:
       # SDL2_image and other RetroFE-only dependencies remain after
       # MAME so changes to them do not invalidate the MAME module.
       #
-      # Hypseus is deliberately after RetroFE. It reuses the existing
-      # SDL2 stack, while changes to the pinned Hypseus module do not
-      # invalidate the expensive MAME or RetroFE build caches.
-      #
-      # Mesa GLU and PPSSPP follow Hypseus for the same reason. PPSSPP is
-      # pinned to a stable release and reuses the existing SDL2/libzip stack.
-      # GLU is the small upstream Linux build dependency required by PPSSPP's
-      # bundled GLEW headers.
-      #
-      # Flycast follows PPSSPP so changes to the CoinOPS Flycast fork do not
-      # invalidate MAME, RetroFE, Hypseus or PPSSPP caches. The build uses the
-      # same Freedesktop 25.08 host SDL/glslang strategy as the official Flycast
-      # Flatpak, while reusing the libzip already present in /app.
+      # RetroArch is deliberately placed after RetroFE. Updating the
+      # pinned RetroArch revision or its build flags therefore does not
+      # invalidate either the expensive MAME module or RetroFE.
       # ============================================================
 
       - name: Create native Flatpak manifest
         run: |
           cat > org.coinops.Runtime.yml <<'EOF'
           app-id: org.coinops.Runtime
-
           runtime: org.freedesktop.Platform
           runtime-version: '25.08'
           sdk: org.freedesktop.Sdk
-
           command: coinops-launcher
-
           finish-args:
             - --share=ipc
             - --share=network
-
             - --socket=wayland
             - --socket=fallback-x11
             - --socket=pulseaudio
-
             - --device=all
-
+            - --filesystem=/run/udev:ro
             - --filesystem=home
             - --filesystem=/run/media
             - --filesystem=/media
             - --filesystem=/mnt
-
           modules:
-
             # ======================================================
             # SDL2_ttf
             #
             # Required by MAME and RetroFE.
             # ======================================================
-
             - name: SDL2_ttf
               buildsystem: cmake-ninja
               builddir: true
-
               build-options:
                 strip: true
                 no-debuginfo: true
-
               config-opts:
                 - -DCMAKE_BUILD_TYPE=Release
                 - -DCMAKE_INSTALL_PREFIX=/app
                 - -DBUILD_SHARED_LIBS=ON
                 - -DSDL2TTF_SAMPLES=OFF
-
               cleanup:
                 - /include
                 - /lib/cmake
                 - /lib/pkgconfig
                 - '*.a'
                 - '*.la'
-
               sources:
                 - type: git
                   url: https://github.com/libsdl-org/SDL_ttf.git
                   branch: SDL2
-
             # ======================================================
             # Custom MAME
             #
@@ -411,50 +347,38 @@ jobs:
             # Debug info is explicitly disabled because previous full
             # links overflowed 32-bit DWARF relocations.
             # ======================================================
-
             - name: mame
               buildsystem: simple
-
               build-options:
                 strip: true
                 no-debuginfo: true
-
                 cflags-override: true
                 cxxflags-override: true
-
                 cflags: -O2 -g0
                 cxxflags: -O2 -g0
-
               build-commands:
                 - |
                   echo "============================================================"
                   echo "MAME build environment"
                   echo "============================================================"
-
                   echo "Compiler:"
                   c++ --version
-
                   echo
                   echo "Available logical CPUs:"
                   nproc
-
                   echo
                   echo "Configured MAME parallel jobs:"
                   echo "10"
-
                   echo
                   echo "Environment flags:"
                   echo "CFLAGS=${CFLAGS:-}"
                   echo "CXXFLAGS=${CXXFLAGS:-}"
                   echo "LDFLAGS=${LDFLAGS:-}"
-
                   echo
                   echo "============================================================"
                   echo "Building custom MAME inside Freedesktop SDK"
                   echo "============================================================"
-
                   MAME_JOBS=10
-
                   # SOURCEFILTER can change which translation units belong to each
                   # subtarget library. Remove only the generated CoinOPS archives so
                   # stale library membership cannot survive an incremental build.
@@ -462,7 +386,6 @@ jobs:
                   # Object files and ccache are preserved, so this is cheap compared
                   # with a clean MAME rebuild.
                   echo "Removing stale CoinOPS static archives..."
-
                   find build \
                     -type f \
                     -path '*/mame_coinops/*.a' \
@@ -470,12 +393,9 @@ jobs:
                     -delete \
                     2>/dev/null \
                     || true
-
                   echo
                   echo "Building MAME with ${MAME_JOBS} parallel jobs"
-
                   set -o pipefail
-
                   if ! make \
                     -j"${MAME_JOBS}" \
                     SUBTARGET=coinops \
@@ -498,15 +418,12 @@ jobs:
                     | awk '
                         /Compiling/ || /Archiving/ || /Compressing/ || /Generating/ {
                           progress++
-
                           if (progress == 1 || progress % 100 == 0) {
                             printf "[MAME] %d build steps completed... %s\\n", progress, $0
                             fflush()
                           }
-
                           next
                         }
-
                         {
                           print
                           fflush()
@@ -517,30 +434,23 @@ jobs:
                     echo "============================================================"
                     echo "MAME BUILD FAILED - LAST 200 LOG LINES"
                     echo "============================================================"
-
                     tail -200 mame-build.log || true
                     exit 1
                   fi
-
                   test -x coinops
-
                   echo
                   echo "============================================================"
                   echo "Built CoinOPS MAME subtarget"
                   echo "============================================================"
-
                   ./coinops -version
                   ls -lh coinops
                   du -h coinops
-
                   # Install under the standard runtime name expected by RetroFE.
                   install -Dm755 coinops /app/bin/mame
-
               sources:
                 - type: git
                   path: MAME
                   branch: mame0285-local
-
             # ======================================================
             # SDL2_image
             #
@@ -557,36 +467,28 @@ jobs:
             # PNG_SAVE is required by RetroFE IMG_SavePNG() for
             # generated QR codes.
             # ======================================================
-
             - name: SDL2_image
               buildsystem: cmake-ninja
               builddir: true
-
               build-options:
                 strip: true
                 no-debuginfo: true
-
               config-opts:
                 - -DCMAKE_BUILD_TYPE=Release
                 - -DCMAKE_INSTALL_PREFIX=/app
                 - -DBUILD_SHARED_LIBS=ON
-
                 - -DSDL2IMAGE_SAMPLES=OFF
                 - -DSDL2IMAGE_TESTS=OFF
-
                 # Formats RetroFE uses.
                 - -DSDL2IMAGE_PNG=ON
                 - -DSDL2IMAGE_JPG=ON
                 - -DSDL2IMAGE_QOI=ON
                 - -DSDL2IMAGE_WEBP=ON
                 - -DSDL2IMAGE_GIF=ON
-
                 # PNG writing required for generated QR codes.
                 - -DSDL2IMAGE_PNG_SAVE=ON
-
                 # JPEG writing not required.
                 - -DSDL2IMAGE_JPG_SAVE=OFF
-
                 # Disable unused formats.
                 - -DSDL2IMAGE_AVIF=OFF
                 - -DSDL2IMAGE_BMP=OFF
@@ -600,76 +502,59 @@ jobs:
                 - -DSDL2IMAGE_XCF=OFF
                 - -DSDL2IMAGE_XPM=OFF
                 - -DSDL2IMAGE_XV=OFF
-
               cleanup:
                 - /include
                 - /lib/cmake
                 - /lib/pkgconfig
                 - '*.a'
                 - '*.la'
-
               sources:
                 - type: git
                   url: https://github.com/libsdl-org/SDL_image.git
                   branch: SDL2
-
             # ======================================================
             # libevdev
             # ======================================================
-
             - name: libevdev
               buildsystem: meson
-
               build-options:
                 strip: true
                 no-debuginfo: true
-
               config-opts:
                 - -Dtests=disabled
                 - -Ddocumentation=disabled
-
               cleanup:
                 - /bin/libevdev-tweak-device
                 - /bin/mouse-dpi-tool
                 - /bin/touchpad-edge-detector
-
                 - /include
                 - /lib/pkgconfig
-
                 - '*.a'
                 - '*.la'
-
               sources:
                 - type: git
                   url: https://gitlab.freedesktop.org/libevdev/libevdev.git
                   branch: master
-
             # ======================================================
             # libserialport
             # ======================================================
-
             - name: libserialport
               buildsystem: autotools
-
               build-options:
                 strip: true
                 no-debuginfo: true
-
               config-opts:
                 - --disable-static
                 - --enable-shared
-
               cleanup:
                 - /include
                 - /lib/pkgconfig
                 - '*.a'
                 - '*.la'
-
               sources:
                 - type: git
                   url: https://github.com/martinling/libserialport.git
                   branch: master
-
             # ======================================================
             # Classic Minizip
             #
@@ -681,15 +566,12 @@ jobs:
             # The final runtime-cleanup module removes the headers
             # after RetroFE has finished building.
             # ======================================================
-
             - name: minizip
               buildsystem: simple
               subdir: contrib/minizip
-
               build-options:
                 strip: true
                 no-debuginfo: true
-
               build-commands:
                 - |
                   cc \
@@ -698,7 +580,6 @@ jobs:
                     -I. \
                     -c ioapi.c \
                     -o ioapi.o
-
                 - |
                   cc \
                     -fPIC \
@@ -706,7 +587,6 @@ jobs:
                     -I. \
                     -c unzip.c \
                     -o unzip.o
-
                 - |
                   cc \
                     -fPIC \
@@ -714,7 +594,6 @@ jobs:
                     -I. \
                     -c zip.c \
                     -o zip.o
-
                 - |
                   cc \
                     -shared \
@@ -724,46 +603,36 @@ jobs:
                     unzip.o \
                     zip.o \
                     -lz
-
                 - ln -sf libminizip.so.1.0.0 libminizip.so.1
                 - ln -sf libminizip.so.1 libminizip.so
-
                 - install -Dm755 libminizip.so.1.0.0 /app/lib/libminizip.so.1.0.0
                 - ln -sf libminizip.so.1.0.0 /app/lib/libminizip.so.1
                 - ln -sf libminizip.so.1 /app/lib/libminizip.so
-
                 - install -Dm644 unzip.h /app/include/minizip/unzip.h
                 - install -Dm644 zip.h /app/include/minizip/zip.h
                 - install -Dm644 ioapi.h /app/include/minizip/ioapi.h
-
               sources:
                 - type: git
                   url: https://github.com/madler/zlib.git
                   tag: v1.3.1
-
             # ======================================================
             # RetroFE
             #
             # Flatpak-builder copies the CONTENTS of the RetroFE
             # directory into the module build root.
             # ======================================================
-
             - name: retrofe
               buildsystem: simple
-
               build-options:
                 strip: true
                 no-debuginfo: true
-
               build-commands:
                 - |
                   echo "============================================================"
                   echo "Checking required RetroFE dependencies"
                   echo "============================================================"
-
                   check_pkg() {
                     PKG="$1"
-
                     if pkg-config --exists "$PKG"; then
                       VERSION="$(pkg-config --modversion "$PKG")"
                       echo "[FOUND] $PKG $VERSION"
@@ -772,25 +641,19 @@ jobs:
                       exit 1
                     fi
                   }
-
                   echo
                   echo "--- SDL ---"
-
                   check_pkg sdl2
                   check_pkg SDL2_image
                   check_pkg SDL2_ttf
                   check_pkg SDL2_mixer
-
                   echo
                   echo "--- GStreamer ---"
-
                   check_pkg gstreamer-1.0
                   check_pkg gstreamer-app-1.0
                   check_pkg gstreamer-video-1.0
-
                   echo
                   echo "--- Other dependencies ---"
-
                   check_pkg fontconfig
                   check_pkg libcurl
                   check_pkg libusb-1.0
@@ -799,10 +662,8 @@ jobs:
                   check_pkg zlib
                   check_pkg libwebp
                   check_pkg libserialport
-
                   echo
                   echo "--- Minizip ---"
-
                   if [ -f /app/include/minizip/unzip.h ] && \
                      [ -f /app/lib/libminizip.so ]; then
                     echo "[FOUND] classic minizip"
@@ -810,13 +671,11 @@ jobs:
                     echo "[MISSING] classic minizip"
                     exit 1
                   fi
-
                 - |
                   echo
                   echo "============================================================"
                   echo "Configuring RetroFE"
                   echo "============================================================"
-
                   cmake \
                     -S Source \
                     -B Build \
@@ -825,573 +684,175 @@ jobs:
                     -DCMAKE_INSTALL_PREFIX=/app \
                     -DMINIZIP_INCLUDE_DIR=/app/include/minizip \
                     -DMINIZIP_LIBRARY=/app/lib/libminizip.so
-
                 - |
                   echo
                   echo "============================================================"
                   echo "Building RetroFE"
                   echo "============================================================"
-
                   cmake \
                     --build Build \
                     --parallel 10
-
                 - test -x Build/retrofe
-
                 - install -Dm755 Build/retrofe /app/bin/retrofe
-
               sources:
                 - type: dir
                   path: RetroFE
                   skip:
                     - .git
                     - .github
-
             # ======================================================
-            # libzip
+            # Stripped RetroArch libretro runtime
             #
-            # Hypseus Singe requires libzip. Keep this module after
-            # RetroFE so changes here do not invalidate RetroFE/MAME.
+            # Purpose:
+            #   Command-line-only libretro host for systems MAME does
+            #   not handle well enough. No RetroArch menu/UI assets,
+            #   databases, updater, achievements, or media player.
             #
-            # Headers and pkg-config metadata remain available for the
-            # following Hypseus build, then runtime-cleanup removes them.
+            # Kept deliberately:
+            #   - dynamic external core loading
+            #   - config/core options/save/state/disk/VFS support
+            #   - SDL2 + udev input and rumble
+            #   - OpenGL/OpenGL Core + Vulkan hardware contexts
+            #   - Wayland + X11/EGL/GLX presentation
+            #   - overlays/bezels
+            #   - GLSL + Slang shaders with bundled glslang
+            #   - microphone API support (needed by some DS titles)
+            #
+            # Cores, shaders, overlays, configs, BIOS/system files,
+            # saves and states are intentionally NOT installed here.
+            # They live in the mutable CoinOPS data tree and are passed
+            # to this executable by path.
+            #
+            # Pin to RetroArch v1.22.2 release commit for reproducible
+            # builds. This is an unmodified GPLv3 upstream binary, only
+            # configured with a reduced feature set and renamed on install.
             # ======================================================
-
-            - name: libzip
-              buildsystem: cmake-ninja
-              builddir: true
-
-              build-options:
-                strip: true
-                no-debuginfo: true
-
-              config-opts:
-                - -DCMAKE_BUILD_TYPE=Release
-                - -DCMAKE_INSTALL_PREFIX=/app
-                - -DBUILD_SHARED_LIBS=ON
-                - -DBUILD_TOOLS=OFF
-                - -DBUILD_REGRESS=OFF
-                - -DBUILD_OSSFUZZ=OFF
-                - -DBUILD_EXAMPLES=OFF
-                - -DBUILD_DOC=OFF
-
-              sources:
-                - type: git
-                  url: https://github.com/nih-at/libzip.git
-                  tag: v1.11.4
-
-            # ======================================================
-            # Hypseus Singe
-            #
-            # Pinned to v2.12.1, the final SDL2 release immediately
-            # before the SDL3 migration:
-            #
-            #   4cfd20d834ee6cf42c1c347ffd2627d87aaf8e2f
-            #
-            # Only the emulator executable belongs in the immutable
-            # Flatpak runtime. The CoinOPS build can keep its mutable
-            # Hypseus config/data under:
-            #
-            #   emulators/hypseus/
-            #
-            # RetroFE can launch "hypseus" from PATH, just like MAME.
-            # Use Hypseus path arguments such as -homedir, -datadir,
-            # -romdir and -keymapfile to point at that external folder.
-            # ======================================================
-
-            - name: hypseus-singe
+            - name: retroarch-runtime
               buildsystem: simple
-
               build-options:
                 strip: true
                 no-debuginfo: true
-
                 cflags-override: true
                 cxxflags-override: true
-
                 cflags: -O2 -g0
                 cxxflags: -O2 -g0
-
               build-commands:
                 - |
                   echo "============================================================"
-                  echo "Checking required Hypseus Singe dependencies"
+                  echo "Configuring stripped RetroArch runtime"
                   echo "============================================================"
-
-                  check_pkg() {
-                    PKG="$1"
-
-                    if pkg-config --exists "$PKG"; then
-                      VERSION="$(pkg-config --modversion "$PKG")"
-                      echo "[FOUND] $PKG $VERSION"
-                    else
-                      echo "[MISSING] $PKG"
-                      exit 1
-                    fi
-                  }
-
-                  check_pkg sdl2
-                  check_pkg SDL2_image
-                  check_pkg SDL2_ttf
-                  check_pkg SDL2_mixer
-                  check_pkg ogg
-                  check_pkg vorbis
-                  check_pkg vorbisfile
-                  check_pkg libzip
-
+                  ./configure \
+                    --prefix=/app \
+                    --disable-menu \
+                    --disable-gfx_widgets \
+                    --disable-rgui \
+                    --disable-materialui \
+                    --disable-xmb \
+                    --disable-ozone \
+                    --disable-qt \
+                    --disable-libretrodb \
+                    --disable-core_info_cache \
+                    --disable-online_updater \
+                    --disable-update_cores \
+                    --disable-update_core_info \
+                    --disable-update_assets \
+                    --disable-imageviewer \
+                    --disable-video_filter \
+                    --disable-dsp_filter \
+                    --disable-ffmpeg \
+                    --disable-mpv \
+                    --disable-ssa \
+                    --disable-networkgamepad \
+                    --disable-netplaydiscovery \
+                    --disable-discord \
+                    --disable-cheevos \
+                    --disable-cheevos_rvz \
+                    --disable-accessibility \
+                    --disable-translate \
+                    --disable-runahead \
+                    --disable-rewind \
+                    --disable-bsv_movie \
+                    --disable-audiomixer \
+                    --disable-videoprocessor \
+                    --disable-langextra \
+                    --disable-shaderpipeline \
+                    --disable-opengl1 \
+                    --disable-vulkan_display \
+                    --disable-vg \
+                    --disable-cg \
+                    --disable-kms \
+                    --disable-cdrom \
+                    --disable-crtswitchres \
+                    --disable-test_drivers \
+                    --enable-overlay \
+                    --enable-dynamic \
+                    --enable-sdl2 \
+                    --enable-udev \
+                    --enable-threads \
+                    --enable-opengl \
+                    --enable-opengl_core \
+                    --enable-vulkan \
+                    --enable-wayland \
+                    --enable-x11 \
+                    --enable-egl \
+                    --enable-glx \
+                    --enable-pulse \
+                    --disable-pipewire \
+                    --enable-glsl \
+                    --enable-slang \
+                    --enable-glslang \
+                    --enable-builtinglslang \
+                    --enable-spirv_cross \
+                    --enable-microphone
                 - |
                   echo
                   echo "============================================================"
-                  echo "Configuring Hypseus Singe 2.12.1"
+                  echo "Building stripped RetroArch runtime"
                   echo "============================================================"
-
-                  # Hypseus 2.12.1 discovers the SDL2 extension libraries,
-                  # but its top-level CMake only adds the base SDL2 include path.
-                  # Add pkg-config discovery for SDL2_image and make all SDL2
-                  # extension header directories visible to subdirectories.
-                  python3 - <<'PY'
-                  from pathlib import Path
-
-                  path = Path("src/CMakeLists.txt")
-                  text = path.read_text()
-
-                  text = text.replace(
-                      "PKG_SEARCH_MODULE(SDL2_MIXER REQUIRED SDL2_mixer)\n",
-                      "PKG_SEARCH_MODULE(SDL2_MIXER REQUIRED SDL2_mixer)\n"
-                      "PKG_SEARCH_MODULE(SDL2_IMAGE REQUIRED SDL2_image)\n",
-                      1,
-                  )
-
-                  text = text.replace(
-                      "    ${SDL2_INCLUDE_DIRS}\n",
-                      "    ${SDL2_INCLUDE_DIRS}\n"
-                      "    ${SDL2_TTF_INCLUDE_DIRS}\n"
-                      "    ${SDL2_MIXER_INCLUDE_DIRS}\n"
-                      "    ${SDL2_IMAGE_INCLUDE_DIRS}\n",
-                      1,
-                  )
-
-                  path.write_text(text)
-                  PY
-
-                  # Hypseus 2.12.1's bundled libmpeg2 ExternalProject does not
-                  # declare 3rdparty/lib/libmpeg2.a as a Ninja byproduct.
-                  # Use Unix Makefiles, matching the upstream 2.12.1 workflow.
-                  rm -rf build
-
-                  cmake \
-                    -S src \
-                    -B build \
-                    -G "Unix Makefiles" \
-                    -DCMAKE_BUILD_TYPE=Release \
-                    -DCMAKE_PREFIX_PATH=/app \
-                    -DCMAKE_INSTALL_PREFIX=/app
-
+                  make -j10
+                - test -x retroarch
+                - install -Dm755 retroarch /app/bin/coinops-retroarch
+                - install -Dm644 COPYING /app/share/licenses/coinops-retroarch/COPYING
                 - |
                   echo
                   echo "============================================================"
-                  echo "Building Hypseus Singe"
+                  echo "RetroArch compiled feature report"
                   echo "============================================================"
-
-                  cmake \
-                    --build build \
-                    --parallel 10
-
-                - test -x build/hypseus
-
-                - |
-                  echo
-                  echo "============================================================"
-                  echo "Built Hypseus Singe"
-                  echo "============================================================"
-
-                  file build/hypseus
-                  ldd build/hypseus || true
-
-                - install -Dm755 build/hypseus /app/bin/hypseus
-
+                  /app/bin/coinops-retroarch --features || true
               sources:
                 - type: git
-                  url: https://github.com/DirtBagXon/hypseus-singe.git
-                  commit: 4cfd20d834ee6cf42c1c347ffd2627d87aaf8e2f
-
-            # ======================================================
-            # Mesa GLU
-            #
-            # PPSSPP's upstream Linux build installs libglu1-mesa-dev.
-            # Freedesktop SDK 25.08 provides OpenGL but not the GL/glu.h
-            # development header needed by PPSSPP's bundled GLEW.
-            #
-            # Stable Mesa GLU release:
-            #
-            #   9.0.3
-            # ======================================================
-
-            - name: libglu
-              buildsystem: meson
-
-              build-options:
-                strip: true
-                no-debuginfo: true
-
-              config-opts:
-                - -Dgl_provider=gl
-                - --default-library=shared
-
-              sources:
-                - type: archive
-                  url: https://archive.mesa3d.org/glu/glu-9.0.3.tar.xz
-                  sha256: bd43fe12f374b1192eb15fe20e45ff456b9bc26ab57f0eee919f96ca0f8a330f
-
-            # ======================================================
-            # PPSSPP
-            #
-            # Stable release only:
-            #
-            #   v1.20.4
-            #   fa50bb1976065c4f8b1b47af227d367fe9771555
-            #
-            # Only the SDL executable belongs in the immutable runtime:
-            #
-            #   /app/bin/ppsspp
-            #
-            # The matching upstream assets remain external in:
-            #
-            #   emulators/ppsspp/assets/
-            #
-            # RetroFE sets:
-            #
-            #   currentDirectory = emulators/ppsspp
-            #
-            # The small CoinOPS path patch below makes PPSSPP use:
-            #
-            #   ./assets/            emulator assets / flash0
-            #   ./PSP/SYSTEM/        config
-            #   ./PSP/SAVEDATA/      saves
-            #   ./PSP/PPSSPP_STATE/  savestates
-            #   ./PSP/TEXTURES/      texture packs
-            # ======================================================
-
-            - name: ppsspp
-              buildsystem: simple
-
-              build-options:
-                strip: true
-                no-debuginfo: true
-
-                cflags-override: true
-                cxxflags-override: true
-
-                # /app/include is needed for Mesa GLU (<GL/glu.h>).
-                # SDL2_ttf is installed in /app/include/SDL2 and its header
-                # includes "SDL.h", which lives in the SDK's /usr/include/SDL2.
-                # Put both SDL2 include directories on the compiler search path.
-                cflags: -O2 -g0 -I/app/include -I/app/include/SDL2 -I/usr/include/SDL2
-                cxxflags: -O2 -g0 -I/app/include -I/app/include/SDL2 -I/usr/include/SDL2
-
-              build-commands:
-                - |
-                  echo "============================================================"
-                  echo "Checking required PPSSPP dependencies"
-                  echo "============================================================"
-
-                  check_pkg() {
-                    PKG="$1"
-
-                    if pkg-config --exists "$PKG"; then
-                      VERSION="$(pkg-config --modversion "$PKG")"
-                      echo "[FOUND] $PKG $VERSION"
-                    else
-                      echo "[MISSING] $PKG"
-                      exit 1
-                    fi
-                  }
-
-                  check_pkg sdl2
-                  check_pkg SDL2_ttf
-                  check_pkg fontconfig
-                  check_pkg libzip
-                  check_pkg glu
-
-                  test -f /app/include/GL/glu.h
-                  test -f /app/include/SDL2/SDL_ttf.h
-                  test -f /usr/include/SDL2/SDL.h
-                  test -d assets
-                  test -f assets/gamecontrollerdb.txt
-                  test -d assets/flash0
-
-                - |
-                  echo
-                  echo "============================================================"
-                  echo "Applying CoinOPS portable PPSSPP path integration"
-                  echo "============================================================"
-
-                  python3 - <<'PY'
-                  from pathlib import Path
-
-                  cmake_path = Path("CMakeLists.txt")
-                  cmake_text = cmake_path.read_text()
-
-                  old_assets = 'add_compile_definitions(ASSETS_DIR="${CMAKE_INSTALL_FULL_DATADIR}/ppsspp/assets/")'
-                  new_assets = 'add_compile_definitions(ASSETS_DIR="assets/")'
-
-                  if old_assets not in cmake_text:
-                      raise SystemExit("PPSSPP ASSETS_DIR definition not found")
-
-                  cmake_path.write_text(
-                      cmake_text.replace(old_assets, new_assets, 1)
-                  )
-
-                  native_path = Path("UI/NativeApp.cpp")
-                  native_text = native_path.read_text()
-
-                  old_linux_paths = (
-                      '#elif !PPSSPP_PLATFORM(WINDOWS)\n'
-                      '\tstd::string config;\n'
-                      '\tif (getenv("XDG_CONFIG_HOME") != NULL)\n'
-                      '\t\tconfig = getenv("XDG_CONFIG_HOME");\n'
-                      '\telse if (getenv("HOME") != NULL)\n'
-                      '\t\tconfig = getenv("HOME") + std::string("/.config");\n'
-                      '\telse // Just in case\n'
-                      '\t\tconfig = "./config";\n'
-                      '\n'
-                      '\tg_Config.memStickDirectory = Path(config) / "ppsspp";\n'
-                      '\tg_Config.flash0Directory = File::GetExeDirectory() / "assets/flash0";\n'
-                      '\tif (getenv("HOME") != nullptr) {\n'
-                      '\t\tg_Config.defaultCurrentDirectory = Path(getenv("HOME"));\n'
-                      '\t} else {\n'
-                      '\t\t// Hm, should probably actually explicitly set the current directory..\n'
-                      "\t\t// Though it's not many platforms that'll land us here.\n"
-                      '\t\tg_Config.currentDirectory = Path(".");\n'
-                      '\t}\n'
-                      '#endif'
-                  )
-
-                  new_linux_paths = (
-                      '#elif !PPSSPP_PLATFORM(WINDOWS)\n'
-                      '\t// CoinOPS portable layout. RetroFE sets the process working\n'
-                      '\t// directory to emulators/ppsspp before launching PPSSPP.\n'
-                      '\tg_Config.internalDataDirectory = Path(".");\n'
-                      '\tg_Config.memStickDirectory = Path(".");\n'
-                      '\tg_Config.flash0Directory = Path("assets/flash0");\n'
-                      '\tg_Config.defaultCurrentDirectory = Path(".");\n'
-                      '#endif'
-                  )
-
-                  if old_linux_paths not in native_text:
-                      raise SystemExit("PPSSPP Linux path block not found")
-
-                  native_path.write_text(
-                      native_text.replace(old_linux_paths, new_linux_paths, 1)
-                  )
-                  PY
-
-                - |
-                  echo
-                  echo "============================================================"
-                  echo "Configuring PPSSPP 1.20.4"
-                  echo "============================================================"
-
-                  rm -rf build
-
-                  cmake \
-                    -S . \
-                    -B build \
-                    -G Ninja \
-                    -DCMAKE_BUILD_TYPE=Release \
-                    -DCMAKE_PREFIX_PATH=/app \
-                    -DCMAKE_INSTALL_PREFIX=/app \
-                    -DUSING_QT_UI=OFF \
-                    -DHEADLESS=OFF \
-                    -DATLAS_TOOL=OFF \
-                    -DUNITTEST=OFF \
-                    -DLIBRETRO=OFF \
-                    -DUSE_DISCORD=OFF \
-                    -DUSE_SYSTEM_LIBSDL2=ON \
-                    -DUSE_SYSTEM_LIBZIP=ON \
-                    -DUSE_CCACHE=ON
-
-                - |
-                  echo
-                  echo "============================================================"
-                  echo "Building PPSSPP"
-                  echo "============================================================"
-
-                  cmake \
-                    --build build \
-                    --parallel 10
-
-                - test -x build/PPSSPPSDL
-
-                - |
-                  echo
-                  echo "============================================================"
-                  echo "Built PPSSPP"
-                  echo "============================================================"
-
-                  build/PPSSPPSDL --version || true
-                  file build/PPSSPPSDL
-                  ldd build/PPSSPPSDL || true
-
-                # Deliberately do not run "cmake --install": upstream install
-                # would copy assets into /app/share/ppsspp. CoinOPS keeps the
-                # matching stable assets external under emulators/ppsspp/assets.
-                - install -Dm755 build/PPSSPPSDL /app/bin/ppsspp
-
-              sources:
-                - type: git
-                  url: https://github.com/hrydgard/ppsspp.git
-                  tag: v1.20.4
-                  commit: fa50bb1976065c4f8b1b47af227d367fe9771555
-
-            # ======================================================
-            # Flycast
-            #
-            # CoinOPS fork based on upstream stable Flycast v2.6.
-            #
-            # Pinned commit:
-            #
-            #   e7426bb864157a4c45866d6253bd24ae89f7d046
-            #
-            # This includes the CoinOPS bezel/viewport support and the Linux
-            # portable-path behavior where RetroFE's currentDirectory becomes
-            # Flycast's config/data root.
-            #
-            # The official Flycast Flatpak for Freedesktop 25.08 builds against
-            # host SDL and host glslang. We follow that proven configuration and
-            # also reuse the libzip already installed in /app.
-            #
-            # Only /app/bin/flycast is installed into the immutable runtime.
-            # CoinOPS support/config files are packaged separately under:
-            #
-            #   emulators/flycast/
-            # ======================================================
-
-            - name: flycast
-              buildsystem: simple
-
-              build-options:
-                strip: true
-                no-debuginfo: true
-
-                cflags-override: true
-                cxxflags-override: true
-
-                cflags: -O2 -g0
-                cxxflags: -O2 -g0
-
-              build-commands:
-                - |
-                  echo "============================================================"
-                  echo "Checking required Flycast host dependencies"
-                  echo "============================================================"
-
-                  check_pkg() {
-                    PKG="$1"
-
-                    if pkg-config --exists "$PKG"; then
-                      VERSION="$(pkg-config --modversion "$PKG")"
-                      echo "[FOUND] $PKG $VERSION"
-                    else
-                      echo "[MISSING] $PKG"
-                      exit 1
-                    fi
-                  }
-
-                  check_pkg sdl2
-                  check_pkg libzip
-                  check_pkg libcurl
-
-                - |
-                  echo
-                  echo "============================================================"
-                  echo "Configuring CoinOPS Flycast"
-                  echo "============================================================"
-
-                  rm -rf build
-
-                  cmake \
-                    -S . \
-                    -B build \
-                    -G Ninja \
-                    -DCMAKE_BUILD_TYPE=Release \
-                    -DCMAKE_PREFIX_PATH=/app \
-                    -DCMAKE_INSTALL_PREFIX=/app \
-                    -DUSE_HOST_GLSLANG=TRUE \
-                    -DUSE_HOST_SDL=TRUE \
-                    -DUSE_HOST_LIBZIP=TRUE
-
-                - |
-                  echo
-                  echo "============================================================"
-                  echo "Building CoinOPS Flycast"
-                  echo "============================================================"
-
-                  cmake \
-                    --build build \
-                    --target flycast \
-                    --parallel 10
-
-                - test -x build/flycast
-
-                - |
-                  echo
-                  echo "============================================================"
-                  echo "Built CoinOPS Flycast"
-                  echo "============================================================"
-
-                  file build/flycast
-                  ldd build/flycast || true
-
-                # Install only the executable. Do not run cmake --install:
-                # desktop metadata/icons/manpages are not part of the CoinOPS
-                # runtime, and Flycast's required internal resources are embedded.
-                - install -Dm755 build/flycast /app/bin/flycast
-
-              sources:
-                - type: git
-                  url: https://github.com/CoinOPS-Official/flycast.git
-                  commit: e7426bb864157a4c45866d6253bd24ae89f7d046
-                  disable-submodules: false
-
+                  url: https://github.com/libretro/RetroArch.git
+                  commit: 69a4f0ea1e8aaf442ae4858f2e7f2b31a1776576
             # ======================================================
             # Final runtime cleanup
             #
-            # At this point MAME, RetroFE, Hypseus, GLU, PPSSPP and Flycast are fully built.
+            # At this point MAME, RetroFE and RetroArch are fully built.
             #
             # Remove development/debug/build-only files that are not
             # required by the installed runtime.
             # ======================================================
-
             - name: runtime-cleanup
               buildsystem: simple
-
               build-commands:
                 - |
                   echo "============================================================"
                   echo "Cleaning final runtime payload"
                   echo "============================================================"
-
                 # Development headers.
                 - rm -rf /app/include
-
                 # Debug symbols and copied source trees.
                 - rm -rf /app/lib/debug
-
                 # Build-system metadata.
                 - rm -rf /app/lib/cmake
                 - rm -rf /app/lib/pkgconfig
-
                 # Documentation/man pages from helper utilities.
                 - rm -rf /app/share/man
-
                 # Static and libtool archives.
                 - |
                   find /app \
                     -type f \
                     \( -name '*.a' -o -name '*.la' \) \
                     -delete
-
                 # Remove unversioned linker-only .so symlinks.
                 #
                 # Keep runtime SONAME links such as:
@@ -1406,43 +867,34 @@ jobs:
                     -type l \
                     -name '*.so' \
                     -delete
-
                 - |
                   echo
                   echo "============================================================"
                   echo "Remaining /app/lib contents"
                   echo "============================================================"
-
                   find /app/lib \
                     -maxdepth 2 \
                     \( -type f -o -type l \) \
                     -print \
                     | sort \
                     || true
-
             # ======================================================
             # CoinOPS launcher + desktop metadata
             # ======================================================
-
             - name: coinops-runtime
               buildsystem: simple
-
               build-commands:
                 - install -Dm755 coinops-launcher /app/bin/coinops-launcher
                 - install -Dm644 coinops-runtime.desktop /app/share/applications/org.coinops.Runtime.desktop
                 - install -Dm644 coinops-runtime.png /app/share/icons/hicolor/256x256/apps/org.coinops.Runtime.png
-
               sources:
                 - type: file
                   path: Packaging/Flatpak/coinops-launcher
-
                 - type: file
                   path: Packaging/Flatpak/coinops-runtime.desktop
-
                 - type: file
                   path: Packaging/Flatpak/coinops-runtime.png
           EOF
-
       # ============================================================
       # Inspect persistent local builder state
       #
@@ -1455,13 +907,10 @@ jobs:
           echo "============================================================"
           echo "PERSISTENT FLATPAK-BUILDER STATE"
           echo "============================================================"
-
           if [ -d .flatpak-builder ]; then
             du -sh .flatpak-builder || true
-
             echo
             echo "Top-level cache contents:"
-
             du \
               -h \
               --max-depth=1 \
@@ -1473,7 +922,6 @@ jobs:
             echo "No existing .flatpak-builder cache."
             echo "This appears to be the first local build."
           fi
-
       # ============================================================
       # Build native Flatpak
       #
@@ -1485,11 +933,9 @@ jobs:
       - name: Build native CoinOPS Flatpak
         run: |
           rm -rf build-dir repo
-
           echo "============================================================"
           echo "Starting native Flatpak build"
           echo "============================================================"
-
           flatpak-builder \
             --user \
             --force-clean \
@@ -1499,7 +945,6 @@ jobs:
             --install-deps-from=flathub \
             build-dir \
             org.coinops.Runtime.yml
-
       # ============================================================
       # Analyze resulting Flatpak
       # ============================================================
@@ -1509,85 +954,47 @@ jobs:
           echo "============================================================"
           echo "TOTAL /APP PAYLOAD"
           echo "============================================================"
-
           du -sh build-dir/files
-
           echo
           echo "============================================================"
           echo "/APP/BIN"
           echo "============================================================"
-
           ls -lh build-dir/files/bin
-
           echo
           echo "============================================================"
           echo "RETROFE"
           echo "============================================================"
-
           file build-dir/files/bin/retrofe
-
           echo
           echo "Dynamic dependencies:"
           ldd build-dir/files/bin/retrofe || true
-
           echo
           echo "============================================================"
           echo "MAME"
           echo "============================================================"
-
           file build-dir/files/bin/mame
-
           echo
           echo "Dynamic dependencies:"
           ldd build-dir/files/bin/mame || true
-
           echo
           echo "============================================================"
-          echo "HYPSEUS SINGE"
+          echo "COINOPS RETROARCH RUNTIME"
           echo "============================================================"
-
-          file build-dir/files/bin/hypseus
-
+          file build-dir/files/bin/coinops-retroarch
           echo
           echo "Dynamic dependencies:"
-          ldd build-dir/files/bin/hypseus || true
-
-          echo
-          echo "============================================================"
-          echo "PPSSPP"
-          echo "============================================================"
-
-          file build-dir/files/bin/ppsspp
-
-          echo
-          echo "Dynamic dependencies:"
-          ldd build-dir/files/bin/ppsspp || true
-
-          echo
-          echo "============================================================"
-          echo "FLYCAST"
-          echo "============================================================"
-
-          file build-dir/files/bin/flycast
-
-          echo
-          echo "Dynamic dependencies:"
-          ldd build-dir/files/bin/flycast || true
-
+          ldd build-dir/files/bin/coinops-retroarch || true
           echo
           echo "============================================================"
           echo "BUNDLED /APP/LIB"
           echo "============================================================"
-
           if [ -d build-dir/files/lib ]; then
             find build-dir/files/lib \
               -maxdepth 3 \
               \( -type f -o -type l \) \
               -printf '%p\n' \
               | sort
-
             echo
-
             du \
               -h \
               -d 3 \
@@ -1596,12 +1003,10 @@ jobs:
               | sort -h \
               | tail -100
           fi
-
           echo
           echo "============================================================"
           echo "BUILD-ONLY FILE CHECK"
           echo "============================================================"
-
           for path in \
             build-dir/files/include \
             build-dir/files/lib/debug \
@@ -1615,12 +1020,10 @@ jobs:
               echo "[CLEAN] $path"
             fi
           done
-
           echo
           echo "============================================================"
           echo "50 LARGEST FILES IN /APP"
           echo "============================================================"
-
           find build-dir/files \
             -type f \
             -printf '%s %p\n' \
@@ -1630,21 +1033,16 @@ jobs:
                 --field=1 \
                 --to=iec \
             || true
-
           echo
           echo "============================================================"
           echo "REPOSITORY SIZE"
           echo "============================================================"
-
           du -sh repo
-
           echo
           echo "============================================================"
           echo "PERSISTENT BUILDER CACHE SIZE"
           echo "============================================================"
-
           du -sh .flatpak-builder || true
-
       # ============================================================
       # Smoke tests
       # ============================================================
@@ -1654,7 +1052,6 @@ jobs:
           echo "============================================================"
           echo "RetroFE version"
           echo "============================================================"
-
           flatpak-builder \
             --run \
             build-dir \
@@ -1662,73 +1059,37 @@ jobs:
             /app/bin/retrofe \
             --version \
             || true
-
           echo
           echo "============================================================"
           echo "MAME version"
           echo "============================================================"
-
           flatpak-builder \
             --run \
             build-dir \
             org.coinops.Runtime.yml \
             /app/bin/mame \
             -version
-
           echo
           echo "============================================================"
-          echo "Hypseus Singe binary"
+          echo "Stripped RetroArch version + features"
           echo "============================================================"
-
           flatpak-builder \
             --run \
             build-dir \
             org.coinops.Runtime.yml \
-            sh \
-            -c '
-              test -x /app/bin/hypseus
-              file /app/bin/hypseus
-              ldd /app/bin/hypseus
-            '
-
+            /app/bin/coinops-retroarch \
+            --version
           echo
-          echo "============================================================"
-          echo "PPSSPP binary"
-          echo "============================================================"
-
           flatpak-builder \
             --run \
             build-dir \
             org.coinops.Runtime.yml \
-            sh \
-            -c '
-              test -x /app/bin/ppsspp
-              /app/bin/ppsspp --version
-              file /app/bin/ppsspp
-              ldd /app/bin/ppsspp
-            '
-
-          echo
-          echo "============================================================"
-          echo "Flycast binary"
-          echo "============================================================"
-
-          flatpak-builder \
-            --run \
-            build-dir \
-            org.coinops.Runtime.yml \
-            sh \
-            -c '
-              test -x /app/bin/flycast
-              file /app/bin/flycast
-              ldd /app/bin/flycast
-            '
-
+            /app/bin/coinops-retroarch \
+            --features
           echo
           echo "============================================================"
           echo "PATH resolution"
           echo "============================================================"
-
           flatpak-builder \
             --run \
             build-dir \
@@ -1736,218 +1097,19 @@ jobs:
             sh \
             -c '
               echo "$PATH"
-
               echo
               echo "retrofe:"
               command -v retrofe
-
               echo
               echo "mame:"
               command -v mame
-
               echo
-              echo "hypseus:"
-              command -v hypseus
-
-              echo
-              echo "ppsspp:"
-              command -v ppsspp
-
-              echo
-              echo "flycast:"
-              command -v flycast
-
+              echo "coinops-retroarch:"
+              command -v coinops-retroarch
               echo
               echo "coinops-launcher:"
               command -v coinops-launcher
             '
-
-      # ============================================================
-      # Package matching Hypseus Singe 2.12.1 support files
-      #
-      # Upstream's own 2.12.1 AppImage workflow distributes:
-      #
-      #   fonts/
-      #   midi/
-      #   roms/
-      #   sound/
-      #   pics/
-      #   hypinput.ini
-      #
-      # Keep those external in the CoinOPS build while /app/bin/hypseus
-      # remains in the immutable Flatpak runtime.
-      # ============================================================
-
-      - name: Package Hypseus Singe 2.12.1 assets
-        run: |
-          set -e
-
-          HYPSEUS_BUILD_DIR="$(readlink -f .flatpak-builder/build/hypseus-singe)"
-
-          test -n "$HYPSEUS_BUILD_DIR"
-          test -d "$HYPSEUS_BUILD_DIR/fonts"
-          test -d "$HYPSEUS_BUILD_DIR/midi"
-          test -d "$HYPSEUS_BUILD_DIR/roms"
-          test -d "$HYPSEUS_BUILD_DIR/sound"
-          test -d "$HYPSEUS_BUILD_DIR/pics"
-
-          rm -rf hypseus-emulator-files
-          rm -f Hypseus-Singe-2.12.1-assets.tar.gz
-
-          mkdir -p hypseus-emulator-files/emulators/hypseus
-
-          cp -a \
-            "$HYPSEUS_BUILD_DIR/fonts" \
-            "$HYPSEUS_BUILD_DIR/midi" \
-            "$HYPSEUS_BUILD_DIR/roms" \
-            "$HYPSEUS_BUILD_DIR/sound" \
-            "$HYPSEUS_BUILD_DIR/pics" \
-            hypseus-emulator-files/emulators/hypseus/
-
-          cat > hypseus-emulator-files/emulators/hypseus/hypinput.ini <<'EOF'
-          # Steam Deck Buttons: A=1, B=2, X=3, Y=4
-          # Start=8, Select=7, L1=5, R1=6, L3=10, R3=11
-
-          [KEYBOARD]
-          KEY_UP = SDLK_UP SDLK_r 0 -002
-          KEY_DOWN = SDLK_DOWN SDLK_f 0 +002
-          KEY_LEFT = SDLK_LEFT SDLK_d 0 -001
-          KEY_RIGHT = SDLK_RIGHT SDLK_g 0 +001
-          KEY_COIN1 = SDLK_5 0 7
-          KEY_COIN2 = SDLK_6 0 0
-          KEY_START1 = SDLK_1 0 8
-          KEY_START2 = SDLK_2 0 0
-          KEY_BUTTON1 = SDLK_LCTRL SDLK_a 1
-          KEY_BUTTON2 = SDLK_LALT SDLK_s 0
-          KEY_BUTTON3 = SDLK_SPACE SDLK_d 11
-          KEY_SKILL1 = SDLK_LSHIFT SDLK_w 3
-          KEY_SKILL2 = SDLK_z SDLK_i 4
-          KEY_SKILL3 = SDLK_x SDLK_k 2
-          KEY_SERVICE = SDLK_9 0 0
-          KEY_TEST = SDLK_F2 0 0
-          KEY_RESET = SDLK_0 0 0
-          KEY_SCREENSHOT = SDLK_F12 0 0
-          KEY_QUIT = SDLK_ESCAPE SDLK_q 17
-          KEY_PAUSE = SDLK_p 0 0
-          KEY_CONSOLE = SDLK_BACKSLASH 0 0
-          KEY_TILT = SDLK_t 0 0
-          END
-          EOF
-
-          tar \
-            -C hypseus-emulator-files \
-            -czf Hypseus-Singe-2.12.1-assets.tar.gz \
-            emulators/hypseus
-
-          echo "Hypseus Singe assets package:"
-          ls -lh Hypseus-Singe-2.12.1-assets.tar.gz
-
-          echo
-          echo "Packaged Hypseus layout:"
-          find \
-            hypseus-emulator-files/emulators/hypseus \
-            -maxdepth 2 \
-            -printf '%P\n' \
-            | sort
-
-      # ============================================================
-      # Package matching PPSSPP 1.20.4 assets for the CoinOPS build
-      #
-      # --keep-build-dirs preserves the module source tree. The stable
-      # assets are packaged with the exact directory layout expected by:
-      #
-      #   currentDirectory = emulators/ppsspp
-      # ============================================================
-
-      - name: Package PPSSPP 1.20.4 assets
-        run: |
-          set -e
-
-          PPSSPP_BUILD_DIR="$(readlink -f .flatpak-builder/build/ppsspp)"
-
-          test -n "$PPSSPP_BUILD_DIR"
-          test -d "$PPSSPP_BUILD_DIR/build/assets"
-          test -f "$PPSSPP_BUILD_DIR/build/assets/gamecontrollerdb.txt"
-          test -d "$PPSSPP_BUILD_DIR/build/assets/flash0"
-
-          rm -rf ppsspp-emulator-files
-          rm -f PPSSPP-1.20.4-assets.tar.gz
-
-          mkdir -p ppsspp-emulator-files/emulators/ppsspp
-
-          cp -a \
-            "$PPSSPP_BUILD_DIR/build/assets" \
-            ppsspp-emulator-files/emulators/ppsspp/
-
-          find \
-            ppsspp-emulator-files/emulators/ppsspp/assets \
-            -name '.git*' \
-            -exec rm -rf '{}' + 2>/dev/null || true
-
-          tar \
-            -C ppsspp-emulator-files \
-            -czf PPSSPP-1.20.4-assets.tar.gz \
-            emulators/ppsspp/assets
-
-          echo "PPSSPP assets package:"
-          ls -lh PPSSPP-1.20.4-assets.tar.gz
-
-          echo
-          echo "Top-level asset contents:"
-          find \
-            ppsspp-emulator-files/emulators/ppsspp/assets \
-            -maxdepth 1 \
-            -mindepth 1 \
-            -printf '%f\n' \
-            | sort
-
-      # ============================================================
-      # Package CoinOPS Flycast 2.6 support/config files
-      #
-      # The Flycast executable contains its required built-in resources.
-      # This package supplies the portable external layout expected when:
-      #
-      #   currentDirectory = emulators/flycast
-      #
-      # BIOS files and bezel artwork are intentionally NOT bundled.
-      # ============================================================
-
-      - name: Package Flycast 2.6 CoinOPS assets
-        run: |
-          set -e
-
-          rm -rf flycast-emulator-files
-          rm -f Flycast-2.6-CoinOPS-assets.tar.gz
-
-          mkdir -p             flycast-emulator-files/emulators/flycast/data             flycast-emulator-files/emulators/flycast/mappings             flycast-emulator-files/emulators/flycast/saves             flycast-emulator-files/emulators/flycast/states             flycast-emulator-files/emulators/flycast/textures             flycast-emulator-files/emulators/flycast/bezels
-
-          cat > flycast-emulator-files/emulators/flycast/emu.cfg <<'EOF'
-          [config]
-          Dreamcast.VMUPath = saves
-          Dreamcast.SavePath = saves
-          Dreamcast.SavestatePath = states
-          Dreamcast.TexturePath = textures
-          Dreamcast.MappingsPath = mappings
-          EOF
-
-          echo "Flycast portable emu.cfg:"
-          cat flycast-emulator-files/emulators/flycast/emu.cfg
-
-          echo
-          echo "Flycast support layout:"
-          find             flycast-emulator-files/emulators/flycast             -maxdepth 2             -printf '%P\n'             | sort
-
-          # Preserve empty support directories in the archive.
-          tar             -C flycast-emulator-files             -czf Flycast-2.6-CoinOPS-assets.tar.gz             emulators/flycast
-
-          echo
-          echo "Flycast support package:"
-          ls -lh Flycast-2.6-CoinOPS-assets.tar.gz
-
-          echo
-          echo "Archive contents:"
-          tar -tzf Flycast-2.6-CoinOPS-assets.tar.gz | sort
-
       # ============================================================
       # Build distributable Flatpak bundle
       # ============================================================
@@ -1955,63 +1117,34 @@ jobs:
       - name: Build Flatpak bundle
         run: |
           echo "Creating native Flatpak bundle..."
-
           (
             while true; do
               echo "Still building Flatpak bundle: $(date)"
               sleep 60
             done
           ) &
-
           HEARTBEAT_PID=$!
-
           trap \
             'kill "$HEARTBEAT_PID" 2>/dev/null || true' \
             EXIT
-
           flatpak build-bundle \
             repo \
             CoinOPS-Runtime-Native-x86_64.flatpak \
             org.coinops.Runtime \
             --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo
-
           kill "$HEARTBEAT_PID" 2>/dev/null || true
           trap - EXIT
-
           echo
           echo "Bundle complete:"
           ls -lh CoinOPS-Runtime-Native-x86_64.flatpak
-
           echo
           echo "Bundle byte size:"
           stat \
             --printf='%s bytes\n' \
             CoinOPS-Runtime-Native-x86_64.flatpak
-
       # ============================================================
-      # Upload artifacts
+      # Upload artifact
       # ============================================================
-
-      - name: Upload Hypseus Singe 2.12.1 assets
-        uses: actions/upload-artifact@v7
-        with:
-          name: Hypseus-Singe-2.12.1-assets
-          path: Hypseus-Singe-2.12.1-assets.tar.gz
-          if-no-files-found: error
-
-      - name: Upload PPSSPP 1.20.4 assets
-        uses: actions/upload-artifact@v7
-        with:
-          name: PPSSPP-1.20.4-assets
-          path: PPSSPP-1.20.4-assets.tar.gz
-          if-no-files-found: error
-
-      - name: Upload Flycast 2.6 CoinOPS assets
-        uses: actions/upload-artifact@v7
-        with:
-          name: Flycast-2.6-CoinOPS-assets
-          path: Flycast-2.6-CoinOPS-assets.tar.gz
-          if-no-files-found: error
 
       - name: Upload native CoinOPS Flatpak
         uses: actions/upload-artifact@v7
